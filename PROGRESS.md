@@ -9,7 +9,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 3. Write path: string stream IDs, position counter (option A), streams and events tables, Append / Load / Execute with expected versions, conflict retry, snapshots with state_version, transaction modes (neither, Dapper, EF Core with several DbContexts in one transaction).
 - [x] 4. Torture suite v1: concurrent appends with rollbacks and long transactions; assert gapless commit-ordered positions and per-stream order. HUMAN GATE 1: API shape review and torture suite v1 results.
 - [x] 5. Registry and evolution: naming convention, aliases, event_types table, startup name check, JSON upcasters and typed upcasters, lockfile in Deedbox.Testing, Given/When/Then helpers.
-- [ ] 6. Inline projections (EF and ADO flavours), OnAppending hook, metadata context, causation/correlation, TraceParent capture, tenancy scoping.
+- [x] 6. Inline projections (EF and ADO flavours), OnAppending hook, metadata context, causation/correlation, TraceParent capture, tenancy scoping.
 - [ ] 7. Async runner: checkpoints, projections, subscriptions, type filtering, LISTEN/NOTIFY and backoff, multi-instance locking, poison handling, in-place rebuilds, health checks, jobs table.
 - [ ] 8. Torture suite v2: projector kills, competing instances, sparse filters, idle query budget; every Anthology regression test.
 - [ ] 9. Personal data: [DataSubject] / [PersonalData], contract-customization encryption, key hierarchy, Database / Environment / Azure Key Vault key modes, subject_streams, erasure job, SubjectErased, stream deletion, startup safety rules, key provider compliance suite. HUMAN GATE 2: security review of crypto, key handling and erasure.
@@ -60,6 +60,15 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 5: Lockfile rules: removing a name or alias breaks, a lower version breaks, and at the same version, removing a property, changing its type, making it non-nullable or adding a non-nullable property breaks. New events, aliases, versions and nullable properties rewrite the file locally. Under CI (CI=true), any difference fails. The lockfile path is relative to the calling test file.
 - Step 5: Given/When/Then compares events by type and JSON, so records that hold collections compare by content.
 - Step 5: Envelopes carry the current event name and version, after upcasting, not the stored alias or old version.
+- Step 6: `app.UseDeedboxMetadata(http => ...)` is not built. It needs ASP.NET Core in the core package, which the SDD limits to Microsoft.Extensions abstractions. The core has a scoped `DeedboxContext` (TenantId, Metadata) that app middleware sets instead. Gate 2 confirms; an ASP.NET Core helper would be a new package.
+- Step 6: Metadata fields are strings: CorrelationId, CausationId, Actor, TraceParent, plus string Headers. The stored JSON leaves out absent fields and empty headers. `store.WithMetadata(m => ...)` overrides metadata per append. TraceParent comes from Activity.Current (W3C) when the metadata has none.
+- Step 6: `DeedboxContext.CausedBy(envelope)` sets the tenant, correlation ID, actor, and CausationId = the event's ID. The async runner uses it for every handler scope.
+- Step 6: Projection instances are singletons, created once from the root container. Handlers keep no state between events; scoped services come from ctx.Services.
+- Step 6: Order inside an append: stream row, inline projections in registration order, appending hooks, SaveChanges (UseDbContext contexts, then projection contexts), event_types, then the counter and the events.
+- Step 6: An EF projection reuses a UseDbContext context of its type. Otherwise Deedbox creates one from DI on the append's connection and transaction, saves it before the counter, and disposes it afterwards.
+- Step 6: Inline handlers see GlobalPosition as null, because the position is assigned after them.
+- Step 6: Tenant IDs are at most 100 characters with no leading or trailing white space (DBX022).
+- Step 6: Known limit: a caller transaction that appends to two streams holds the counter from its first append while it waits for the second stream's lock. A concurrent append that holds that stream lock waits for the counter. The database breaks this deadlock by aborting one transaction; nothing is lost or reordered. Gate 2 decides whether to document it or change the design.
 
 ## Gate reports
 

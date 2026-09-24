@@ -19,8 +19,12 @@ public static class DeedboxServiceCollectionExtensions
         configure(builder);
         var runtime = builder.Build();
 
+        builder.RegisterServices(services);
         services.AddSingleton(_ => runtime);
-        services.AddScoped<IEventStore>(sp => new EventStore(sp.GetRequiredService<DeedboxRuntime>(), OwnedTransactions.Instance));
+        services.AddSingleton(sp => new ProjectionSet(sp.GetRequiredService<DeedboxRuntime>(), sp));
+        services.AddScoped<DeedboxContext>();
+        services.AddScoped<IEventStore>(sp => new EventStore(
+            sp.GetRequiredService<DeedboxRuntime>(), OwnedTransactions.Instance, sp, sp.GetRequiredService<DeedboxContext>(), metadata: null));
         services.AddHostedService<DeedboxStartup>();
         return services;
     }

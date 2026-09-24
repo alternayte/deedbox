@@ -1,4 +1,7 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 
@@ -9,6 +12,8 @@ public sealed class DeedboxBuilder
 {
     private readonly List<StreamRegistration> _streams = [];
     private readonly List<IJsonTypeInfoResolver> _jsonContexts = [];
+    private readonly List<ProjectionRegistration> _projections = [];
+    private readonly List<Action<IServiceCollection>> _services = [];
     private Action<JsonSerializerOptions>? _configureJson;
     private Func<string, DeedboxProvider>? _provider;
     private string _schema = SchemaName.Default;
@@ -98,11 +103,61 @@ public sealed class DeedboxBuilder
         return this;
     }
 
+    /// <summary>
+    /// Registers a projection under a stored name. The name keys its checkpoint, so renaming the class keeps its
+    /// progress. Each projection has one run mode; registering a class twice fails.
+    /// </summary>
+    /// <param name="name">The stored projection name, such as <c>cart_summary</c>.</param>
+    /// <param name="run">Inline, in the append's transaction; or Async, in the background runner.</param>
+    /// <typeparam name="TProjection">A <see cref="Projection"/> or EF Core <c>Projection&lt;TDbContext&gt;</c>.</typeparam>
+    public DeedboxBuilder Projection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TProjection>(string name, Run run)
+        where TProjection : ProjectionBase
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        _projections.Add(ProjectionSet.Registration<TProjection>(name, run));
+        return this;
+    }
+
+    /// <summary>
+    /// Runs <typeparamref name="THook"/> inside every append's transaction, such as to write outbox rows.
+    /// It is resolved from the append's scope.
+    /// </summary>
+    /// <typeparam name="THook">The hook.</typeparam>
+    public DeedboxBuilder OnAppending<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] THook>()
+        where THook : class, IAppendingHook
+    {
+        _services.Add(s => s.TryAddEnumerable(ServiceDescriptor.Scoped<IAppendingHook, THook>()));
+        return this;
+    }
+
+    internal void RegisterServices(IServiceCollection services)
+    {
+        foreach (var register in _services)
+            register(services);
+    }
+
     internal void UseProvider(Func<string, DeedboxProvider> factory)
     {
         if (_provider is not null)
             throw new DeedboxException(Errors.ProviderAlreadySet, "A database provider is already configured. Call UsePostgres or UseSqlServer once.");
         _provider = factory;
+    }
+
+    private void ValidateProjections()
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var types = new HashSet<Type>();
+        foreach (var projection in _projections)
+        {
+            EventRegistry.ValidateName(projection.Name, "Projection");
+            if (!names.Add(projection.Name))
+                throw new DeedboxException(Errors.DuplicateProjection, $"Projection name '{projection.Name}' is registered twice. Each projection needs its own name.");
+            if (!types.Add(projection.Type))
+            {
+                throw new DeedboxException(Errors.DuplicateProjection,
+                    $"{projection.Type.Name} is registered twice. A projection has one name and one run mode; running it both inline and async applies events twice.");
+            }
+        }
     }
 
     /// <summary>The registry and JSON options alone, without a provider, for tools such as the lockfile.</summary>
@@ -118,12 +173,13 @@ public sealed class DeedboxBuilder
             throw new DeedboxException(Errors.NoProvider, "No database provider is configured. Call UsePostgres(...) or UseSqlServer(...) in AddDeedbox.");
 
         var (registry, json) = BuildRegistry();
-        var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries);
+        ValidateProjections();
+        var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries, _projections);
         return new DeedboxRuntime(options, _provider(_schema), registry, json);
     }
 }
 
-internal sealed record DeedboxOptions(string Schema, bool ApplySchemaOnStartup, int ExecuteRetries);
+internal sealed record DeedboxOptions(string Schema, bool ApplySchemaOnStartup, int ExecuteRetries, IReadOnlyList<ProjectionRegistration> Projections);
 
 /// <summary>Everything a store needs that lives for the life of the app.</summary>
 internal sealed class DeedboxRuntime(DeedboxOptions options, DeedboxProvider provider, EventRegistry registry, DeedboxJson json) : IAsyncDisposable

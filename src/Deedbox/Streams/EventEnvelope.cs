@@ -5,8 +5,9 @@ public sealed class EventEnvelope
 {
     internal EventEnvelope(
         Guid eventId, string tenantId, string streamId, string streamType, long version, long globalPosition,
-        string eventType, int eventVersion, object @event, DateTimeOffset occurredAt)
+        string eventType, int eventVersion, object @event, EventMetadata metadata, DateTimeOffset occurredAt)
     {
+        Metadata = metadata;
         EventId = eventId;
         TenantId = tenantId;
         StreamId = streamId;
@@ -48,6 +49,9 @@ public sealed class EventEnvelope
 
     /// <summary>The event.</summary>
     public object Event { get; }
+
+    /// <summary>The event's metadata: correlation, causation, actor, trace context and headers.</summary>
+    public EventMetadata Metadata { get; }
 
     /// <summary>When the event was appended.</summary>
     public DateTimeOffset OccurredAt { get; }

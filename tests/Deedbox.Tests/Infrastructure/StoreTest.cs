@@ -13,10 +13,11 @@ public abstract class StoreTest(Databases databases, Db db) : DatabaseTest(datab
         .Stream<Counter>(s => s.Events<Incremented>());
 
     /// <summary>A service provider for the test schema, with the schema applied.</summary>
-    protected async Task<IServiceProvider> Services(Action<DeedboxBuilder>? configure = null)
+    protected async Task<IServiceProvider> Services(Action<DeedboxBuilder>? configure = null, Action<IServiceCollection>? register = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        register?.Invoke(services);
         services.AddDeedbox(b => (configure ?? DefaultStreams)(UseDatabase(b)));
         var provider = services.BuildServiceProvider();
         _providers.Add(provider);

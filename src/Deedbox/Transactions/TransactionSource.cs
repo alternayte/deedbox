@@ -19,6 +19,9 @@ internal abstract class Lease : IAsyncDisposable
 
     public abstract DbTransaction? Transaction { get; }
 
+    /// <summary>Objects already enlisted in the transaction, such as DbContexts, that handlers may reuse.</summary>
+    public virtual IReadOnlyList<object> Participants => [];
+
     /// <summary>True when <see cref="Complete"/> commits, so what the operation wrote is durable once it returns.</summary>
     public virtual bool Commits => false;
 

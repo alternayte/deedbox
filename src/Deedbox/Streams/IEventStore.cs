@@ -41,4 +41,11 @@ public interface IEventStore
     /// </summary>
     /// <param name="transaction">An open transaction on the Deedbox database.</param>
     IEventStore UseTransaction(DbTransaction transaction);
+
+    /// <summary>
+    /// A store whose appends change the scope's metadata with <paramref name="change"/>, such as
+    /// <c>m =&gt; m with { Actor = "system:import" }</c>.
+    /// </summary>
+    /// <param name="change">Turns the scope's metadata into the metadata for these appends.</param>
+    IEventStore WithMetadata(Func<EventMetadata, EventMetadata> change);
 }

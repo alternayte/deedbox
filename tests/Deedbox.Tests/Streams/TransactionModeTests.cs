@@ -155,71 +155,14 @@ public abstract class TransactionModeTests(Databases databases, Db db) : StoreTe
         Assert.Equal("DBX012", error.Code);
     }
 
-    private DbContextOptions<T> Options<T>(DbConnection connection) where T : DbContext
-    {
-        var builder = new DbContextOptionsBuilder<T>();
-        if (Db == Db.Postgres)
-            builder.UseNpgsql(connection);
-        else
-            builder.UseSqlServer(connection);
-        return builder.Options;
-    }
+    private DbContextOptions<T> Options<T>(DbConnection connection) where T : DbContext =>
+        new DbContextOptionsBuilder<T>().Use(Db, connection).Options;
 
     private async Task EnsureEfTables()
     {
         await using var connection = await OpenConnection();
-        await using var command = connection.CreateCommand();
-        command.CommandText = Db == Db.Postgres
-            ? """
-              CREATE SCHEMA IF NOT EXISTS ef_tests;
-              CREATE TABLE IF NOT EXISTS ef_tests.orders (id text PRIMARY KEY, note text NOT NULL);
-              CREATE TABLE IF NOT EXISTS ef_tests.audit (id text PRIMARY KEY, what text NOT NULL);
-              """
-            : """
-              IF SCHEMA_ID('ef_tests') IS NULL EXEC('CREATE SCHEMA ef_tests');
-              IF OBJECT_ID('ef_tests.orders') IS NULL CREATE TABLE ef_tests.orders (id nvarchar(200) PRIMARY KEY, note nvarchar(200) NOT NULL);
-              IF OBJECT_ID('ef_tests.audit') IS NULL CREATE TABLE ef_tests.audit (id nvarchar(200) PRIMARY KEY, what nvarchar(200) NOT NULL);
-              """;
-        await command.ExecuteNonQueryAsync(Ct);
+        await EfTables.Ensure(connection, Db, Ct);
     }
 
     private Task<int> CountEf(string table, string id) => Scalar<int>($"SELECT COUNT(*) FROM ef_tests.{table} WHERE id = '{id}'");
-}
-
-public sealed class OrderRow
-{
-    public required string Id { get; set; }
-    public required string Note { get; set; }
-}
-
-public sealed class AuditRow
-{
-    public required string Id { get; set; }
-    public required string What { get; set; }
-}
-
-public sealed class OrdersDb(DbContextOptions<OrdersDb> options) : DbContext(options)
-{
-    public DbSet<OrderRow> Orders => Set<OrderRow>();
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder) =>
-        modelBuilder.Entity<OrderRow>(e =>
-        {
-            e.ToTable("orders", "ef_tests");
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.Note).HasColumnName("note");
-        });
-}
-
-public sealed class AuditDb(DbContextOptions<AuditDb> options) : DbContext(options)
-{
-    public DbSet<AuditRow> Entries => Set<AuditRow>();
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder) =>
-        modelBuilder.Entity<AuditRow>(e =>
-        {
-            e.ToTable("audit", "ef_tests");
-            e.Property(x => x.Id).HasColumnName("id");
-            e.Property(x => x.What).HasColumnName("what");
-        });
 }

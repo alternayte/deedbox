@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -7,12 +8,15 @@ namespace Deedbox;
 /// Runs when the host starts: checks or applies the schema, then checks that every stored event name maps
 /// to a registered event, so a rename fails here instead of on the first read.
 /// </summary>
-internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, ILogger<DeedboxStartup> logger) : IHostedService
+internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServiceProvider services, ILogger<DeedboxStartup> logger) : IHostedService
 {
     private readonly ILogger _logger = logger;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // Creating the projections checks that each handles only registered events.
+        _ = services.GetRequiredService<ProjectionSet>();
+
         if (runtime.Options.ApplySchemaOnStartup)
         {
             var (from, to) = await SchemaManager.Apply(runtime.Provider, cancellationToken);

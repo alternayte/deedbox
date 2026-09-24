@@ -22,4 +22,7 @@ internal static class Errors
     public const string StoredVersionAhead = "DBX017";
     public const string MissingUpcaster = "DBX018";
     public const string StoredStreamTypeMismatch = "DBX019";
+    public const string DuplicateProjection = "DBX020";
+    public const string ProjectionHandlesUnregistered = "DBX021";
+    public const string InvalidTenant = "DBX022";
 }

@@ -99,6 +99,8 @@ internal sealed partial class EventRegistry
             : throw new DeedboxException(Errors.UnregisteredState,
                 $"State type {stateType.Name} is not registered. Add .Stream<{stateType.Name}>(s => s.Events<...>()) in AddDeedbox.");
 
+    public bool IsRegistered(Type eventType) => _byEvent.ContainsKey(eventType);
+
     public EventRegistration ForEvent(Type eventType) =>
         _byEvent.TryGetValue(eventType, out var e)
             ? e
@@ -194,7 +196,7 @@ internal sealed partial class EventRegistry
         e.Json = json.TypeInfo(e.ClrType);
     }
 
-    private static void ValidateName(string name, string what)
+    public static void ValidateName(string name, string what)
     {
         if (!NamePattern().IsMatch(name))
         {
