@@ -2,7 +2,7 @@
 title: Ordering and global position
 description: How Deedbox orders events across streams, and why no event is ever skipped.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 This page explains the global position, and the design choice that makes it safe to read.
@@ -26,6 +26,20 @@ In one append, in this order:
 5. Commit, which releases the counter.
 
 The cost is that appends take turns for that short window. See [the benchmarks](/operations/benchmarks/) for the ceiling. A transaction you own keeps the counter locked until you commit, so commit soon after an append.
+
+## Reads stop at the committed head
+
+Every read by position, such as the runner's, first reads the counter, then reads only events at or below it. Every position at or below the committed counter belongs to a committed append, so the read never meets an append in flight.
+
+That matters on SQL Server without `READ_COMMITTED_SNAPSHOT`, where reads take locks. A read that waits on an append in flight can resume past positions that the next append reuses after a rollback, and return a later position first. Bounding the read by the counter prevents that. On Postgres and with `READ_COMMITTED_SNAPSHOT`, reads see committed rows only, and the bound changes nothing.
+
+If your own SQL reads the `events` table by position on such a SQL Server, bound it the same way. Read the counter into a variable first, then read up to it, in one batch:
+
+```sql
+DECLARE @head bigint = (SELECT value FROM [deedbox].[position]);
+SELECT global_position, event_id, event_type FROM [deedbox].[events]
+WHERE global_position > @after AND global_position <= @head ORDER BY global_position;
+```
 
 ## Why not a sequence or a row version
 

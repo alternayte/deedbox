@@ -50,6 +50,20 @@ public abstract class AppendTortureTests(Databases databases, Db db) : StoreTest
             $"{run.Committed.Count / writeTime.TotalSeconds:F0} commits/s");
         foreach (var violation in run.Violations)
             Log(violation);
+        if (!run.Violations.IsEmpty)
+        {
+            // Which appends wrote the positions around each gap: one append, or several transactions.
+            var byPosition = (await ReadAllEvents()).ToDictionary(e => e.Position);
+            foreach (var gap in run.Gaps)
+            {
+                for (var p = gap.After; p <= gap.Seen; p++)
+                {
+                    if (byPosition.TryGetValue(p, out var e))
+                        Log($"  position {p}: stream {e.StreamId} version {e.Version} event {e.EventId}");
+                }
+            }
+        }
+
         Assert.Empty(run.Violations);
         Assert.True(run.Discarded.Count > 0 && run.LongTransactions > 0, "The run must include rollbacks and long transactions.");
 
@@ -216,14 +230,18 @@ public abstract class AppendTortureTests(Databases databases, Db db) : StoreTest
         var seen = new List<Guid>();
         long last = 0;
         await using var connection = await OpenConnection();
+        await using var provider = CreateProvider();
         var draining = false;
         while (true)
         {
-            var batch = await ReadAfter(connection, last);
+            var batch = await ReadAfter(provider, connection, last);
             foreach (var (position, eventId) in batch)
             {
                 if (position != last + 1)
+                {
                     run.Violations.Enqueue($"Observer saw position {position} right after {last}.");
+                    run.Gaps.Enqueue((last, position));
+                }
                 last = position;
                 seen.Add(eventId);
             }
@@ -239,17 +257,12 @@ public abstract class AppendTortureTests(Databases databases, Db db) : StoreTest
         }
     }
 
-    private async Task<List<(long Position, Guid EventId)>> ReadAfter(DbConnection connection, long after)
+    // Observers read the way the runner does: through the provider, which bounds the read by the committed head.
+    // A raw range scan under SQL Server's locking READ COMMITTED can skip positions that an append reuses after a rollback.
+    private static async Task<List<(long Position, Guid EventId)>> ReadAfter(DeedboxProvider provider, DbConnection connection, long after)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = Db == Db.Postgres
-            ? $"SELECT global_position, event_id FROM {Table("events")} WHERE global_position > {after} ORDER BY global_position LIMIT 500"
-            : $"SELECT TOP (500) global_position, event_id FROM {Table("events")} WHERE global_position > {after} ORDER BY global_position";
-        var rows = new List<(long, Guid)>();
-        await using var reader = await command.ExecuteReaderAsync(CancellationToken.None);
-        while (await reader.ReadAsync(CancellationToken.None))
-            rows.Add((reader.GetInt64(0), reader.GetGuid(1)));
-        return rows;
+        var events = await provider.ReadEventsAfter(connection, null, after, 500, [], CancellationToken.None);
+        return [.. events.Select(e => (e.GlobalPosition, e.EventId))];
     }
 
     private async Task<List<(long Position, Guid EventId, string StreamId, long Version)>> ReadAllEvents()
@@ -270,6 +283,8 @@ public abstract class AppendTortureTests(Databases databases, Db db) : StoreTest
 
     private sealed class Run
     {
+        public ConcurrentQueue<(long After, long Seen)> Gaps { get; } = new();
+
         public int LongTransactions;
         private readonly ConcurrentDictionary<string, int> _counts = new();
 

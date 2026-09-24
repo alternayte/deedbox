@@ -114,6 +114,9 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// <summary>
     /// Up to <paramref name="limit"/> committed events after <paramref name="after"/>, in position order. Payload and
     /// metadata are read only for events whose type is in <paramref name="payloadTypes"/>; null means every type.
+    /// The read stops at the committed value of the position counter, read first in the same batch. Every position at or
+    /// below it is committed, so the scan never meets an append in flight. A locking read that waits on such an append
+    /// can otherwise resume past positions that the next append reuses after a rollback, and return a later one first.
     /// </summary>
     public abstract Task<List<StoredEvent>> ReadEventsAfter(DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, CancellationToken ct);
 

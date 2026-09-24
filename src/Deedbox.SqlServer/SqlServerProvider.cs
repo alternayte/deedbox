@@ -693,19 +693,25 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             WHERE name IN (SELECT n FROM OPENJSON(@names) WITH (n nvarchar(200) '$[0]'))
             """;
 
-        public readonly string ReadEventsAfter = $"""
+        // The head is read first. Under locking READ COMMITTED it waits for an append in flight to commit or roll back,
+        // so every position the scan reads is committed and none can be reused behind it.
+        private string Head => $"DECLARE @head bigint = (SELECT value FROM [{s}].[position]);";
+
+        public string ReadEventsAfter => $"""
+            {Head}
             SELECT TOP (@limit) {EventColumns}, payload, metadata, occurred_at
-            FROM [{s}].[events] WHERE global_position > @after ORDER BY global_position
+            FROM [{s}].[events] WHERE global_position > @after AND global_position <= @head ORDER BY global_position
             """;
 
-        public readonly string ReadEventsAfterFiltered = $"""
+        public string ReadEventsAfterFiltered => $"""
+            {Head}
             SELECT TOP (@limit) {EventColumns},
                 CASE WHEN t.n IS NOT NULL THEN payload END,
                 CASE WHEN t.n IS NOT NULL THEN metadata END,
                 occurred_at
             FROM [{s}].[events] e
             LEFT JOIN (SELECT DISTINCT n FROM OPENJSON(@types) WITH (n nvarchar(200) '$[0]')) t ON t.n = e.event_type COLLATE Latin1_General_100_BIN2
-            WHERE global_position > @after ORDER BY global_position
+            WHERE global_position > @after AND global_position <= @head ORDER BY global_position
             """;
 
         public readonly string ReadHead = $"SELECT value FROM [{s}].[position]";

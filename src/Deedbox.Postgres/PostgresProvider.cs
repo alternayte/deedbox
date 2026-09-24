@@ -601,7 +601,8 @@ internal sealed partial class PostgresProvider : DeedboxProvider
 
         public readonly string ReadEventsAfter = $"""
             SELECT {EventColumns}, payload::text, metadata::text, occurred_at
-            FROM {s}.events WHERE global_position > @after ORDER BY global_position LIMIT @limit
+            FROM {s}.events WHERE global_position > @after AND global_position <= (SELECT value FROM {s}.position)
+            ORDER BY global_position LIMIT @limit
             """;
 
         public readonly string ReadEventsAfterFiltered = $"""
@@ -609,7 +610,8 @@ internal sealed partial class PostgresProvider : DeedboxProvider
                 CASE WHEN event_type = ANY(@types) THEN payload::text END,
                 CASE WHEN event_type = ANY(@types) THEN metadata::text END,
                 occurred_at
-            FROM {s}.events WHERE global_position > @after ORDER BY global_position LIMIT @limit
+            FROM {s}.events WHERE global_position > @after AND global_position <= (SELECT value FROM {s}.position)
+            ORDER BY global_position LIMIT @limit
             """;
 
         public readonly string ReadHead = $"SELECT value FROM {s}.position";

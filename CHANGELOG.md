@@ -2,6 +2,12 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.2.1] - Unreleased
+
+### Fixed
+
+- On SQL Server without `READ_COMMITTED_SNAPSHOT`, the async runner could skip events. A read that waited on an append in flight could resume past positions that the next append reused after a rollback, then return a later position, and the checkpoint moved past the skipped events. Every read by position now stops at the committed value of the position counter, read first in the same batch. Postgres and databases with `READ_COMMITTED_SNAPSHOT` were not affected. If an async projection on an affected database may have skipped events, rebuild it.
+
 ## [0.2.0] - 2026-09-24
 
 ### Added
@@ -35,5 +41,6 @@ The first release. It targets .NET 8 and .NET 10.
 - `IEventStoreAdmin`, metrics, traces, and DBX error codes that link to their docs pages.
 - Native `json` columns on SQL Server 2025 and Azure SQL, with `UseSqlServer(connectionString, sql => sql.NativeJson = true)`. Applying the schema converts existing `nvarchar(max)` columns.
 
+[0.2.1]: https://github.com/alternayte/deedbox/compare/v0.2.0...main
 [0.2.0]: https://github.com/alternayte/deedbox/releases/tag/v0.2.0
 [0.1.0]: https://github.com/alternayte/deedbox/releases/tag/v0.1.0
