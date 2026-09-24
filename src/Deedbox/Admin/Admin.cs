@@ -72,9 +72,21 @@ internal sealed class EventStoreAdmin(DeedboxRuntime runtime) : IEventStoreAdmin
 
     public Task<JobInfo?> GetJobAsync(Guid jobId, CancellationToken ct = default) => Admin.Job(runtime.Provider, jobId, ct);
 
-    public Task<Guid> RebuildAsync(string projection, CancellationToken ct = default) => Queue(Jobs.Rebuild, Admin.RebuildArgs(projection), ct);
+    public Task<Guid> RebuildAsync(string projection, CancellationToken ct = default)
+    {
+        var args = Admin.RebuildArgs(projection);
+        if (!runtime.Options.Projections.Any(p => p.Name == projection))
+            throw new DeedboxException(Errors.UnknownConsumer, $"'{projection}' is not a registered projection, so it cannot be rebuilt. Subscriptions cannot be rebuilt.");
+        return Queue(Jobs.Rebuild, args, ct);
+    }
 
-    public Task<Guid> SkipAsync(string consumer, Guid eventId, CancellationToken ct = default) => Queue(Jobs.Skip, Admin.SkipArgs(consumer, eventId), ct);
+    public Task<Guid> SkipAsync(string consumer, Guid eventId, CancellationToken ct = default)
+    {
+        var args = Admin.SkipArgs(consumer, eventId);
+        if (!runtime.Options.Projections.Any(p => p.Name == consumer) && !runtime.Options.Subscriptions.Any(s => s.Name == consumer))
+            throw new DeedboxException(Errors.UnknownConsumer, $"'{consumer}' is not a registered projection or subscription.");
+        return Queue(Jobs.Skip, args, ct);
+    }
 
     public async Task<Guid> EraseSubjectAsync(string subjectId, string tenantId = "", CancellationToken ct = default)
     {
@@ -84,7 +96,13 @@ internal sealed class EventStoreAdmin(DeedboxRuntime runtime) : IEventStoreAdmin
         return await Queue(Jobs.Erase, args, ct);
     }
 
-    public Task<Guid> RebuildSnapshotsAsync(string streamType, CancellationToken ct = default) => Queue(Jobs.Snapshots, Admin.SnapshotArgs(streamType), ct);
+    public Task<Guid> RebuildSnapshotsAsync(string streamType, CancellationToken ct = default)
+    {
+        var args = Admin.SnapshotArgs(streamType);
+        if (runtime.Registry.FindStream(streamType) is null)
+            throw new DeedboxException(Errors.UnregisteredState, $"Stream type '{streamType}' is not registered, so its snapshots cannot be rebuilt.");
+        return Queue(Jobs.Snapshots, args, ct);
+    }
 
     public Task<int> RewrapKeysAsync(IMasterKeyProvider target, CancellationToken ct = default)
     {

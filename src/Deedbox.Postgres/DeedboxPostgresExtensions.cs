@@ -13,7 +13,22 @@ public static class DeedboxPostgresExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrEmpty(connectionString);
-        builder.UseProvider(schema => new PostgresProvider(NpgsqlDataSource.Create(connectionString), ownsDataSource: true, schema));
+        builder.UseProvider((schema, _) => new PostgresProvider(NpgsqlDataSource.Create(connectionString), ownsDataSource: true, schema));
+        return builder;
+    }
+
+    /// <summary>
+    /// Stores events in Postgres, with a connection string that Deedbox reads from the app's services when it starts,
+    /// such as <c>sp =&gt; sp.GetRequiredService&lt;IConfiguration&gt;().GetConnectionString("Default")!</c>. Use it when
+    /// configuration is final only after registration, as under WebApplicationFactory. Deedbox owns the data source.
+    /// </summary>
+    /// <param name="builder">The Deedbox builder.</param>
+    /// <param name="connectionString">Returns an Npgsql connection string.</param>
+    public static DeedboxBuilder UsePostgres(this DeedboxBuilder builder, Func<IServiceProvider, string> connectionString)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(connectionString);
+        builder.UseProvider((schema, services) => new PostgresProvider(NpgsqlDataSource.Create(Required(connectionString(services))), ownsDataSource: true, schema));
         return builder;
     }
 
@@ -24,7 +39,13 @@ public static class DeedboxPostgresExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(dataSource);
-        builder.UseProvider(schema => new PostgresProvider(dataSource, ownsDataSource: false, schema));
+        builder.UseProvider((schema, _) => new PostgresProvider(dataSource, ownsDataSource: false, schema));
         return builder;
+    }
+
+    private static string Required(string connectionString)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(connectionString);
+        return connectionString;
     }
 }

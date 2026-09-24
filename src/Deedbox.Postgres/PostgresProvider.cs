@@ -583,7 +583,8 @@ internal sealed partial class PostgresProvider : DeedboxProvider
 
         public readonly string EnsureCheckpoints = $"""
             INSERT INTO {s}.checkpoints (name, mode, status)
-            SELECT n, m, 'running' FROM unnest(@names, @modes) AS c(n, m)
+            SELECT n, m, CASE WHEN m = 'inline' AND (SELECT value FROM {s}.position) > 0 THEN 'rebuilding' ELSE 'running' END
+            FROM unnest(@names, @modes) AS c(n, m)
             ON CONFLICT (name) DO NOTHING
             """;
 

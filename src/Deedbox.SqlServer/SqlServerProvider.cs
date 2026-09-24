@@ -605,7 +605,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
 
         public readonly string EnsureCheckpoints = $"""
             INSERT INTO [{s}].[checkpoints] (name, mode, status)
-            SELECT c.n, c.m, N'running'
+            SELECT c.n, c.m, CASE WHEN c.m = N'inline' AND (SELECT value FROM [{s}].[position]) > 0 THEN N'rebuilding' ELSE N'running' END
             FROM OPENJSON(@checkpoints) WITH (n nvarchar(200) '$[0]', m nvarchar(20) '$[1]') AS c
             WHERE NOT EXISTS (SELECT 1 FROM [{s}].[checkpoints] WITH (UPDLOCK, HOLDLOCK) WHERE name = c.n)
             """;

@@ -53,8 +53,9 @@ public sealed class AppendingContext
 /// <summary>An event that is being appended. Its global position is not assigned yet.</summary>
 public sealed class PendingEvent
 {
-    internal PendingEvent(Guid eventId, long version, string eventType, int eventVersion, object @event, EventMetadata metadata, DateTimeOffset occurredAt)
+    internal PendingEvent(string streamId, Guid eventId, long version, string eventType, int eventVersion, object @event, EventMetadata metadata, DateTimeOffset occurredAt)
     {
+        StreamId = streamId;
         EventId = eventId;
         Version = version;
         EventType = eventType;
@@ -63,6 +64,9 @@ public sealed class PendingEvent
         Metadata = metadata;
         OccurredAt = occurredAt;
     }
+
+    /// <summary>The stream the event is appended to.</summary>
+    public string StreamId { get; }
 
     /// <summary>The event's ID.</summary>
     public Guid EventId { get; }

@@ -124,7 +124,7 @@ public static class DeedboxQueueBoxExtensions
         var options = new QueueBoxBuilder();
         configure(options);
 
-        builder.AddCheck(runtime => Outbox.Check(options, runtime));
+        builder.AddCheck(registry => Outbox.Check(options, registry));
         builder.AddServices(services => Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton(services, options));
         return builder.OnAppending<OutboxHook>();
     }

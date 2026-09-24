@@ -49,7 +49,7 @@ public abstract class QueueBoxTests(Databases databases, Db db) : RunnerTest(dat
 
         var host = await StartHost(NewProbe(), b => Configure(b).UseQueueBox(q => q
             .UseTable("outbox", Schema)
-            .Publish<ReviewerInvited>("review.invited", (e, info) => new { e.ManuscriptId, e.ReviewerId })
+            .Publish<ReviewerInvited>("review.invited", (e, info) => new { e.ManuscriptId, e.ReviewerId, Stream = info.StreamId, info.Version })
             .Publish<SubjectErased>("privacy.subject_erased")));
         await CreateOutbox("outbox", QueueBoxDdl);
         await StoreOf(host).Append("m-1", ExpectedVersion.NoStream, [new ReviewerInvited("m-1", "person:1", "Ada", "ada@example.org")]);
@@ -59,6 +59,8 @@ public abstract class QueueBoxTests(Databases databases, Db db) : RunnerTest(dat
         var rows = await Rows("outbox", "topic", "payload");
         Assert.Equal(["privacy.subject_erased", "review.invited"], rows.Select(r => r["topic"]).Order());
         Assert.DoesNotContain("Ada", string.Join(' ', rows.Select(r => r["payload"])), StringComparison.Ordinal);
+        var invited = JsonDocument.Parse(rows.Single(r => r["topic"] == "review.invited")["payload"]).RootElement;
+        Assert.Equal(("m-1", 1L), (invited.GetProperty("stream").GetString(), invited.GetProperty("version").GetInt64()));
         Assert.Equal("person:1", JsonDocument.Parse(rows.Single(r => r["topic"] == "privacy.subject_erased")["payload"]).RootElement.GetProperty("subjectId").GetString());
     }
 

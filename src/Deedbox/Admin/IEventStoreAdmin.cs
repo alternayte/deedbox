@@ -18,6 +18,7 @@ public interface IEventStoreAdmin
     /// <summary>Queues an in-place rebuild: the projection's ResetAsync runs, then every event replays through it.</summary>
     /// <param name="projection">The stored projection name.</param>
     /// <param name="ct">Cancels the call.</param>
+    /// <exception cref="DeedboxException">DBX033 when no projection has this name.</exception>
     Task<Guid> RebuildAsync(string projection, CancellationToken ct = default);
 
     /// <summary>
@@ -27,6 +28,7 @@ public interface IEventStoreAdmin
     /// <param name="consumer">The stalled projection or subscription.</param>
     /// <param name="eventId">The event it stalled on, from <see cref="GetStatusAsync"/>.</param>
     /// <param name="ct">Cancels the call.</param>
+    /// <exception cref="DeedboxException">DBX033 when no projection or subscription has this name.</exception>
     Task<Guid> SkipAsync(string consumer, Guid eventId, CancellationToken ct = default);
 
     /// <summary>
@@ -41,6 +43,7 @@ public interface IEventStoreAdmin
     /// <summary>Queues a job that rebuilds the stored state of every stream of a type from its events.</summary>
     /// <param name="streamType">The stored stream type name.</param>
     /// <param name="ct">Cancels the call.</param>
+    /// <exception cref="DeedboxException">DBX009 when no stream type has this name.</exception>
     Task<Guid> RebuildSnapshotsAsync(string streamType, CancellationToken ct = default);
 
     /// <summary>

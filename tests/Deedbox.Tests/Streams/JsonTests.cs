@@ -30,6 +30,23 @@ public sealed class SqlServerJsonTests(Databases databases) : JsonTests(database
 public abstract class JsonTests(Databases databases, Db db) : StoreTest(databases, db)
 {
     [Fact]
+    public async Task A_connection_string_from_the_services_is_read_when_the_store_is_first_resolved()
+    {
+        var settings = new Dictionary<string, string> { ["db"] = "" };
+        var services = new ServiceCollection().AddSingleton(settings);
+        Func<IServiceProvider, string> connectionString = sp => sp.GetRequiredService<Dictionary<string, string>>()["db"];
+        services.AddDeedbox(b => (Db == Db.Postgres ? b.UsePostgres(connectionString) : b.UseSqlServer(connectionString))
+            .Schema(Schema).Stream<Counter>(s => s.Events<Incremented>()));
+
+        settings["db"] = ConnectionString;
+        await using var provider = services.BuildServiceProvider();
+        await SchemaManager.Apply(provider.GetRequiredService<DeedboxRuntime>().Provider, Ct);
+        await StoreFrom(provider).Append(NewStreamId(), ExpectedVersion.NoStream, [new Incremented(1)]);
+
+        Assert.Equal(1L, await Scalar<long>($"SELECT value FROM {Table("position")}"));
+    }
+
+    [Fact]
     public async Task ConfigureJson_changes_how_events_and_state_are_stored()
     {
         var store = await Store(b => b

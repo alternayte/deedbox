@@ -13,4 +13,5 @@ This page lists the limits of Deedbox 0.1, so you can plan around them.
 - **Rebuilds are in place.** The read model is empty or partial during a rebuild.
 - **Projections run one event at a time, in order.**
 - **Only top-level properties hold personal data.**
+- **Start-up needs the database.** Deedbox checks the schema when the host starts. Build-time OpenAPI generation starts the host too; skip hosted services when `Assembly.GetEntryAssembly()?.GetName().Name` is `GetDocument.Insider`.
 - **Metadata is set through `DeedboxContext`.** There is no ASP.NET Core helper; use the [middleware](/how-to/use-tenants/) shown in the tenants guide.

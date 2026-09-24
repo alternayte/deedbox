@@ -83,14 +83,14 @@ internal sealed class OutboxHook(QueueBoxBuilder options, DeedboxRuntime runtime
 internal static class Outbox
 {
     /// <summary>Fails start-up for a publication of an unregistered event, or of personal data with no payload mapping.</summary>
-    public static void Check(QueueBoxBuilder options, DeedboxRuntime runtime)
+    public static void Check(QueueBoxBuilder options, EventRegistry registry)
     {
         foreach (var (type, publication) in options.Publications)
         {
-            if (!runtime.Registry.IsRegistered(type))
+            if (!registry.IsRegistered(type))
                 throw new DeedboxException(Errors.QueueBoxMapping, $"{type.Name} is published to QueueBox but is not a registered event.");
 
-            if (publication.Payload is null && runtime.Registry.ForEvent(type).PersonalFields.Count > 0)
+            if (publication.Payload is null && registry.ForEvent(type).PersonalFields.Count > 0)
             {
                 throw new DeedboxException(Errors.QueueBoxMapping,
                     $"{type.Name} has [PersonalData], so publishing it whole would put personal data in the outbox in plain text. " +

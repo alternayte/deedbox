@@ -169,6 +169,23 @@ public abstract class RunnerTests(Databases databases, Db db) : RunnerTest(datab
         Assert.Equal(0, await Scalar<int>($"SELECT COUNT(*) FROM {Table("applied")} WHERE position = -5"));
     }
 
+    [Fact]
+    public async Task A_new_inline_projection_on_a_store_with_events_applies_the_earlier_events_then_runs_inline()
+    {
+        var probe = NewProbe();
+        var before = await StartHost(probe, _ => { });
+        await StoreOf(before).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 1), new ItemAdded("b", 1)]);
+        await StopHost(before);
+
+        var host = await StartHost(probe, b => b.Projection<InlineApplied>("inline", Run.Inline));
+        await WaitForCaughtUp(host, "inline");
+        await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("c", 1)]);
+
+        Assert.Equal(3, await AppliedCount("inline"));
+        Assert.Equal(1, await Scalar<int>($"SELECT COUNT(*) FROM {Table("applied")} WHERE projection = 'inline' AND position = -1"));
+        Assert.Equal(0, probe.Resets);
+    }
+
     [Theory]
     [InlineData(2)]
     [InlineData(0)]

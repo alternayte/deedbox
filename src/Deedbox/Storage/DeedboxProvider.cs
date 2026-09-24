@@ -68,7 +68,10 @@ internal abstract class DeedboxProvider : IAsyncDisposable
 
     // ---- Async runner ----
 
-    /// <summary>Adds checkpoint rows that do not exist yet, at position 0 and status running.</summary>
+    /// <summary>
+    /// Adds checkpoint rows that do not exist yet, at position 0. A new inline projection on a store that already holds
+    /// events starts as rebuilding, so the runner applies the earlier events before it cuts over; every other one starts running.
+    /// </summary>
     public abstract Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<(string Name, string Mode)> checkpoints, CancellationToken ct);
 
     /// <summary>Every checkpoint row.</summary>

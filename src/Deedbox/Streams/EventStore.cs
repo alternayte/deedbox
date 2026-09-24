@@ -372,7 +372,7 @@ internal sealed class EventStore(
         if (hooks.Count == 0)
             return;
 
-        var pending = rows.Select((r, i) => new PendingEvent(r.EventId, r.Version, r.EventType, r.EventVersion, events[i], eventMetadata, occurredAt)).ToList();
+        var pending = rows.Select((r, i) => new PendingEvent(streamId, r.EventId, r.Version, r.EventType, r.EventVersion, events[i], eventMetadata, occurredAt)).ToList();
         var appending = new AppendingContext(tenantId, streamId, stream.Name, pending, work);
         foreach (var hook in hooks)
             await hook.OnAppending(appending, ct);

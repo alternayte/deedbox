@@ -17,10 +17,10 @@ public static class DeedboxServiceCollectionExtensions
 
         var builder = new DeedboxBuilder();
         configure(builder);
-        var runtime = builder.Build();
+        var createRuntime = builder.Build();
 
         builder.RegisterServices(services);
-        services.AddSingleton(_ => runtime);
+        services.AddSingleton(createRuntime);
         services.AddSingleton(sp => new ProjectionSet(sp.GetRequiredService<DeedboxRuntime>(), sp));
         services.AddScoped<DeedboxContext>();
         services.AddSingleton<IEventStoreAdmin>(sp => new EventStoreAdmin(sp.GetRequiredService<DeedboxRuntime>()));

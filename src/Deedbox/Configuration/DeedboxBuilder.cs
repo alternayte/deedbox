@@ -18,7 +18,7 @@ public sealed class DeedboxBuilder
     private readonly KeysBuilder _keys = new();
     private readonly List<Action<IServiceCollection>> _services = [];
     private Action<JsonSerializerOptions>? _configureJson;
-    private Func<string, DeedboxProvider>? _provider;
+    private Func<string, IServiceProvider, DeedboxProvider>? _provider;
     private string _schema = SchemaName.Default;
     private bool _applySchemaOnStartup;
     private int _executeRetries = 3;
@@ -169,13 +169,13 @@ public sealed class DeedboxBuilder
         return this;
     }
 
-    private readonly List<Action<DeedboxRuntime>> _checks = [];
+    private readonly List<Action<EventRegistry>> _checks = [];
 
     /// <summary>Lets an extension package register services with AddDeedbox.</summary>
     internal void AddServices(Action<IServiceCollection> register) => _services.Add(register);
 
     /// <summary>Lets an extension package check its configuration against the built runtime, so mistakes fail at start-up.</summary>
-    internal void AddCheck(Action<DeedboxRuntime> check) => _checks.Add(check);
+    internal void AddCheck(Action<EventRegistry> check) => _checks.Add(check);
 
     internal void RegisterServices(IServiceCollection services)
     {
@@ -183,7 +183,7 @@ public sealed class DeedboxBuilder
             register(services);
     }
 
-    internal void UseProvider(Func<string, DeedboxProvider> factory)
+    internal void UseProvider(Func<string, IServiceProvider, DeedboxProvider> factory)
     {
         if (_provider is not null)
             throw new DeedboxException(Errors.ProviderAlreadySet, "A database provider is already configured. Call UsePostgres or UseSqlServer once.");
@@ -223,20 +223,28 @@ public sealed class DeedboxBuilder
         return (new EventRegistry(_streams, json, keysConfigured: _keys.Factory is not null), json);
     }
 
-    internal DeedboxRuntime Build()
+    /// <summary>
+    /// Validates the configuration now, so a mistake fails AddDeedbox. Returns the runtime factory; the provider is
+    /// created when the runtime is first resolved, so it can read configuration that is final only then.
+    /// </summary>
+    internal Func<IServiceProvider, DeedboxRuntime> Build()
     {
         if (_provider is null)
             throw new DeedboxException(Errors.NoProvider, "No database provider is configured. Call UsePostgres(...) or UseSqlServer(...) in AddDeedbox.");
 
         var (registry, json) = BuildRegistry();
         ValidateProjections();
-        var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries, _projections, _subscriptions, _runner, _keys.Placeholder);
-        var provider = _provider(_schema);
-        var keys = _keys.Factory is { } factory ? new KeyRing(provider, factory(provider)) : null;
-        var runtime = new DeedboxRuntime(options, provider, registry, json) { Keys = keys };
         foreach (var check in _checks)
-            check(runtime);
-        return runtime;
+            check(registry);
+
+        var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries, _projections, _subscriptions, _runner, _keys.Placeholder);
+        var (createProvider, createKeys, schema) = (_provider, _keys.Factory, _schema);
+        return services =>
+        {
+            var provider = createProvider(schema, services);
+            var keys = createKeys is { } factory ? new KeyRing(provider, factory(provider)) : null;
+            return new DeedboxRuntime(options, provider, registry, json) { Keys = keys };
+        };
     }
 }
 

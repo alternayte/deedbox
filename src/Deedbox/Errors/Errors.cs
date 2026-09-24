@@ -35,6 +35,7 @@ internal static class Errors
     public const string KeyMaterialCorrupt = "DBX030";
     public const string BuiltInEvent = "DBX031";
     public const string QueueBoxMapping = "DBX032";
+    public const string UnknownConsumer = "DBX033";
 
     /// <summary>The error catalogue: each code's page title. The docs build one page per entry; a test checks every code has one.</summary>
     public static readonly IReadOnlyDictionary<string, string> Titles = new Dictionary<string, string>
@@ -71,5 +72,6 @@ internal static class Errors
         [KeyMaterialCorrupt] = "Encrypted data or a key does not verify",
         [BuiltInEvent] = "A built-in event was appended or registered",
         [QueueBoxMapping] = "A QueueBox publication is not valid",
+        [UnknownConsumer] = "A projection or subscription name is not registered",
     };
 }

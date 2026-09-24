@@ -185,6 +185,7 @@ Deedbox.PendingEvent.EventType.get -> string!
 Deedbox.PendingEvent.EventVersion.get -> int
 Deedbox.PendingEvent.Metadata.get -> Deedbox.EventMetadata!
 Deedbox.PendingEvent.OccurredAt.get -> System.DateTimeOffset
+Deedbox.PendingEvent.StreamId.get -> string!
 Deedbox.PendingEvent.Version.get -> long
 Deedbox.PersonalDataAttribute
 Deedbox.PersonalDataAttribute.PersonalDataAttribute() -> void

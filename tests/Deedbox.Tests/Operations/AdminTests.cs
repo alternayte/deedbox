@@ -53,6 +53,19 @@ public abstract class AdminTests(Databases databases, Db db) : RunnerTest(databa
     }
 
     [Fact]
+    public async Task Admin_jobs_for_unregistered_names_fail_at_once_and_queue_nothing()
+    {
+        var host = await StartHost(NewProbe(), b => b.Projection<AsyncApplied>("applied", Run.Async).Subscription<Receipts>("receipts"));
+
+        var rebuild = await Assert.ThrowsAsync<DeedboxException>(() => AdminOf(host).RebuildAsync("nope"));
+        var subscription = await Assert.ThrowsAsync<DeedboxException>(() => AdminOf(host).RebuildAsync("receipts"));
+        var skip = await Assert.ThrowsAsync<DeedboxException>(() => AdminOf(host).SkipAsync("nope", Guid.NewGuid()));
+
+        Assert.Equal([Errors.UnknownConsumer, Errors.UnknownConsumer, Errors.UnknownConsumer], new[] { rebuild.Code, subscription.Code, skip.Code });
+        Assert.Empty((await AdminOf(host).GetStatusAsync()).Jobs);
+    }
+
+    [Fact]
     public async Task Rebuilding_snapshots_replaces_every_stored_state_of_a_stream_type()
     {
         var host = await StartHost(NewProbe(), b => b.Stream<Counter>(s => s.Events<Incremented>()));
@@ -69,7 +82,7 @@ public abstract class AdminTests(Databases databases, Db db) : RunnerTest(databa
 
         Assert.Equal(6, JsonNode.Parse(job.Progress!)!["streams"]!.GetValue<int>());
         Assert.Equal(new Counter(2, 1), (await StoreOf(host).Load<Counter>("counter-1")).State);
-        Assert.Equal("failed", (await Finished(host, await AdminOf(host).RebuildSnapshotsAsync("nope"))).Status);
+        Assert.Equal(Errors.UnregisteredState, (await Assert.ThrowsAsync<DeedboxException>(() => AdminOf(host).RebuildSnapshotsAsync("nope"))).Code);
     }
 
     [Fact]
