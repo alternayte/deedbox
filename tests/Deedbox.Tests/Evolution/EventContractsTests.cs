@@ -160,7 +160,7 @@ public sealed class EventContractsPublicTests
     public void Verify_resolves_the_lockfile_next_to_the_calling_source_file()
     {
         var name = $"deedbox-{Guid.NewGuid():N}.lock";
-        var expected = Path.Combine(Path.GetDirectoryName(ThisFile())!, name);
+        var expected = Path.Combine(EventContracts.CallerDirectory(ThisFile()), name);
         try
         {
             if (!string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase))
@@ -177,7 +177,26 @@ public sealed class EventContractsPublicTests
         }
         finally
         {
-            File.Delete(expected);
+            if (File.Exists(expected))
+                File.Delete(expected);
+        }
+    }
+
+    [Fact]
+    public void A_mapped_ci_source_path_resolves_by_walking_up_from_the_working_directory()
+    {
+        var root = Directory.CreateTempSubdirectory("deedbox-repo-");
+        try
+        {
+            var folder = Directory.CreateDirectory(Path.Combine(root.FullName, "tests", "App.Tests"));
+            var working = Directory.CreateDirectory(Path.Combine(folder.FullName, "bin", "Debug"));
+
+            Assert.Equal(folder.FullName, EventContracts.CallerDirectory("/_/tests/App.Tests/ContractTests.cs", working.FullName));
+            Assert.Throws<EventContractException>(() => EventContracts.CallerDirectory("/_/nowhere/ContractTests.cs", working.FullName));
+        }
+        finally
+        {
+            root.Delete(recursive: true);
         }
     }
 

@@ -242,7 +242,6 @@ public abstract class RunnerTest(Databases databases, Db db) : DatabaseTest(data
     private async Task EnsureTables()
     {
         await using var connection = await OpenConnection();
-        await EfTables.Ensure(connection, Db, Ct);
         await using var command = connection.CreateCommand();
         command.CommandText = Db == Db.Postgres
             ? $"""

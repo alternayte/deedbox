@@ -24,9 +24,32 @@ public static class EventContracts
         ArgumentNullException.ThrowIfNull(configure);
         ArgumentNullException.ThrowIfNull(lockfile);
 
-        var path = Path.IsPathRooted(lockfile) ? lockfile : Path.Combine(Path.GetDirectoryName(callerFile) ?? "", lockfile);
+        var path = Path.IsPathRooted(lockfile) ? lockfile : Path.Combine(CallerDirectory(callerFile), lockfile);
         var onCi = string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase);
         Verify(configure, path, onCi);
+    }
+
+    /// <summary>
+    /// The calling source file's folder. Deterministic CI builds record source paths under a mapped root such as
+    /// <c>/_/</c>; the folder is then found by walking up from the test's working directory.
+    /// </summary>
+    internal static string CallerDirectory(string callerFile, string? searchFrom = null)
+    {
+        var directory = Path.GetDirectoryName(callerFile) ?? "";
+        if (Directory.Exists(directory))
+            return directory;
+
+        var relative = directory.Replace('\\', '/').TrimStart('/');
+        if (relative.StartsWith("_/", StringComparison.Ordinal))
+            relative = relative[2..];
+        for (var root = new DirectoryInfo(searchFrom ?? Directory.GetCurrentDirectory()); root is not null; root = root.Parent)
+        {
+            var candidate = Path.Combine(root.FullName, relative);
+            if (Directory.Exists(candidate))
+                return candidate;
+        }
+
+        throw new EventContractException($"Cannot find the folder of {callerFile}. Pass an absolute lockfile path to EventContracts.Verify.");
     }
 
     internal static void Verify(Action<DeedboxBuilder> configure, string path, bool onCi)

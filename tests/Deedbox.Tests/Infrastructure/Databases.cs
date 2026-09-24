@@ -39,6 +39,17 @@ public sealed class Databases : IAsyncLifetime
     public async ValueTask InitializeAsync()
     {
         await Task.WhenAll(StartPostgres(), StartSqlServer());
+
+        // Tables the EF Core tests share, created once so test classes never race to create them.
+        await using (var pg = new Npgsql.NpgsqlConnection(Postgres))
+        {
+            await pg.OpenAsync();
+            await EfTables.Ensure(pg, Db.Postgres, CancellationToken.None);
+        }
+
+        await using var sql = new SqlConnection(SqlServer);
+        await sql.OpenAsync();
+        await EfTables.Ensure(sql, Db.SqlServer, CancellationToken.None);
     }
 
     private async Task StartPostgres()

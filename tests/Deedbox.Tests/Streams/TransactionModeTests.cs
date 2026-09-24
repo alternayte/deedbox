@@ -61,7 +61,6 @@ public abstract class TransactionModeTests(Databases databases, Db db) : StoreTe
     public async Task DbContext_mode_commits_entities_of_several_contexts_with_the_events()
     {
         var store = await Store();
-        await EnsureEfTables();
         var id = NewStreamId();
         await using var connection = await OpenConnection();
         await using var orders = new OrdersDb(Options<OrdersDb>(connection));
@@ -81,7 +80,6 @@ public abstract class TransactionModeTests(Databases databases, Db db) : StoreTe
     public async Task DbContext_mode_commits_no_entity_when_the_append_conflicts()
     {
         var store = await Store();
-        await EnsureEfTables();
         var id = NewStreamId();
         await store.Append(id, ExpectedVersion.NoStream, [new OrderPlaced("ada")]);
         await using var connection = await OpenConnection();
@@ -100,7 +98,6 @@ public abstract class TransactionModeTests(Databases databases, Db db) : StoreTe
     public async Task DbContext_mode_joins_the_callers_transaction_and_its_rollback()
     {
         var store = await Store();
-        await EnsureEfTables();
         var id = NewStreamId();
         await using var connection = await OpenConnection();
         await using var orders = new OrdersDb(Options<OrdersDb>(connection));
@@ -125,7 +122,6 @@ public abstract class TransactionModeTests(Databases databases, Db db) : StoreTe
     public async Task DbContext_mode_joins_the_callers_transaction_and_its_commit()
     {
         var store = await Store();
-        await EnsureEfTables();
         var id = NewStreamId();
         await using var connection = await OpenConnection();
         await using var orders = new OrdersDb(Options<OrdersDb>(connection));
@@ -157,12 +153,6 @@ public abstract class TransactionModeTests(Databases databases, Db db) : StoreTe
 
     private DbContextOptions<T> Options<T>(DbConnection connection) where T : DbContext =>
         new DbContextOptionsBuilder<T>().Use(Db, connection).Options;
-
-    private async Task EnsureEfTables()
-    {
-        await using var connection = await OpenConnection();
-        await EfTables.Ensure(connection, Db, Ct);
-    }
 
     private Task<int> CountEf(string table, string id) => Scalar<int>($"SELECT COUNT(*) FROM ef_tests.{table} WHERE id = '{id}'");
 }

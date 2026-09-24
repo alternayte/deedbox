@@ -253,7 +253,6 @@ public abstract class InlineProjectionTests(Databases databases, Db db) : StoreT
             s => s.AddSingleton(tables).AddDbContext<OrdersDb>(o => o.Use(Db, ConnectionString)));
 
         await using var connection = await OpenConnection();
-        await EfTables.Ensure(connection, Db, Ct);
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
             CREATE TABLE {Table("cart_lines")} (stream_id varchar(200) NOT NULL, version bigint NOT NULL, sku varchar(50) NOT NULL, qty int NOT NULL);
