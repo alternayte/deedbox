@@ -18,7 +18,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 12. Deedbox.QueueBox package against the confirmed QueueBox contract.
 - [x] 13. Docs: Starlight site, MarkdownSnippets, Vale, error catalogue, README, dotnet new template, llms.txt, agent skill, Cloudflare deploy.
 - [x] 14. Anthology migration: data migration script, module rewrites, remove replaced kernel code, move event-store tests into Deedbox.
-- [ ] 15. Release prep: changelog, package metadata, NuGet prefix check, security policy, full nightly run green. HUMAN GATE 3: release sign-off for 0.1.0.
+- [x] 15. Release prep: changelog, package metadata, NuGet prefix check, security policy, full nightly run green. HUMAN GATE 3: release sign-off for 0.1.0.
 
 ## Decisions
 
@@ -135,6 +135,12 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 14: The admin API keeps its routes on IEventStoreAdmin, with stored projection names (diary, library, lists) instead of class names. The single-stream snapshot rebuild is removed: Deedbox rebuilds a stale snapshot on load through state_version, and per-type rebuilds remain. A generic `/admin/jobs/{id}` reports projection rebuild jobs.
 - Step 14: Build-time OpenAPI generation starts the host, and Deedbox's start-up check needs the database. Anthology removes hosted services under GetDocument.Insider, as ASP.NET documents; known-limits states it.
 - Step 14: The six Anthology event-store test files are gone. Each scenario maps to an existing Deedbox test: appends, conflicts, missing-stream loads and state round trips (Streams), upcaster chains, current-version reads and unknown stored names (Evolution), evolver and rebuilder registration (DBX009 tests and the new admin validation test), snapshot rebuild jobs (AdminTests), catch-up from a checkpoint and default checkpoints (RunnerTests), metadata headers (MetadataTests), and the xid guard (Regressions). No scenario was uncovered, so none was added beyond the gap tests.
+- Step 15: Every package ships the repository README and links the changelog as its release notes. The README's one relative link now points at the docs site.
+- Step 15: The whole 0.1.0 API moves to PublicAPI.Shipped.txt now, because gate 3 signs off that surface. Later changes land in Unshipped again. Package validation gets its baseline after 0.1.0 is on nuget.org.
+- Step 15: The template's projects referenced the literal 0.1.0-alpha, so a 0.1.0 template would have referenced unpublished packages. The template now holds DEEDBOX_VERSION, and the pack stamps in the package version.
+- Step 15: `.github/workflows/release.yml` runs on a v* tag. It fails unless the tag matches VersionPrefix, every Unshipped file is empty, and the changelog has a dated entry. Then it runs `just check`, packs without the suffix, pushes to nuget.org with NUGET_API_KEY, and creates the GitHub release with the changelog section.
+- Step 15: Private vulnerability reporting is on for the repository. SECURITY.md and CODE_OF_CONDUCT.md route reports through it; no personal address is published.
+- Step 15: The first gate run failed once on net8.0: a metadata test captured a trace context it did not set. DiagnosticsTests registers process-wide listeners, which make Deedbox's append span current in tests that run at the same time. Recording the append span is intended, because async handler spans continue its trace (DiagnosticsTests checks this). DiagnosticsTests now runs in a collection without parallelization.
 
 ## Gate reports
 
@@ -222,3 +228,34 @@ Status: approved on 2026-09-24, with one addition: tenant shredding goes into st
 
 - A caller transaction that appends to two streams can deadlock with a concurrent append; the database aborts one. Nothing is lost. Document it, or change the design?
 - `app.UseDeedboxMetadata(...)` needs ASP.NET Core; the core has the scoped `DeedboxContext` instead. Add an ASP.NET Core package, or document the middleware one-liner?
+
+### HUMAN GATE 3: release sign-off for 0.1.0
+
+Status: waiting for sign-off.
+
+#### State
+
+- CI is green on the step 15 commit: Postgres and SQL Server, net8.0 and net10.0, 315 tests per framework, plus the docs snippets and both template variants.
+- Nightly is green on the step 15 commit: torture scale 5 on both providers, and benchmarks within 30% of the baseline in every cell (run 35975600158).
+- Anthology runs on Deedbox in https://github.com/alternayte/anthology/pull/2. All 149 Anthology tests pass on data that the old event store wrote and the migration script moved. Step 14 found four Deedbox gaps; each is fixed and tested (see the step 14 decisions).
+- The docs are live at https://deedbox-docs.pages.dev.
+
+#### NuGet
+
+All nine package IDs are free on nuget.org (checked 2026-09-24), and no package matches "deedbox". The prefix reservation needs your nuget.org account: request `Deedbox.*` as described at https://learn.microsoft.com/nuget/nuget-org/id-prefix-reservation.
+
+#### What you do to release
+
+1. Reserve the prefix, and add the repository secret NUGET_API_KEY (a key scoped to push `Deedbox*`).
+2. Set the date of the 0.1.0 entry in CHANGELOG.md.
+3. Push the tag v0.1.0. The release workflow checks, packs, pushes and creates the GitHub release.
+4. After the release, set PackageValidationBaselineVersion to 0.1.0 and raise VersionPrefix.
+
+Also still open from step 13: the CLOUDFLARE_API_TOKEN secret for docs deploys from CI.
+
+#### Decisions to confirm
+
+- SQL Server JSON columns are nvarchar(max) only. The SDD lists a native `json` opt-in "where available" (SQL Server 2025 and Azure SQL), and its open item on supported versions was never settled. Recommendation: ship 0.1.0 without it. The opt-in is additive: a later migration can change the columns for stores that choose it.
+- Anthology drops its unread outbox instead of running the QueueBox sidecar (Anthology PR, decision 1).
+- SDD open items that only you can close: a GitHub org (the repositories are under alternayte) and a docs domain (deedbox.dev is not registered).
+
