@@ -104,6 +104,6 @@ public sealed class ErrorCatalogueTests
     {
         var error = new DeedboxException("DBX014", "The stream moved.");
 
-        Assert.Equal("DBX014: The stream moved. See https://deedbox.dev/reference/errors/dbx014/", error.Message);
+        Assert.Equal("DBX014: The stream moved. See https://deedbox-docs.pages.dev/reference/errors/dbx014/", error.Message);
     }
 }

@@ -5,7 +5,7 @@ description: Write correct code with Deedbox, the .NET event-sourcing library fo
 
 # Deedbox
 
-Deedbox stores events in the app's own Postgres or SQL Server database. Docs: https://deedbox.dev/llms-full.txt
+Deedbox stores events in the app's own Postgres or SQL Server database. Docs: https://deedbox-docs.pages.dev/llms-full.txt
 
 ## Rules
 
@@ -20,4 +20,4 @@ Deedbox stores events in the app's own Postgres or SQL Server database. Docs: ht
 - Never append `SubjectErased` or `StreamDeleted`. Use `ISubjectErasure.EraseSubjectAsync` and `IEventStore.DeleteStream`.
 - In a transaction the app owns (`UseTransaction`, `UseDbContext`), append to one stream, then commit soon.
 - Test decisions with `Deedbox.Testing`: `Decider.Given<TState>(events).When(decide).Then(expected)`. Keep an `EventContracts.Verify(...)` test and commit its `events.lock`.
-- Every Deedbox error has a DBX code; its message states the fix and links to https://deedbox.dev/reference/errors/.
+- Every Deedbox error has a DBX code; its message states the fix and links to https://deedbox-docs.pages.dev/reference/errors/.

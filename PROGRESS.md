@@ -16,7 +16,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 10. Operations: remaining CLI commands, IEventStoreAdmin, metrics, traces, DBX error codes with docs URLs.
 - [x] 11. Benchmarks: the matrix, nightly job, published results.
 - [x] 12. Deedbox.QueueBox package against the confirmed QueueBox contract.
-- [ ] 13. (built; the Cloudflare deploy waits for secrets and a domain) Docs: Starlight site, MarkdownSnippets, Vale, error catalogue, README, dotnet new template, llms.txt, agent skill, Cloudflare deploy.
+- [x] 13. Docs: Starlight site, MarkdownSnippets, Vale, error catalogue, README, dotnet new template, llms.txt, agent skill, Cloudflare deploy.
 - [ ] 14. Anthology migration: data migration script, module rewrites, remove replaced kernel code, move event-store tests into Deedbox.
 - [ ] 15. Release prep: changelog, package metadata, NuGet prefix check, security policy, full nightly run green. HUMAN GATE 3: release sign-off for 0.1.0.
 
@@ -34,7 +34,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 2: A database schema newer than the build passes the start-up check. Migrations are additive, and a rolling deploy runs old pods against a new schema.
 - Step 2: `deedbox schema script --from n` takes the version the database has now and prints migrations n+1 to latest.
 - Step 2: The SDD's `EventStoreSchema.Script(...)` is `PostgresSchema.Script(...)` and `SqlServerSchema.Script(...)`. The core has no provider enum to pass. Gate 1 confirms.
-- Step 2: Error docs URLs use https://deedbox.dev/reference/errors/dbxNNN/ until the docs domain is chosen (open item).
+- Step 2: Error docs URLs use https://deedbox-docs.pages.dev/reference/errors/dbxNNN/ until the docs domain is chosen (open item).
 - Step 2: No ConfigureAwait (CA2007 off). Deedbox targets hosts without a synchronization context.
 - Step 2: `just api` records new public API symbols from RS0016 build errors into PublicAPI.Unshipped.txt.
 - Step 3: A write locks the stream identity before it reads the stream. SQL Server uses UPDLOCK + HOLDLOCK on the row or its key range. Postgres uses a transaction advisory lock on a hash of (tenant, stream) plus FOR UPDATE. Writers of one stream queue up on both providers, including when they create it.
@@ -115,11 +115,13 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 12: `UseTable(name, schema)` and `UseColumns(...)` follow QueueBox's custom table and column mapping. Identifiers must be plain names and are quoted for the dialect.
 - Step 13: The site is Starlight in `site/`. Code samples live in the compiled, tested project `site/snippets/Deedbox.Snippets`; its tests run the first-stream tutorial and the inline EF Core projection against Postgres. MarkdownSnippets does not process .mdx, and MDX rejects HTML comments. So each snippet fills a Markdown partial in `site/src/snippets/`, which MDX pages import, including inside synced tabs. `checks/docs-snippets-current.sh` fails `just check` when a partial or the README is stale.
 - Step 13: Vale runs a Deedbox style (`site/styles/Deedbox`): second person, present tense, no marketing words, sentences under 35 words, and each page opening with what the reader achieves. `scripts/vale.sh` downloads a pinned Vale into artifacts/tools.
-- Step 13: Error URLs are https://deedbox.dev/reference/errors/dbxNNN/, with one page per code. A test in Deedbox.Tests fails when a code has no page with its catalogue title.
+- Step 13: Error URLs are https://deedbox-docs.pages.dev/reference/errors/dbxNNN/, with one page per code. A test in Deedbox.Tests fails when a code has no page with its catalogue title.
 - Step 13: `dotnet new deedbox [--database postgres|sqlserver]` makes a web app with one stream, an inline projection, schema setup, and decider and lockfile tests. `just template` (part of `just check`) generates both variants outside the repo against the packed packages, then builds and tests them. A manual run of the Postgres variant served add-item, checkout and load against a real database.
 - Step 13: The Starlight Mermaid add-on is not used; the two SDD diagrams are numbered lists. The comparison page states only what its linked sources support.
-- Step 13: `.github/workflows/docs.yml` checks snippets, runs Vale, builds the site, and deploys with wrangler to Cloudflare Pages project `deedbox-docs`, one alias per branch, with a PR preview comment. It deploys only when CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets exist; CLOUDFLARE_BEACON_TOKEN turns on Web Analytics. The domain (deedbox.dev in URLs so far) is still an open item.
+- Step 13: `.github/workflows/docs.yml` checks snippets, runs Vale, builds the site, and deploys with wrangler to Cloudflare Pages project `deedbox-docs`, one alias per branch, with a PR preview comment. It deploys only when the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets exist; CLOUDFLARE_BEACON_TOKEN turns on Web Analytics.
 - Step 13: The agent skill is `skills/deedbox/SKILL.md`; llms.txt comes from starlight-llms-txt.
+- Step 13: The site is live at https://deedbox-docs.pages.dev (Cloudflare Pages project `deedbox-docs`, account of the local wrangler login, created on classic Pages with `--force` because wrangler 4 now routes Pages commands to Workers). deedbox.dev is not registered, so every docs link (error URLs, README, llms.txt, skill) points at the pages.dev address. Moving to a domain means replacing that one URL.
+- Step 13: CLOUDFLARE_ACCOUNT_ID is set as a repo secret. CI deploys on each push once the user adds CLOUDFLARE_API_TOKEN (a token with Cloudflare Pages: Edit); the local OAuth login cannot create API tokens.
 
 ## Gate reports
 
@@ -138,7 +140,7 @@ The public surface is in `src/*/PublicAPI.Unshipped.txt`. These names differ fro
 5. `LoadResult<TState>` is a record struct that deconstructs to `(state, version)`. `AppendResult` and `ExecuteResult<TState>` are records.
 6. `EventEnvelope` has no public constructor. Metadata properties arrive in step 6.
 7. `SnapshotPolicy.EveryAppend` (default), `Every(n)` and `Never`, set per stream with `.Snapshots(...)`; `.StateVersion(n)` sets the state version.
-8. `DeedboxException.Code` holds a DBX code; each message ends with `https://deedbox.dev/reference/errors/dbxNNN/`. The docs domain is still an open item.
+8. `DeedboxException.Code` holds a DBX code; each message ends with `https://deedbox-docs.pages.dev/reference/errors/dbxNNN/`. The docs domain is still an open item.
 9. JSON: `ConfigureJson(...)` and `UseJsonContext(...)`. Defaults are camelCase; enums are numbers.
 10. `IEventStore` is scoped.
 

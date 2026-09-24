@@ -163,7 +163,7 @@ public abstract class SchemaTests(Databases databases, Db db) : DatabaseTest(dat
         Assert.Contains("deedbox schema apply", error.Message, StringComparison.Ordinal);
         Assert.Contains($"--schema {Schema} --from 0", error.Message, StringComparison.Ordinal);
         Assert.Contains("ApplySchemaOnStartup()", error.Message, StringComparison.Ordinal);
-        Assert.Contains("https://deedbox.dev/reference/errors/dbx001/", error.Message, StringComparison.Ordinal);
+        Assert.Contains("https://deedbox-docs.pages.dev/reference/errors/dbx001/", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

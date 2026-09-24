@@ -71,7 +71,7 @@ var result = await store.Execute<Cart>(cartId, cart => CartDecider.Add(cart, sku
 ```
 <!-- endSnippet -->
 
-The [first-stream tutorial](https://deedbox.dev/tutorials/first-stream/) runs this end to end.
+The [first-stream tutorial](https://deedbox-docs.pages.dev/tutorials/first-stream/) runs this end to end.
 
 ## What Deedbox is, and is not
 
@@ -115,11 +115,11 @@ Each guarantee has a test that enforces it on Postgres and SQL Server.
 
 ## QueueBox
 
-Deedbox pairs with [QueueBox](https://github.com/alternayte/queuebox), which delivers messages from an outbox table to brokers and webhooks. `Deedbox.QueueBox` writes the outbox rows in the append's transaction; see [wire QueueBox](https://deedbox.dev/how-to/wire-queuebox/).
+Deedbox pairs with [QueueBox](https://github.com/alternayte/queuebox), which delivers messages from an outbox table to brokers and webhooks. `Deedbox.QueueBox` writes the outbox rows in the append's transaction; see [wire QueueBox](https://deedbox-docs.pages.dev/how-to/wire-queuebox/).
 
 ## Documentation
 
-The docs are at [deedbox.dev](https://deedbox.dev). They cover tutorials, how-to guides, concepts, reference and runbooks.
+The docs are at [deedbox-docs.pages.dev](https://deedbox-docs.pages.dev). They cover tutorials, how-to guides, concepts, reference and runbooks.
 
 ## Contributing
 

@@ -19,5 +19,5 @@ public class DeedboxException : Exception
     /// <summary>The DBX code, such as <c>DBX001</c>.</summary>
     public string Code { get; }
 
-    internal static string DocsUrl(string code) => $"https://deedbox.dev/reference/errors/{code.ToLowerInvariant()}/";
+    internal static string DocsUrl(string code) => $"https://deedbox-docs.pages.dev/reference/errors/{code.ToLowerInvariant()}/";
 }

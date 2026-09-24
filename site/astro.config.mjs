@@ -7,7 +7,7 @@ import starlightLlmsTxt from 'starlight-llms-txt';
 const beacon = process.env.PUBLIC_CF_BEACON_TOKEN;
 
 export default defineConfig({
-  site: process.env.DOCS_SITE ?? 'https://deedbox.dev',
+  site: process.env.DOCS_SITE ?? 'https://deedbox-docs.pages.dev',
   integrations: [
     starlight({
       title: 'Deedbox',
