@@ -20,6 +20,7 @@ public sealed class RegistryTests
     }
 
     [Fact]
+    [Trait("Regression", "Anthology: duplicate mapping overwrote a name")]
     public void An_event_registered_twice_fails_at_startup()
     {
         var error = Assert.Throws<DeedboxException>(() => Build(b => b

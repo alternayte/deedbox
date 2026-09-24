@@ -125,8 +125,14 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// <summary>Releases resources the provider created, such as a data source it built from a connection string.</summary>
     public virtual ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-    protected static DbCommand Command(DbConnection connection, DbTransaction? transaction, string sql)
+    /// <summary>Statements this provider has sent. The idle query budget test reads it.</summary>
+    public long StatementCount => Interlocked.Read(ref _statements);
+
+    private long _statements;
+
+    protected DbCommand Command(DbConnection connection, DbTransaction? transaction, string sql)
     {
+        Interlocked.Increment(ref _statements);
         var command = connection.CreateCommand();
         command.Transaction = transaction;
 #pragma warning disable CA2100 // SQL text is built from provider constants and a validated schema name.

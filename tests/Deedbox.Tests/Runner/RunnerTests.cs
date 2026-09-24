@@ -84,6 +84,7 @@ public abstract class RunnerTests(Databases databases, Db db) : RunnerTest(datab
     }
 
     [Fact]
+    [Trait("Regression", "Anthology: poison event retried for ever")]
     public async Task A_poison_event_stalls_the_projection_after_retries_and_a_skip_job_moves_it_on()
     {
         var probe = NewProbe();

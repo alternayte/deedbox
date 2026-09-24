@@ -103,6 +103,7 @@ public abstract class SchemaTests(Databases databases, Db db) : DatabaseTest(dat
     }
 
     [Fact]
+    [Trait("Regression", "Anthology: xid8 mapped to uint")]
     public async Task Columns_have_the_types_the_code_reads()
     {
         await using var provider = CreateProvider();

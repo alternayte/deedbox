@@ -11,7 +11,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 5. Registry and evolution: naming convention, aliases, event_types table, startup name check, JSON upcasters and typed upcasters, lockfile in Deedbox.Testing, Given/When/Then helpers.
 - [x] 6. Inline projections (EF and ADO flavours), OnAppending hook, metadata context, causation/correlation, TraceParent capture, tenancy scoping.
 - [x] 7. Async runner: checkpoints, projections, subscriptions, type filtering, LISTEN/NOTIFY and backoff, multi-instance locking, poison handling, in-place rebuilds, health checks, jobs table.
-- [ ] 8. Torture suite v2: projector kills, competing instances, sparse filters, idle query budget; every Anthology regression test.
+- [x] 8. Torture suite v2: projector kills, competing instances, sparse filters, idle query budget; every Anthology regression test.
 - [ ] 9. Personal data: [DataSubject] / [PersonalData], contract-customization encryption, key hierarchy, Database / Environment / Azure Key Vault key modes, subject_streams, erasure job, SubjectErased, stream deletion, startup safety rules, key provider compliance suite. HUMAN GATE 2: security review of crypto, key handling and erasure.
 - [ ] 10. Operations: remaining CLI commands, IEventStoreAdmin, metrics, traces, DBX error codes with docs URLs.
 - [ ] 11. Benchmarks: the matrix, nightly job, published results.
@@ -81,6 +81,9 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 7: Runner defaults: batch 500; polls from 50 ms up to 5 s; 5 retries from 1 s; health stall after 10 minutes. `Runner(o => o.Enabled = false)` turns the runner off in a process.
 - Step 7: The SDD's IBatchProjection is an abstract `BatchProjection` class with `Handles<T>()`. An interface would need its own way to declare event types.
 - Step 7: Each handler call starts an Activity "deedbox.handle <consumer>" whose parent is the event's stored TraceParent. Step 10 adds the other spans and metrics.
+- Step 8: Torture v2 is real chaos: it kills runner sessions (pg_terminate_backend, or KILL by application name), restarts runner hosts, runs three competing instances, fails 3% of handler first attempts, and uses a 3% sparse event type. Each projection must apply every event exactly once, enforced by a primary key on the event ID. The subscription must deliver every event at least once.
+- Step 8: Idle query budget: 30 statements per minute per consumer, plus 30 for the jobs loop, with default polling. The local measurement is 48 statements in 30 s for 4 consumers, against a budget of 75. This settles the budget open item; the throughput threshold stays open until step 11.
+- Step 8: Anthology regressions: new named tests cover a transaction that starts first but appends last, a projection class rename, one NOTIFY per append, and a duplicate mapping. Existing tests that already pin the other lessons carry a Regression trait.
 
 ## Gate reports
 

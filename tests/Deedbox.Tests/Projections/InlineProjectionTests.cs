@@ -210,6 +210,7 @@ public abstract class InlineProjectionTests(Databases databases, Db db) : StoreT
     }
 
     [Fact]
+    [Trait("Regression", "Anthology: projections ran inline and async")]
     public async Task A_projection_registered_twice_or_under_a_used_name_fails_at_startup()
     {
         var twice = Assert.Throws<DeedboxException>(() => new ServiceCollection().AddDeedbox(b => UseDatabase(b)

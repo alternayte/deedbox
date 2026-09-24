@@ -58,6 +58,7 @@ public abstract class SnapshotTests(Databases databases, Db db) : StoreTest(data
     }
 
     [Fact]
+    [Trait("Regression", "Anthology: snapshot lost fields on a state change")]
     public async Task A_new_state_version_rebuilds_the_snapshot_from_events_on_load()
     {
         var id = await AppendFive(await Store());

@@ -23,6 +23,19 @@ public sealed class Probe(string schema, Db db)
 
     public int Resets;
 
+    public ConcurrentDictionary<Guid, int> Deliveries { get; } = new();
+
+    public ConcurrentDictionary<Guid, bool> Faulted { get; } = new();
+
+    public double FaultRate { get; set; }
+
+    /// <summary>Fails the first attempt at some events, so retries and rollbacks happen.</summary>
+    public void MaybeFail(Guid eventId)
+    {
+        if (FaultRate > 0 && Random.Shared.NextDouble() < FaultRate && Faulted.TryAdd(eventId, true))
+            throw new InvalidOperationException("transient fault");
+    }
+
     public string Prefix { get; } = schema + ":";
 }
 
@@ -139,15 +152,17 @@ public abstract class RunnerTest(Databases databases, Db db) : DatabaseTest(data
 
     protected Probe NewProbe() => new(Schema, Db);
 
-    protected async Task<IHost> StartHost(Probe probe, Action<DeedboxBuilder> configure, Action<RunnerOptions>? runner = null)
+    protected async Task<IHost> StartHost(Probe probe, Action<DeedboxBuilder> configure, Action<RunnerOptions>? runner = null, string? applicationName = null)
     {
+        var connectionString = applicationName is null ? ConnectionString : $"{ConnectionString};Application Name={applicationName}";
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton(probe);
         builder.Services.AddDbContext<OrdersDb>(o => o.Use(Db, ConnectionString));
         builder.Services.AddHealthChecks().AddDeedboxHealthChecks();
         builder.Services.AddDeedbox(b =>
         {
-            UseDatabase(b).ApplySchemaOnStartup().Stream<Cart>(s => s.Events<ItemAdded, CheckedOut>()).Stream<Order>(s => s.Events<OrderPlaced>());
+            (Db == Db.Postgres ? b.UsePostgres(connectionString) : b.UseSqlServer(connectionString)).Schema(Schema)
+                .ApplySchemaOnStartup().Stream<Cart>(s => s.Events<ItemAdded, CheckedOut>()).Stream<Order>(s => s.Events<OrderPlaced>());
             b.Runner(o =>
             {
                 o.MinPollDelay = TimeSpan.FromMilliseconds(10);
