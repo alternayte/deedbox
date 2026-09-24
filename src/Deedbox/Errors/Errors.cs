@@ -25,4 +25,6 @@ internal static class Errors
     public const string DuplicateProjection = "DBX020";
     public const string ProjectionHandlesUnregistered = "DBX021";
     public const string InvalidTenant = "DBX022";
+    public const string ResetNotImplemented = "DBX023";
+    public const string InlineBatchProjection = "DBX024";
 }

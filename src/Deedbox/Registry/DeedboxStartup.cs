@@ -15,7 +15,7 @@ internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServicePro
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         // Creating the projections checks that each handles only registered events.
-        _ = services.GetRequiredService<ProjectionSet>();
+        var projections = services.GetRequiredService<ProjectionSet>();
 
         if (runtime.Options.ApplySchemaOnStartup)
         {
@@ -29,9 +29,44 @@ internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServicePro
         }
 
         await StoredNames.Verify(runtime, cancellationToken);
+        await EnsureCheckpoints(projections, cancellationToken);
+    }
+
+    /// <summary>
+    /// Adds a checkpoint row for each new projection and subscription. A projection whose run mode changed stalls
+    /// until it is rebuilt: its stored progress belongs to the other mode, so running it either way could skip or
+    /// repeat events.
+    /// </summary>
+    private async Task EnsureCheckpoints(ProjectionSet projections, CancellationToken ct)
+    {
+        var wanted = AsyncRunner.Consumers(runtime, projections).Select(c => (c.Name, c.Mode)).ToList();
+        if (wanted.Count == 0)
+            return;
+
+        await using var connection = runtime.Provider.CreateConnection();
+        await connection.OpenAsync(ct);
+        await runtime.Provider.EnsureCheckpoints(connection, wanted, ct);
+
+        var stored = (await runtime.Provider.ReadCheckpoints(connection, ct)).ToDictionary(r => r.Name, StringComparer.Ordinal);
+        foreach (var (name, mode) in wanted)
+        {
+            var row = stored[name];
+            if (row.Mode == mode || row.Status == CheckpointStatus.Rebuilding || ConsumerLoop.StallReason(row.Error) == "mode_changed")
+                continue;
+
+            await using var transaction = await connection.BeginTransactionAsync(ct);
+            var locked = await runtime.Provider.LockCheckpoint(connection, transaction, name, CheckpointLock.Exclusive, ct);
+            var error = new System.Text.Json.Nodes.JsonObject { ["reason"] = "mode_changed", ["from"] = row.Mode, ["to"] = mode }.ToJsonString();
+            await runtime.Provider.UpdateCheckpoint(connection, transaction, locked! with { Status = CheckpointStatus.Stalled, Error = error }, ct);
+            await transaction.CommitAsync(ct);
+            LogModeChanged(name, row.Mode, mode);
+        }
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    [LoggerMessage(EventId = 2, Level = LogLevel.Error, Message = "Deedbox projection '{Name}' changed from {From} to {To}; it is stalled until you rebuild it.")]
+    private partial void LogModeChanged(string name, string from, string to);
 
     [LoggerMessage(EventId = 1, Level = LogLevel.Information, Message = "Deedbox schema '{Schema}' migrated from version {From} to {To}.")]
     private partial void LogApplied(string schema, int from, int to);

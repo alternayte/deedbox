@@ -66,6 +66,56 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// <summary>Every (stream type, event type, event version) the store has ever held.</summary>
     public abstract Task<List<EventTypeRow>> ReadEventTypes(DbConnection connection, CancellationToken ct);
 
+    // ---- Async runner ----
+
+    /// <summary>Adds checkpoint rows that do not exist yet, at position 0 and status running.</summary>
+    public abstract Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<(string Name, string Mode)> checkpoints, CancellationToken ct);
+
+    /// <summary>Every checkpoint row.</summary>
+    public abstract Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct);
+
+    /// <summary>
+    /// Locks one checkpoint row for the rest of the transaction. <see cref="CheckpointLock.Batch"/> skips a row another
+    /// runner holds and returns null; it does not block appends that read the row's status.
+    /// <see cref="CheckpointLock.Exclusive"/> waits, and blocks appends that read the status until commit.
+    /// </summary>
+    public abstract Task<CheckpointRow?> LockCheckpoint(DbConnection connection, DbTransaction transaction, string name, CheckpointLock mode, CancellationToken ct);
+
+    public abstract Task UpdateCheckpoint(DbConnection connection, DbTransaction transaction, CheckpointRow row, CancellationToken ct);
+
+    /// <summary>
+    /// The statuses of inline projections, read with a shared lock held until commit, so a rebuild cannot change a
+    /// status while an append that read it is still open.
+    /// </summary>
+    public abstract Task<Dictionary<string, string>> ReadInlineStatuses(DbConnection connection, DbTransaction transaction, IReadOnlyList<string> names, CancellationToken ct);
+
+    /// <summary>
+    /// Up to <paramref name="limit"/> committed events after <paramref name="after"/>, in position order. Payload and
+    /// metadata are read only for events whose type is in <paramref name="payloadTypes"/>; null means every type.
+    /// </summary>
+    public abstract Task<List<StoredEvent>> ReadEventsAfter(DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, CancellationToken ct);
+
+    /// <summary>The highest committed position.</summary>
+    public abstract Task<long> ReadHead(DbConnection connection, DbTransaction? transaction, CancellationToken ct);
+
+    /// <summary>Locks the position counter until the transaction ends, so no append can commit meanwhile.</summary>
+    public abstract Task<long> LockCounter(DbConnection connection, DbTransaction transaction, CancellationToken ct);
+
+    public abstract Task InsertJob(DbConnection connection, DbTransaction? transaction, JobRow job, CancellationToken ct);
+
+    /// <summary>Locks the oldest queued job, skipping jobs another runner holds.</summary>
+    public abstract Task<JobRow?> ClaimJob(DbConnection connection, DbTransaction transaction, CancellationToken ct);
+
+    public abstract Task UpdateJob(DbConnection connection, DbTransaction transaction, JobRow job, CancellationToken ct);
+
+    public abstract Task<JobRow?> ReadJob(DbConnection connection, Guid id, CancellationToken ct);
+
+    /// <summary>
+    /// Calls <paramref name="wake"/> whenever events are appended, until cancelled. A provider without push
+    /// notifications returns at once; the runner then relies on polling alone.
+    /// </summary>
+    public abstract Task Listen(Action wake, CancellationToken ct);
+
     /// <summary>Releases resources the provider created, such as a data source it built from a connection string.</summary>
     public virtual ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
@@ -95,8 +145,41 @@ internal sealed record Snapshot(string State, int StateVersion, long At);
 
 internal sealed record NewEvent(Guid EventId, long Version, string EventType, int EventVersion, string Payload, string Metadata);
 
+/// <summary>A stored event. Payload and Metadata are null when a filtered read skipped them.</summary>
 internal sealed record StoredEvent(
     long GlobalPosition, Guid EventId, string TenantId, string StreamId, long Version, string StreamType,
-    string EventType, int EventVersion, string Payload, string Metadata, DateTimeOffset OccurredAt);
+    string EventType, int EventVersion, string? Payload, string? Metadata, DateTimeOffset OccurredAt);
 
 internal sealed record EventTypeRow(string StreamType, string EventType, int EventVersion);
+
+internal enum CheckpointLock
+{
+    Batch,
+    Exclusive,
+}
+
+internal static class CheckpointStatus
+{
+    public const string Running = "running";
+    public const string Stalled = "stalled";
+    public const string Rebuilding = "rebuilding";
+}
+
+internal static class CheckpointMode
+{
+    public const string Inline = "inline";
+    public const string Async = "async";
+    public const string Subscription = "subscription";
+}
+
+internal sealed record CheckpointRow(string Name, long Position, string Mode, string Status, string? Error, DateTimeOffset UpdatedAt);
+
+internal sealed record JobRow(Guid Id, string Kind, string Args, string Status, string? Progress, DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? FinishedAt);
+
+internal static class JobStatus
+{
+    public const string Queued = "queued";
+    public const string Running = "running";
+    public const string Done = "done";
+    public const string Failed = "failed";
+}

@@ -179,6 +179,164 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         return rows;
     }
 
+    public override async Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<(string Name, string Mode)> checkpoints, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.EnsureCheckpoints);
+        Add(command, "names", checkpoints.Select(c => c.Name).ToArray());
+        Add(command, "modes", checkpoints.Select(c => c.Mode).ToArray());
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.ReadCheckpoints);
+        return await ReadCheckpointRows(command, ct);
+    }
+
+    public override async Task<CheckpointRow?> LockCheckpoint(DbConnection connection, DbTransaction transaction, string name, CheckpointLock mode, CancellationToken ct)
+    {
+        // Appends read inline statuses FOR KEY SHARE. A batch lock (FOR NO KEY UPDATE) does not conflict with that;
+        // an exclusive lock (FOR UPDATE) does, so a status change waits for open appends and holds back new ones.
+        var sql = Sql.ReadCheckpoint + (mode == CheckpointLock.Batch ? " FOR NO KEY UPDATE SKIP LOCKED" : " FOR UPDATE");
+        await using var command = Command(connection, transaction, sql);
+        Add(command, "name", name);
+        return (await ReadCheckpointRows(command, ct)).FirstOrDefault();
+    }
+
+    public override async Task UpdateCheckpoint(DbConnection connection, DbTransaction transaction, CheckpointRow row, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.UpdateCheckpoint);
+        Add(command, "name", row.Name);
+        Add(command, "position", row.Position);
+        Add(command, "mode", row.Mode);
+        Add(command, "status", row.Status);
+        command.Parameters.Add(new NpgsqlParameter("error", NpgsqlDbType.Jsonb) { Value = (object?)row.Error ?? DBNull.Value });
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<Dictionary<string, string>> ReadInlineStatuses(DbConnection connection, DbTransaction transaction, IReadOnlyList<string> names, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadInlineStatuses);
+        Add(command, "names", names.ToArray());
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var statuses = new Dictionary<string, string>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(ct))
+            statuses[reader.GetString(0)] = reader.GetString(1);
+        return statuses;
+    }
+
+    public override async Task<List<StoredEvent>> ReadEventsAfter(
+        DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, payloadTypes is null ? Sql.ReadEventsAfter : Sql.ReadEventsAfterFiltered);
+        Add(command, "after", after);
+        Add(command, "limit", limit);
+        if (payloadTypes is not null)
+            Add(command, "types", payloadTypes.ToArray());
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var events = new List<StoredEvent>();
+        while (await reader.ReadAsync(ct))
+        {
+            events.Add(new StoredEvent(
+                reader.GetInt64(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3), reader.GetInt64(4), reader.GetString(5),
+                reader.GetString(6), reader.GetInt32(7), reader.IsDBNull(8) ? null : reader.GetString(8), reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.GetFieldValue<DateTimeOffset>(10)));
+        }
+
+        return events;
+    }
+
+    public override async Task<long> ReadHead(DbConnection connection, DbTransaction? transaction, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadHead);
+        return (long)(await command.ExecuteScalarAsync(ct))!;
+    }
+
+    public override async Task<long> LockCounter(DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadHead + " FOR UPDATE");
+        return (long)(await command.ExecuteScalarAsync(ct))!;
+    }
+
+    public override async Task InsertJob(DbConnection connection, DbTransaction? transaction, JobRow job, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.InsertJob);
+        AddJob(command, job);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<JobRow?> ClaimJob(DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ClaimJob);
+        return (await ReadJobRows(command, ct)).FirstOrDefault();
+    }
+
+    public override async Task UpdateJob(DbConnection connection, DbTransaction transaction, JobRow job, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.UpdateJob);
+        AddJob(command, job);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<JobRow?> ReadJob(DbConnection connection, Guid id, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.ReadJob);
+        Add(command, "id", id);
+        return (await ReadJobRows(command, ct)).FirstOrDefault();
+    }
+
+    public override async Task Listen(Action wake, CancellationToken ct)
+    {
+        await using var connection = _dataSource.CreateConnection();
+        await connection.OpenAsync(ct);
+        connection.Notification += (_, _) => wake();
+        await using (var command = new NpgsqlCommand($"LISTEN dbx_{Schema}", connection))
+            await command.ExecuteNonQueryAsync(ct);
+
+        // Events may have committed before LISTEN took effect.
+        wake();
+        while (true)
+            await connection.WaitAsync(ct);
+    }
+
+    private static void AddJob(DbCommand command, JobRow job)
+    {
+        Add(command, "id", job.Id);
+        Add(command, "kind", job.Kind);
+        command.Parameters.Add(new NpgsqlParameter("args", NpgsqlDbType.Jsonb) { Value = job.Args });
+        Add(command, "status", job.Status);
+        command.Parameters.Add(new NpgsqlParameter("progress", NpgsqlDbType.Jsonb) { Value = (object?)job.Progress ?? DBNull.Value });
+        Add(command, "started_at", (object?)job.StartedAt ?? DBNull.Value);
+        Add(command, "finished_at", (object?)job.FinishedAt ?? DBNull.Value);
+    }
+
+    private static async Task<List<CheckpointRow>> ReadCheckpointRows(DbCommand command, CancellationToken ct)
+    {
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<CheckpointRow>();
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(new CheckpointRow(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5)));
+        }
+
+        return rows;
+    }
+
+    private static async Task<List<JobRow>> ReadJobRows(DbCommand command, CancellationToken ct)
+    {
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<JobRow>();
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(new JobRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5),
+                reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6), reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7)));
+        }
+
+        return rows;
+    }
+
     public override async ValueTask DisposeAsync()
     {
         if (_ownsDataSource)
@@ -254,6 +412,61 @@ internal sealed partial class PostgresProvider : DeedboxProvider
 
         public readonly string ReadEventTypes =
             $"SELECT stream_type, event_type, event_version FROM {s}.event_types ORDER BY stream_type, event_type, event_version";
+
+        private const string CheckpointColumns = "name, position, mode, status, error::text, updated_at";
+
+        private const string JobColumns = "id, kind, args::text, status, progress::text, created_at, started_at, finished_at";
+
+        private const string EventColumns = "global_position, event_id, tenant_id, stream_id, version, stream_type, event_type, event_version";
+
+        public readonly string EnsureCheckpoints = $"""
+            INSERT INTO {s}.checkpoints (name, mode, status)
+            SELECT n, m, 'running' FROM unnest(@names, @modes) AS c(n, m)
+            ON CONFLICT (name) DO NOTHING
+            """;
+
+        public readonly string ReadCheckpoints = $"SELECT {CheckpointColumns} FROM {s}.checkpoints ORDER BY name";
+
+        public readonly string ReadCheckpoint = $"SELECT {CheckpointColumns} FROM {s}.checkpoints WHERE name = @name";
+
+        public readonly string UpdateCheckpoint = $"""
+            UPDATE {s}.checkpoints SET position = @position, mode = @mode, status = @status, error = @error, updated_at = now()
+            WHERE name = @name
+            """;
+
+        public readonly string ReadInlineStatuses = $"SELECT name, status FROM {s}.checkpoints WHERE name = ANY(@names) FOR KEY SHARE";
+
+        public readonly string ReadEventsAfter = $"""
+            SELECT {EventColumns}, payload::text, metadata::text, occurred_at
+            FROM {s}.events WHERE global_position > @after ORDER BY global_position LIMIT @limit
+            """;
+
+        public readonly string ReadEventsAfterFiltered = $"""
+            SELECT {EventColumns},
+                CASE WHEN event_type = ANY(@types) THEN payload::text END,
+                CASE WHEN event_type = ANY(@types) THEN metadata::text END,
+                occurred_at
+            FROM {s}.events WHERE global_position > @after ORDER BY global_position LIMIT @limit
+            """;
+
+        public readonly string ReadHead = $"SELECT value FROM {s}.position";
+
+        public readonly string InsertJob = $"""
+            INSERT INTO {s}.jobs (id, kind, args, status, progress, started_at, finished_at)
+            VALUES (@id, @kind, @args, @status, @progress, @started_at, @finished_at)
+            """;
+
+        public readonly string ClaimJob = $"""
+            SELECT {JobColumns} FROM {s}.jobs WHERE status = 'queued' ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
+            """;
+
+        public readonly string UpdateJob = $"""
+            UPDATE {s}.jobs SET status = @status, args = @args, progress = @progress, started_at = @started_at, finished_at = @finished_at,
+                updated_at = now(), kind = @kind
+            WHERE id = @id
+            """;
+
+        public readonly string ReadJob = $"SELECT {JobColumns} FROM {s}.jobs WHERE id = @id";
 
         public readonly string SaveSnapshot = $"""
             UPDATE {s}.streams SET state = @state, state_version = @state_version, state_at = @state_at

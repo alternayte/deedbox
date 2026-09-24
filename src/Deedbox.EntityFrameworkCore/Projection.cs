@@ -18,6 +18,16 @@ public abstract class Projection<TDbContext> : ProjectionBase where TDbContext :
     {
     }
 
+    /// <summary>
+    /// Removes everything the projection wrote. A rebuild calls it, then replays every event. The default throws,
+    /// so a projection without it cannot be rebuilt.
+    /// </summary>
+    /// <param name="context">The rebuild's DbContext, connection and transaction.</param>
+    protected virtual Task ResetAsync(WriteContext<TDbContext> context) => throw ResetMissing();
+
+    internal override async Task Reset(TransactionWork work) =>
+        await ResetAsync(new WriteContext<TDbContext>(work, await Enlistment.Get<TDbContext>(work)));
+
     /// <summary>Handles one event type. Events of types the projection does not handle are skipped.</summary>
     /// <param name="handler">Changes entities through <see cref="ProjectionContext{TDbContext}.Db"/>.</param>
     /// <typeparam name="TEvent">The event type.</typeparam>
@@ -43,5 +53,19 @@ public sealed class ProjectionContext<TDbContext> : ProjectionContext where TDbC
     }
 
     /// <summary>The DbContext, on the transaction's connection. Do not call SaveChanges; Deedbox does.</summary>
+    public TDbContext Db { get; }
+}
+
+/// <summary>A rebuild's reset, with the DbContext enlisted in its transaction.</summary>
+/// <typeparam name="TDbContext">The app's DbContext type.</typeparam>
+public sealed class WriteContext<TDbContext> : WriteContext where TDbContext : DbContext
+{
+    internal WriteContext(TransactionWork work, TDbContext db)
+        : base(work)
+    {
+        Db = db;
+    }
+
+    /// <summary>The DbContext, on the rebuild's connection. Deedbox calls SaveChanges.</summary>
     public TDbContext Db { get; }
 }

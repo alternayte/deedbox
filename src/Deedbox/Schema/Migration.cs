@@ -48,12 +48,12 @@ internal static partial class SchemaName
         if (!Pattern().IsMatch(schema))
         {
             throw new DeedboxException(Errors.InvalidSchemaName,
-                $"Schema name '{schema}' is not valid. Use lower-case letters, digits and underscores, starting with a letter or underscore, at most 63 characters.");
+                $"Schema name '{schema}' is not valid. Use lower-case letters, digits and underscores, starting with a letter or underscore, at most 50 characters.");
         }
 
         return schema;
     }
 
-    [GeneratedRegex("^[a-z_][a-z0-9_]{0,62}$")]
+    [GeneratedRegex("^[a-z_][a-z0-9_]{0,49}$")]
     private static partial Regex Pattern();
 }

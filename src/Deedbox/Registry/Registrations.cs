@@ -101,6 +101,10 @@ internal sealed partial class EventRegistry
 
     public bool IsRegistered(Type eventType) => _byEvent.ContainsKey(eventType);
 
+    /// <summary>Every stored name, current or alias, that reads as one of <paramref name="types"/>.</summary>
+    public List<string> StoredNamesOf(IEnumerable<Type> types) =>
+        types.Select(ForEvent).SelectMany(e => e.Aliases.Prepend(e.Name)).Distinct(StringComparer.Ordinal).ToList();
+
     public EventRegistration ForEvent(Type eventType) =>
         _byEvent.TryGetValue(eventType, out var e)
             ? e

@@ -10,7 +10,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 4. Torture suite v1: concurrent appends with rollbacks and long transactions; assert gapless commit-ordered positions and per-stream order. HUMAN GATE 1: API shape review and torture suite v1 results.
 - [x] 5. Registry and evolution: naming convention, aliases, event_types table, startup name check, JSON upcasters and typed upcasters, lockfile in Deedbox.Testing, Given/When/Then helpers.
 - [x] 6. Inline projections (EF and ADO flavours), OnAppending hook, metadata context, causation/correlation, TraceParent capture, tenancy scoping.
-- [ ] 7. Async runner: checkpoints, projections, subscriptions, type filtering, LISTEN/NOTIFY and backoff, multi-instance locking, poison handling, in-place rebuilds, health checks, jobs table.
+- [x] 7. Async runner: checkpoints, projections, subscriptions, type filtering, LISTEN/NOTIFY and backoff, multi-instance locking, poison handling, in-place rebuilds, health checks, jobs table.
 - [ ] 8. Torture suite v2: projector kills, competing instances, sparse filters, idle query budget; every Anthology regression test.
 - [ ] 9. Personal data: [DataSubject] / [PersonalData], contract-customization encryption, key hierarchy, Database / Environment / Azure Key Vault key modes, subject_streams, erasure job, SubjectErased, stream deletion, startup safety rules, key provider compliance suite. HUMAN GATE 2: security review of crypto, key handling and erasure.
 - [ ] 10. Operations: remaining CLI commands, IEventStoreAdmin, metrics, traces, DBX error codes with docs URLs.
@@ -69,6 +69,18 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 6: Inline handlers see GlobalPosition as null, because the position is assigned after them.
 - Step 6: Tenant IDs are at most 100 characters with no leading or trailing white space (DBX022).
 - Step 6: Known limit: a caller transaction that appends to two streams holds the counter from its first append while it waits for the second stream's lock. A concurrent append that holds that stream lock waits for the counter. The database breaks this deadlock by aborting one transaction; nothing is lost or reordered. Gate 2 decides whether to document it or change the design.
+- Step 7: The runner has one loop per async projection, subscription and inline projection, plus a jobs loop. A loop runs a batch only while it holds its checkpoint row (Postgres FOR NO KEY UPDATE SKIP LOCKED; SQL Server UPDLOCK + READPAST), so instances share work with no leases or setup.
+- Step 7: A batch scans every event after the checkpoint and reads payloads only for the types the consumer handles (a SQL CASE). The checkpoint moves to the last scanned position. The runner never assumes positions are contiguous, because stream deletion (step 9) leaves gaps.
+- Step 7: An append that touches an inline projection's types reads its status with a shared lock (Postgres FOR KEY SHARE; SQL Server HOLDLOCK): one extra statement. It applies only projections that are running. Rebuild start and cut-over take the row exclusively, and cut-over also locks the counter, so no event is applied both inline and by the catch-up.
+- Step 7: Inline rebuild cut-over happens when the rest fits in one batch. If appends outpace the catch-up for 20 polls, it cuts over anyway; appends then wait while it applies the rest. An async rebuild is running again when a batch reads fewer events than the batch size.
+- Step 7: Poison handling: retries start at RetryDelay and double (cap 5 minutes). The loop reads one event at a time from the failed batch to find the failing event. After HandlerRetries it stalls with a JSON error (reason poison, event, stream, version, exception). A restart retries a poison stall once. A subscription commits its progress up to the failing event.
+- Step 7: A projection whose run mode changed stalls with reason mode_changed. It is never retried automatically; a rebuild clears it.
+- Step 7: Jobs (rebuild, skip) each run in one transaction with their row locked. A failure is recorded on the row; rows stay as the audit trail. Subscriptions cannot be rebuilt. Enqueueing is internal until step 10 adds IEventStoreAdmin and the CLI commands.
+- Step 7: The core now references Microsoft.Extensions.Diagnostics.HealthChecks, not only abstractions, because IHealthChecksBuilder lives there. The API is `AddDeedboxHealthChecks()` on IHealthChecksBuilder.
+- Step 7: Postgres wakes runners with migration 0002: a statement-level trigger calls pg_notify('dbx_<schema>'). Schema names are now at most 50 characters, because a channel name is at most 63.
+- Step 7: Runner defaults: batch 500; polls from 50 ms up to 5 s; 5 retries from 1 s; health stall after 10 minutes. `Runner(o => o.Enabled = false)` turns the runner off in a process.
+- Step 7: The SDD's IBatchProjection is an abstract `BatchProjection` class with `Handles<T>()`. An interface would need its own way to declare event types.
+- Step 7: Each handler call starts an Activity "deedbox.handle <consumer>" whose parent is the event's stored TraceParent. Step 10 adds the other spans and metrics.
 
 ## Gate reports
 

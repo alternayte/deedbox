@@ -2,6 +2,7 @@
 ~override Deedbox.ExpectedVersion.Equals(object obj) -> bool
 ~override Deedbox.LoadResult<TState>.Equals(object obj) -> bool
 ~override Deedbox.LoadResult<TState>.ToString() -> string
+abstract Deedbox.BatchProjection.ApplyAsync(System.Collections.Generic.IReadOnlyList<Deedbox.EventEnvelope!>! events, Deedbox.WriteContext! context) -> System.Threading.Tasks.Task!
 Deedbox.AppendingContext
 Deedbox.AppendingContext.Connection.get -> System.Data.Common.DbConnection!
 Deedbox.AppendingContext.Events.get -> System.Collections.Generic.IReadOnlyList<Deedbox.PendingEvent!>!
@@ -19,6 +20,9 @@ Deedbox.AppendResult.Events.get -> System.Collections.Generic.IReadOnlyList<Deed
 Deedbox.AppendResult.Events.init -> void
 Deedbox.AppendResult.Version.get -> long
 Deedbox.AppendResult.Version.init -> void
+Deedbox.BatchProjection
+Deedbox.BatchProjection.BatchProjection() -> void
+Deedbox.BatchProjection.Handles<TEvent>() -> void
 Deedbox.ConcurrencyException
 Deedbox.ConcurrencyException.Actual.get -> long
 Deedbox.ConcurrencyException.Expected.get -> Deedbox.ExpectedVersion
@@ -29,9 +33,11 @@ Deedbox.DeedboxBuilder.ConfigureJson(System.Action<System.Text.Json.JsonSerializ
 Deedbox.DeedboxBuilder.ExecuteRetries(int retries) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.OnAppending<THook>() -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Projection<TProjection>(string! name, Deedbox.Run run) -> Deedbox.DeedboxBuilder!
+Deedbox.DeedboxBuilder.Runner(System.Action<Deedbox.RunnerOptions!>! configure) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Schema(string! name) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Stream<TState>(string! name, System.Action<Deedbox.StreamBuilder<TState>!>! configure) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Stream<TState>(System.Action<Deedbox.StreamBuilder<TState>!>! configure) -> Deedbox.DeedboxBuilder!
+Deedbox.DeedboxBuilder.Subscription<TSubscription>(string! name) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.UseJsonContext(System.Text.Json.Serialization.JsonSerializerContext! context) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxContext
 Deedbox.DeedboxContext.CausedBy(Deedbox.EventEnvelope! envelope) -> void
@@ -136,6 +142,22 @@ Deedbox.ProjectionContext.Version.get -> long
 Deedbox.Run
 Deedbox.Run.Async = 1 -> Deedbox.Run
 Deedbox.Run.Inline = 0 -> Deedbox.Run
+Deedbox.RunnerOptions
+Deedbox.RunnerOptions.BatchSize.get -> int
+Deedbox.RunnerOptions.BatchSize.set -> void
+Deedbox.RunnerOptions.Enabled.get -> bool
+Deedbox.RunnerOptions.Enabled.set -> void
+Deedbox.RunnerOptions.HandlerRetries.get -> int
+Deedbox.RunnerOptions.HandlerRetries.set -> void
+Deedbox.RunnerOptions.MaxPollDelay.get -> System.TimeSpan
+Deedbox.RunnerOptions.MaxPollDelay.set -> void
+Deedbox.RunnerOptions.MinPollDelay.get -> System.TimeSpan
+Deedbox.RunnerOptions.MinPollDelay.set -> void
+Deedbox.RunnerOptions.RetryDelay.get -> System.TimeSpan
+Deedbox.RunnerOptions.RetryDelay.set -> void
+Deedbox.RunnerOptions.RunnerOptions() -> void
+Deedbox.RunnerOptions.StallAfter.get -> System.TimeSpan
+Deedbox.RunnerOptions.StallAfter.set -> void
 Deedbox.SnapshotPolicy
 Deedbox.StreamBuilder<TState>
 Deedbox.StreamBuilder<TState>.Event<TEvent>() -> Deedbox.StreamBuilder<TState>!
@@ -152,6 +174,19 @@ Deedbox.StreamBuilder<TState>.EventsNestedIn(System.Type! container) -> Deedbox.
 Deedbox.StreamBuilder<TState>.Snapshots(Deedbox.SnapshotPolicy! policy) -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.StateVersion(int version) -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamId
+Deedbox.Subscription
+Deedbox.Subscription.On<TEvent>(System.Func<TEvent, Deedbox.SubscriptionContext!, System.Threading.Tasks.Task!>! handler) -> void
+Deedbox.Subscription.Subscription() -> void
+Deedbox.SubscriptionContext
+Deedbox.SubscriptionContext.CancellationToken.get -> System.Threading.CancellationToken
+Deedbox.SubscriptionContext.Envelope.get -> Deedbox.EventEnvelope!
+Deedbox.SubscriptionContext.Services.get -> System.IServiceProvider!
+Deedbox.WriteContext
+Deedbox.WriteContext.CancellationToken.get -> System.Threading.CancellationToken
+Deedbox.WriteContext.Connection.get -> System.Data.Common.DbConnection!
+Deedbox.WriteContext.Services.get -> System.IServiceProvider!
+Deedbox.WriteContext.Transaction.get -> System.Data.Common.DbTransaction!
+Microsoft.Extensions.DependencyInjection.DeedboxHealthCheckExtensions
 Microsoft.Extensions.DependencyInjection.DeedboxServiceCollectionExtensions
 override Deedbox.AppendResult.Equals(object? obj) -> bool
 override Deedbox.AppendResult.GetHashCode() -> int
@@ -184,4 +219,7 @@ static Deedbox.SnapshotPolicy.EveryAppend.get -> Deedbox.SnapshotPolicy!
 static Deedbox.SnapshotPolicy.Never.get -> Deedbox.SnapshotPolicy!
 static Deedbox.StreamId.Deterministic(System.Guid namespaceId, params string![]! parts) -> string!
 static Deedbox.StreamId.From(System.Guid id) -> string!
+static Microsoft.Extensions.DependencyInjection.DeedboxHealthCheckExtensions.AddDeedboxHealthChecks(this Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder! builder, string! name = "deedbox") -> Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder!
 static Microsoft.Extensions.DependencyInjection.DeedboxServiceCollectionExtensions.AddDeedbox(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Deedbox.DeedboxBuilder!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+virtual Deedbox.BatchProjection.ResetAsync(Deedbox.WriteContext! context) -> System.Threading.Tasks.Task!
+virtual Deedbox.Projection.ResetAsync(Deedbox.WriteContext! context) -> System.Threading.Tasks.Task!

@@ -26,6 +26,8 @@ public static class DeedboxServiceCollectionExtensions
         services.AddScoped<IEventStore>(sp => new EventStore(
             sp.GetRequiredService<DeedboxRuntime>(), OwnedTransactions.Instance, sp, sp.GetRequiredService<DeedboxContext>(), metadata: null));
         services.AddHostedService<DeedboxStartup>();
+        services.AddSingleton<AsyncRunner>();
+        services.AddHostedService(sp => sp.GetRequiredService<AsyncRunner>());
         return services;
     }
 }

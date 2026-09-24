@@ -173,6 +173,153 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         return rows;
     }
 
+    public override async Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<(string Name, string Mode)> checkpoints, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.EnsureCheckpoints);
+        AddJson(command, "checkpoints", checkpoints.Select(c => new[] { c.Name, c.Mode }).ToArray());
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.ReadCheckpoints);
+        return await ReadCheckpointRows(command, ct);
+    }
+
+    public override async Task<CheckpointRow?> LockCheckpoint(DbConnection connection, DbTransaction transaction, string name, CheckpointLock mode, CancellationToken ct)
+    {
+        // Appends read inline statuses with shared locks. An update lock (batch) is compatible with them and READPAST
+        // skips a row another runner holds; an exclusive lock waits for open appends and holds back new ones.
+        await using var command = Command(connection, transaction, mode == CheckpointLock.Batch ? Sql.LockCheckpointBatch : Sql.LockCheckpointExclusive);
+        AddText(command, "name", name, 200);
+        return (await ReadCheckpointRows(command, ct)).FirstOrDefault();
+    }
+
+    public override async Task UpdateCheckpoint(DbConnection connection, DbTransaction transaction, CheckpointRow row, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.UpdateCheckpoint);
+        AddText(command, "name", row.Name, 200);
+        Add(command, "position", row.Position);
+        AddText(command, "mode", row.Mode, 20);
+        AddText(command, "status", row.Status, 20);
+        ((SqlCommand)command).Parameters.Add(new SqlParameter("error", SqlDbType.NVarChar, -1) { Value = (object?)row.Error ?? DBNull.Value });
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<Dictionary<string, string>> ReadInlineStatuses(DbConnection connection, DbTransaction transaction, IReadOnlyList<string> names, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadInlineStatuses);
+        AddJson(command, "names", names.Select(n => new[] { n }).ToArray());
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var statuses = new Dictionary<string, string>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(ct))
+            statuses[reader.GetString(0)] = reader.GetString(1);
+        return statuses;
+    }
+
+    public override async Task<List<StoredEvent>> ReadEventsAfter(
+        DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, payloadTypes is null ? Sql.ReadEventsAfter : Sql.ReadEventsAfterFiltered);
+        Add(command, "after", after);
+        Add(command, "limit", limit);
+        if (payloadTypes is not null)
+            AddJson(command, "types", payloadTypes.Select(t => new[] { t }).ToArray());
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var events = new List<StoredEvent>();
+        while (await reader.ReadAsync(ct))
+        {
+            events.Add(new StoredEvent(
+                reader.GetInt64(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3), reader.GetInt64(4), reader.GetString(5),
+                reader.GetString(6), reader.GetInt32(7), reader.IsDBNull(8) ? null : reader.GetString(8), reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.GetFieldValue<DateTimeOffset>(10)));
+        }
+
+        return events;
+    }
+
+    public override async Task<long> ReadHead(DbConnection connection, DbTransaction? transaction, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadHead);
+        return (long)(await command.ExecuteScalarAsync(ct))!;
+    }
+
+    public override async Task<long> LockCounter(DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.LockCounter);
+        return (long)(await command.ExecuteScalarAsync(ct))!;
+    }
+
+    public override async Task InsertJob(DbConnection connection, DbTransaction? transaction, JobRow job, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.InsertJob);
+        AddJob(command, job);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<JobRow?> ClaimJob(DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ClaimJob);
+        return (await ReadJobRows(command, ct)).FirstOrDefault();
+    }
+
+    public override async Task UpdateJob(DbConnection connection, DbTransaction transaction, JobRow job, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.UpdateJob);
+        AddJob(command, job);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<JobRow?> ReadJob(DbConnection connection, Guid id, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.ReadJob);
+        Add(command, "id", id);
+        return (await ReadJobRows(command, ct)).FirstOrDefault();
+    }
+
+    public override Task Listen(Action wake, CancellationToken ct) => Task.CompletedTask;
+
+    private static void AddJob(DbCommand command, JobRow job)
+    {
+        Add(command, "id", job.Id);
+        AddText(command, "kind", job.Kind, 100);
+        ((SqlCommand)command).Parameters.Add(new SqlParameter("args", SqlDbType.NVarChar, -1) { Value = job.Args });
+        AddText(command, "status", job.Status, 20);
+        ((SqlCommand)command).Parameters.Add(new SqlParameter("progress", SqlDbType.NVarChar, -1) { Value = (object?)job.Progress ?? DBNull.Value });
+        ((SqlCommand)command).Parameters.Add(new SqlParameter("started_at", SqlDbType.DateTimeOffset) { Value = (object?)job.StartedAt ?? DBNull.Value });
+        ((SqlCommand)command).Parameters.Add(new SqlParameter("finished_at", SqlDbType.DateTimeOffset) { Value = (object?)job.FinishedAt ?? DBNull.Value });
+    }
+
+    private static void AddJson(DbCommand command, string name, string[][] rows) =>
+        ((SqlCommand)command).Parameters.Add(new SqlParameter(name, SqlDbType.NVarChar, -1) { Value = JsonSerializer.Serialize(rows, SqlServerJson.Default.StringArrayArray) });
+
+    private static async Task<List<CheckpointRow>> ReadCheckpointRows(DbCommand command, CancellationToken ct)
+    {
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<CheckpointRow>();
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(new CheckpointRow(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5)));
+        }
+
+        return rows;
+    }
+
+    private static async Task<List<JobRow>> ReadJobRows(DbCommand command, CancellationToken ct)
+    {
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<JobRow>();
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(new JobRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5),
+                reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6), reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7)));
+        }
+
+        return rows;
+    }
+
     /// <summary>The events as one JSON array for OPENJSON, so an append of any size is one parameter.</summary>
     private static string EventsJson(IReadOnlyList<NewEvent> events)
     {
@@ -283,6 +430,74 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
 
         public readonly string ReadEventTypes =
             $"SELECT stream_type, event_type, event_version FROM [{s}].[event_types] ORDER BY stream_type, event_type, event_version";
+
+        private const string CheckpointColumns = "name, position, mode, status, error, updated_at";
+
+        private const string JobColumns = "id, kind, args, status, progress, created_at, started_at, finished_at";
+
+        private const string EventColumns = "global_position, event_id, tenant_id, stream_id, version, stream_type, event_type, event_version";
+
+        private const string Now = "TODATETIMEOFFSET(SYSUTCDATETIME(), 0)";
+
+        public readonly string EnsureCheckpoints = $"""
+            INSERT INTO [{s}].[checkpoints] (name, mode, status)
+            SELECT c.n, c.m, N'running'
+            FROM OPENJSON(@checkpoints) WITH (n nvarchar(200) '$[0]', m nvarchar(20) '$[1]') AS c
+            WHERE NOT EXISTS (SELECT 1 FROM [{s}].[checkpoints] WITH (UPDLOCK, HOLDLOCK) WHERE name = c.n)
+            """;
+
+        public readonly string ReadCheckpoints = $"SELECT {CheckpointColumns} FROM [{s}].[checkpoints] ORDER BY name";
+
+        public readonly string LockCheckpointBatch =
+            $"SELECT {CheckpointColumns} FROM [{s}].[checkpoints] WITH (UPDLOCK, READPAST, ROWLOCK) WHERE name = @name";
+
+        public readonly string LockCheckpointExclusive =
+            $"SELECT {CheckpointColumns} FROM [{s}].[checkpoints] WITH (XLOCK, ROWLOCK) WHERE name = @name";
+
+        public readonly string UpdateCheckpoint = $"""
+            UPDATE [{s}].[checkpoints] SET position = @position, mode = @mode, status = @status, error = @error, updated_at = {Now}
+            WHERE name = @name
+            """;
+
+        public readonly string ReadInlineStatuses = $"""
+            SELECT name, status FROM [{s}].[checkpoints] WITH (HOLDLOCK, ROWLOCK)
+            WHERE name IN (SELECT n FROM OPENJSON(@names) WITH (n nvarchar(200) '$[0]'))
+            """;
+
+        public readonly string ReadEventsAfter = $"""
+            SELECT TOP (@limit) {EventColumns}, payload, metadata, occurred_at
+            FROM [{s}].[events] WHERE global_position > @after ORDER BY global_position
+            """;
+
+        public readonly string ReadEventsAfterFiltered = $"""
+            SELECT TOP (@limit) {EventColumns},
+                CASE WHEN t.n IS NOT NULL THEN payload END,
+                CASE WHEN t.n IS NOT NULL THEN metadata END,
+                occurred_at
+            FROM [{s}].[events] e
+            LEFT JOIN (SELECT DISTINCT n FROM OPENJSON(@types) WITH (n nvarchar(200) '$[0]')) t ON t.n = e.event_type COLLATE Latin1_General_100_BIN2
+            WHERE global_position > @after ORDER BY global_position
+            """;
+
+        public readonly string ReadHead = $"SELECT value FROM [{s}].[position]";
+
+        public readonly string LockCounter = $"SELECT value FROM [{s}].[position] WITH (UPDLOCK, HOLDLOCK)";
+
+        public readonly string InsertJob = $"""
+            INSERT INTO [{s}].[jobs] (id, kind, args, status, progress, started_at, finished_at)
+            VALUES (@id, @kind, @args, @status, @progress, @started_at, @finished_at)
+            """;
+
+        public readonly string ClaimJob =
+            $"SELECT TOP (1) {JobColumns} FROM [{s}].[jobs] WITH (UPDLOCK, READPAST, ROWLOCK) WHERE status = N'queued' ORDER BY created_at, id";
+
+        public readonly string UpdateJob = $"""
+            UPDATE [{s}].[jobs] SET status = @status, args = @args, progress = @progress, started_at = @started_at, finished_at = @finished_at,
+                updated_at = {Now}, kind = @kind
+            WHERE id = @id
+            """;
+
+        public readonly string ReadJob = $"SELECT {JobColumns} FROM [{s}].[jobs] WHERE id = @id";
 
         public readonly string SaveSnapshot = $"""
             UPDATE [{s}].[streams] SET state = @state, state_version = @state_version, state_at = @state_at

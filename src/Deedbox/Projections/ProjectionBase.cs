@@ -16,6 +16,16 @@ public abstract class ProjectionBase
 
     internal IReadOnlyCollection<Type> HandledTypes => _handlers.Keys;
 
+    internal virtual bool IsBatch => false;
+
+    /// <summary>Removes everything the projection wrote, in the rebuild's transaction.</summary>
+    internal abstract Task Reset(TransactionWork work);
+
+    internal virtual Task ApplyBatch(IReadOnlyList<EventEnvelope> events, TransactionWork work) => throw new NotSupportedException();
+
+    internal DeedboxException ResetMissing() => new(Errors.ResetNotImplemented,
+        $"{GetType().Name} does not override ResetAsync, so it cannot be rebuilt. Override ResetAsync to delete what the projection wrote.");
+
     internal bool Handles(Type eventType) => _handlers.ContainsKey(eventType);
 
     internal Task Handle(object @event, ProjectionInvocation invocation) =>
@@ -41,6 +51,15 @@ public abstract class Projection : ProjectionBase
     {
     }
 
+    /// <summary>
+    /// Removes everything the projection wrote. A rebuild calls it, then replays every event. The default throws,
+    /// so a projection without it cannot be rebuilt.
+    /// </summary>
+    /// <param name="context">The rebuild's connection, transaction and scope.</param>
+    protected virtual Task ResetAsync(WriteContext context) => throw ResetMissing();
+
+    internal override Task Reset(TransactionWork work) => ResetAsync(new WriteContext(work));
+
     /// <summary>Handles one event type. Events of types the projection does not handle are skipped.</summary>
     /// <param name="handler">Writes the event's effect through the context's connection and transaction.</param>
     /// <typeparam name="TEvent">The event type.</typeparam>
@@ -49,6 +68,29 @@ public abstract class Projection : ProjectionBase
         ArgumentNullException.ThrowIfNull(handler);
         AddHandler(typeof(TEvent), (e, invocation) => handler((TEvent)e, new ProjectionContext(invocation)));
     }
+}
+
+/// <summary>Where a rebuild's reset or a batch projection writes: a connection, a transaction and a scope.</summary>
+public class WriteContext
+{
+    internal WriteContext(TransactionWork work)
+    {
+        Work = work;
+    }
+
+    internal TransactionWork Work { get; }
+
+    /// <summary>The connection to write on.</summary>
+    public DbConnection Connection => Work.Connection;
+
+    /// <summary>The transaction to write in.</summary>
+    public DbTransaction Transaction => Work.Transaction;
+
+    /// <summary>The services of the scope the work runs in.</summary>
+    public IServiceProvider Services => Work.Services;
+
+    /// <summary>Cancels the work.</summary>
+    public CancellationToken CancellationToken => Work.CancellationToken;
 }
 
 /// <summary>What a projection handler knows about the event it handles, and where it writes.</summary>

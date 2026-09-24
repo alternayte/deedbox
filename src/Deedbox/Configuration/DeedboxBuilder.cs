@@ -13,6 +13,8 @@ public sealed class DeedboxBuilder
     private readonly List<StreamRegistration> _streams = [];
     private readonly List<IJsonTypeInfoResolver> _jsonContexts = [];
     private readonly List<ProjectionRegistration> _projections = [];
+    private readonly List<SubscriptionRegistration> _subscriptions = [];
+    private readonly RunnerOptions _runner = new();
     private readonly List<Action<IServiceCollection>> _services = [];
     private Action<JsonSerializerOptions>? _configureJson;
     private Func<string, DeedboxProvider>? _provider;
@@ -119,6 +121,30 @@ public sealed class DeedboxBuilder
     }
 
     /// <summary>
+    /// Registers a subscription under a stored name, which keys its checkpoint. It runs in the background runner
+    /// after events commit, and delivers each event at least once.
+    /// </summary>
+    /// <param name="name">The stored subscription name, such as <c>receipt_email</c>.</param>
+    /// <typeparam name="TSubscription">The subscription.</typeparam>
+    public DeedboxBuilder Subscription<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TSubscription>(string name)
+        where TSubscription : Subscription
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        _subscriptions.Add(new SubscriptionRegistration(name, typeof(TSubscription), services => ActivatorUtilities.CreateInstance<TSubscription>(services)));
+        return this;
+    }
+
+    /// <summary>Changes the background runner's settings.</summary>
+    /// <param name="configure">Changes the settings.</param>
+    public DeedboxBuilder Runner(Action<RunnerOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(_runner);
+        _runner.Validate();
+        return this;
+    }
+
+    /// <summary>
     /// Runs <typeparamref name="THook"/> inside every append's transaction, such as to write outbox rows.
     /// It is resolved from the append's scope.
     /// </summary>
@@ -147,11 +173,20 @@ public sealed class DeedboxBuilder
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
         var types = new HashSet<Type>();
+        foreach (var subscription in _subscriptions)
+        {
+            EventRegistry.ValidateName(subscription.Name, "Subscription");
+            if (!names.Add(subscription.Name))
+                throw new DeedboxException(Errors.DuplicateProjection, $"Subscription name '{subscription.Name}' is registered twice. Each subscription needs its own name.");
+            if (!types.Add(subscription.Type))
+                throw new DeedboxException(Errors.DuplicateProjection, $"{subscription.Type.Name} is registered twice. Register a subscription once, under one name.");
+        }
+
         foreach (var projection in _projections)
         {
             EventRegistry.ValidateName(projection.Name, "Projection");
             if (!names.Add(projection.Name))
-                throw new DeedboxException(Errors.DuplicateProjection, $"Projection name '{projection.Name}' is registered twice. Each projection needs its own name.");
+                throw new DeedboxException(Errors.DuplicateProjection, $"Name '{projection.Name}' is registered twice. Each projection and subscription needs its own name.");
             if (!types.Add(projection.Type))
             {
                 throw new DeedboxException(Errors.DuplicateProjection,
@@ -174,12 +209,18 @@ public sealed class DeedboxBuilder
 
         var (registry, json) = BuildRegistry();
         ValidateProjections();
-        var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries, _projections);
+        var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries, _projections, _subscriptions, _runner);
         return new DeedboxRuntime(options, _provider(_schema), registry, json);
     }
 }
 
-internal sealed record DeedboxOptions(string Schema, bool ApplySchemaOnStartup, int ExecuteRetries, IReadOnlyList<ProjectionRegistration> Projections);
+internal sealed record DeedboxOptions(
+    string Schema,
+    bool ApplySchemaOnStartup,
+    int ExecuteRetries,
+    IReadOnlyList<ProjectionRegistration> Projections,
+    IReadOnlyList<SubscriptionRegistration> Subscriptions,
+    RunnerOptions Runner);
 
 /// <summary>Everything a store needs that lives for the life of the app.</summary>
 internal sealed class DeedboxRuntime(DeedboxOptions options, DeedboxProvider provider, EventRegistry registry, DeedboxJson json) : IAsyncDisposable

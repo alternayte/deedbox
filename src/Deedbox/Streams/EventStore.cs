@@ -200,9 +200,16 @@ internal sealed class EventStore(
         TransactionWork work, string tenantId, StreamRegistration stream, string streamId,
         List<object> events, List<NewEvent> rows, EventMetadata eventMetadata, DateTimeOffset occurredAt)
     {
-        var projections = services.GetRequiredService<ProjectionSet>().Inline;
+        var projections = services.GetRequiredService<ProjectionSet>().Inline
+            .Where(p => events.Any(e => p.Instance.Handles(e.GetType())))
+            .ToList();
         if (projections.Count == 0)
             return;
+
+        // A projection that is rebuilding or stalled catches up in the runner instead. The shared lock on its status
+        // keeps a rebuild from starting or finishing while this append is open.
+        var statuses = await Provider.ReadInlineStatuses(work.Connection, work.Transaction, projections.Select(p => p.Name).ToList(), work.CancellationToken);
+        projections.RemoveAll(p => statuses.GetValueOrDefault(p.Name, CheckpointStatus.Running) != CheckpointStatus.Running);
 
         foreach (var projection in projections)
         {
@@ -290,7 +297,7 @@ internal sealed class EventStore(
 
         await foreach (var stored in Provider.ReadStreamEvents(connection, transaction, tenantId, streamId, after, row.Version, ct))
         {
-            state = stream.Evolve(state, runtime.Registry.Decode(stored.EventType, stored.EventVersion, stored.Payload));
+            state = stream.Evolve(state, runtime.Registry.Decode(stored.EventType, stored.EventVersion, stored.Payload!));
         }
 
         return state;
