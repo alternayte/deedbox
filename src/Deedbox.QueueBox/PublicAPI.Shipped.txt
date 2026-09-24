@@ -1,6 +1,7 @@
 #nullable enable
 Deedbox.DeedboxQueueBoxExtensions
 Deedbox.QueueBoxBuilder
+Deedbox.QueueBoxBuilder.Publish<TEvent>(System.Func<TEvent, Deedbox.PendingEvent!, Deedbox.QueueBoxMessage?>! message) -> Deedbox.QueueBoxBuilder!
 Deedbox.QueueBoxBuilder.Publish<TEvent>(string! topic) -> Deedbox.QueueBoxBuilder!
 Deedbox.QueueBoxBuilder.Publish<TEvent>(string! topic, System.Func<TEvent, Deedbox.PendingEvent!, object!>! payload) -> Deedbox.QueueBoxBuilder!
 Deedbox.QueueBoxBuilder.UseColumns(System.Action<Deedbox.QueueBoxColumns!>! configure) -> Deedbox.QueueBoxBuilder!
@@ -19,4 +20,10 @@ Deedbox.QueueBoxColumns.Payload.set -> void
 Deedbox.QueueBoxColumns.QueueBoxColumns() -> void
 Deedbox.QueueBoxColumns.Topic.get -> string!
 Deedbox.QueueBoxColumns.Topic.set -> void
+Deedbox.QueueBoxMessage
+Deedbox.QueueBoxMessage.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>?
+Deedbox.QueueBoxMessage.Headers.init -> void
+Deedbox.QueueBoxMessage.Payload.get -> object!
+Deedbox.QueueBoxMessage.QueueBoxMessage(string! topic, object! payload) -> void
+Deedbox.QueueBoxMessage.Topic.get -> string!
 static Deedbox.DeedboxQueueBoxExtensions.UseQueueBox(this Deedbox.DeedboxBuilder! builder, System.Action<Deedbox.QueueBoxBuilder!>! configure) -> Deedbox.DeedboxBuilder!
