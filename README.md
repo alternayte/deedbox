@@ -82,7 +82,7 @@ Deedbox is not a document database, a mediator, a command bus, a message broker 
 Do not use Deedbox when:
 
 - you want a document database too (use Marten or Polecat),
-- you need tens of thousands of appends per second to one store; appends take turns on one counter ([benchmarks](bench/results.md)),
+- you need tens of thousands of appends per second to one store; appends take turns on one counter ([benchmarks](https://deedbox-docs.pages.dev/operations/benchmarks/)),
 - you want KurrentDB (EventStoreDB).
 
 ## Install

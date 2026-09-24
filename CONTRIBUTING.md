@@ -20,3 +20,14 @@ To use an existing server, set `DEEDBOX_TEST_POSTGRES` or `DEEDBOX_TEST_SQLSERVE
 - Every public type and member has XML docs and a test.
 - A change to the public API updates `PublicAPI.Unshipped.txt`.
 - A change to storage ships a new numbered migration. Never edit a released migration.
+
+## Release
+
+1. Move each `PublicAPI.Unshipped.txt` into `PublicAPI.Shipped.txt`.
+2. Set the release date in `CHANGELOG.md`.
+3. Push the tag `v<VersionPrefix>`, such as `v0.1.0`. The release workflow runs `just check`, packs without the prerelease suffix, pushes the packages to nuget.org and creates the GitHub release.
+4. Set `PackageValidationBaselineVersion` to the released version, so package validation compares the next build against it. Raise `VersionPrefix`.
+
+## Conduct and security
+
+Read the [code of conduct](CODE_OF_CONDUCT.md). Report vulnerabilities as the [security policy](SECURITY.md) says, not in public issues.

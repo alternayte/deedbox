@@ -1,1 +1,8 @@
 #nullable enable
+Deedbox.DeedboxPostgresExtensions
+Deedbox.PostgresSchema
+static Deedbox.DeedboxPostgresExtensions.UsePostgres(this Deedbox.DeedboxBuilder! builder, Npgsql.NpgsqlDataSource! dataSource) -> Deedbox.DeedboxBuilder!
+static Deedbox.DeedboxPostgresExtensions.UsePostgres(this Deedbox.DeedboxBuilder! builder, System.Func<System.IServiceProvider!, string!>! connectionString) -> Deedbox.DeedboxBuilder!
+static Deedbox.DeedboxPostgresExtensions.UsePostgres(this Deedbox.DeedboxBuilder! builder, string! connectionString) -> Deedbox.DeedboxBuilder!
+static Deedbox.PostgresSchema.LatestVersion.get -> int
+static Deedbox.PostgresSchema.Script(int fromVersion = 0, string! schema = "deedbox") -> string!

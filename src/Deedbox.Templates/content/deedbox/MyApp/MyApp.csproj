@@ -7,9 +7,9 @@
 
   <ItemGroup>
 <!--#if (postgres) -->
-    <PackageReference Include="Deedbox.Postgres" Version="0.1.0-alpha" />
+    <PackageReference Include="Deedbox.Postgres" Version="DEEDBOX_VERSION" />
 <!--#else -->
-    <PackageReference Include="Deedbox.SqlServer" Version="0.1.0-alpha" />
+    <PackageReference Include="Deedbox.SqlServer" Version="DEEDBOX_VERSION" />
 <!--#endif -->
   </ItemGroup>
 </Project>

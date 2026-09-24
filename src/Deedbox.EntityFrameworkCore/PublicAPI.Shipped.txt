@@ -1,1 +1,11 @@
 #nullable enable
+Deedbox.DeedboxEntityFrameworkCoreExtensions
+Deedbox.Projection<TDbContext>
+Deedbox.Projection<TDbContext>.On<TEvent>(System.Func<TEvent, Deedbox.ProjectionContext<TDbContext!>!, System.Threading.Tasks.Task!>! handler) -> void
+Deedbox.Projection<TDbContext>.Projection() -> void
+Deedbox.ProjectionContext<TDbContext>
+Deedbox.ProjectionContext<TDbContext>.Db.get -> TDbContext!
+Deedbox.WriteContext<TDbContext>
+Deedbox.WriteContext<TDbContext>.Db.get -> TDbContext!
+static Deedbox.DeedboxEntityFrameworkCoreExtensions.UseDbContext(this Deedbox.IEventStore! store, Microsoft.EntityFrameworkCore.DbContext! context, params Microsoft.EntityFrameworkCore.DbContext![]! others) -> Deedbox.IEventStore!
+virtual Deedbox.Projection<TDbContext>.ResetAsync(Deedbox.WriteContext<TDbContext!>! context) -> System.Threading.Tasks.Task!

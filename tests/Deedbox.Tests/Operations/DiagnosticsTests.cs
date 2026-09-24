@@ -7,8 +7,17 @@ using Deedbox.Tests.Runner;
 
 namespace Deedbox.Tests.Operations;
 
+/// <summary>
+/// Listeners are process-wide. A listener on Deedbox's spans makes the append span current, so tests running at the
+/// same time would capture its trace context; these tests run alone.
+/// </summary>
+[CollectionDefinition(nameof(ProcessWideListeners), DisableParallelization = true)]
+public sealed class ProcessWideListeners;
+
+[Collection(nameof(ProcessWideListeners))]
 public sealed class PostgresDiagnosticsTests(Databases databases) : DiagnosticsTests(databases, Db.Postgres);
 
+[Collection(nameof(ProcessWideListeners))]
 public sealed class SqlServerDiagnosticsTests(Databases databases) : DiagnosticsTests(databases, Db.SqlServer);
 
 public abstract class DiagnosticsTests(Databases databases, Db db) : RunnerTest(databases, db)

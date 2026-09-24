@@ -1,0 +1,62 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          global-json-file: global.json
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Check the tag, the public API and the changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          prefix="$(sed -n 's:.*<VersionPrefix>\(.*\)</VersionPrefix>.*:\1:p' src/Directory.Build.props)"
+          [ "$version" = "$prefix" ] || { echo "Tag $TAG does not match VersionPrefix $prefix."; exit 1; }
+          for f in src/*/PublicAPI.Unshipped.txt; do
+            if grep -qv '^#nullable enable$' "$f"; then echo "$f still lists unshipped API."; exit 1; fi
+          done
+          grep -q "^## \[$version\] - [0-9]" CHANGELOG.md || { echo "CHANGELOG.md has no dated entry for $version."; exit 1; }
+
+      - name: Pull database images
+        run: |
+          docker pull postgres:17-alpine &
+          docker pull mcr.microsoft.com/mssql/server:2022-latest &
+          wait
+
+      - name: just check
+        run: just check
+
+      - name: Pack the release
+        run: dotnet pack Deedbox.slnx -c Release -p:VersionSuffix= -o release
+
+      - name: Push to nuget.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: dotnet nuget push "release/*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {on=1; next} /^## \[/ {on=0} on' CHANGELOG.md > notes.md
+          gh release create "$TAG" --title "$TAG" --notes-file notes.md release/*.nupkg

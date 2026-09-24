@@ -15,6 +15,19 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="content/**/*" Exclude="content/**/bin/**;content/**/obj/**" />
+    <Content Include="content/**/*" Exclude="content/**/bin/**;content/**/obj/**;content/**/*.csproj" />
+    <TemplateProject Include="content/**/*.csproj" Exclude="content/**/bin/**;content/**/obj/**" />
   </ItemGroup>
+
+  <!-- The template's projects reference the Deedbox packages of this build: DEEDBOX_VERSION becomes the package version. -->
+  <Target Name="StampTemplateProjects" BeforeTargets="_GetPackageFiles">
+    <WriteLinesToFile
+      File="$(IntermediateOutputPath)stamped/%(TemplateProject.RecursiveDir)%(TemplateProject.Filename)%(TemplateProject.Extension)"
+      Lines="$([MSBuild]::Escape($([System.IO.File]::ReadAllText('%(TemplateProject.FullPath)').Replace('DEEDBOX_VERSION', '$(PackageVersion)'))))"
+      Overwrite="true"
+      WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <None Include="$(IntermediateOutputPath)stamped/**/*.csproj" Pack="true" PackagePath="content/content/%(RecursiveDir)" />
+    </ItemGroup>
+  </Target>
 </Project>
