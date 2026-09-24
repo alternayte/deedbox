@@ -7,7 +7,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 1. Repo scaffold: solution, packages, Directory.Build.props, net8.0 + net10.0, analyzers (nullable, AOT, trimming), package validation, GitHub Actions with Testcontainers, CONTRIBUTING stub.
 - [x] 2. Schema: embedded migration scripts for both providers, schema manager with locks, schema_version startup check, CLI "schema script" and "schema apply".
 - [x] 3. Write path: string stream IDs, position counter (option A), streams and events tables, Append / Load / Execute with expected versions, conflict retry, snapshots with state_version, transaction modes (neither, Dapper, EF Core with several DbContexts in one transaction).
-- [ ] 4. Torture suite v1: concurrent appends with rollbacks and long transactions; assert gapless commit-ordered positions and per-stream order. HUMAN GATE 1: API shape review and torture suite v1 results.
+- [x] 4. Torture suite v1: concurrent appends with rollbacks and long transactions; assert gapless commit-ordered positions and per-stream order. HUMAN GATE 1: API shape review and torture suite v1 results.
 - [ ] 5. Registry and evolution: naming convention, aliases, event_types table, startup name check, JSON upcasters and typed upcasters, lockfile in Deedbox.Testing, Given/When/Then helpers.
 - [ ] 6. Inline projections (EF and ADO flavours), OnAppending hook, metadata context, causation/correlation, TraceParent capture, tenancy scoping.
 - [ ] 7. Async runner: checkpoints, projections, subscriptions, type filtering, LISTEN/NOTIFY and backoff, multi-instance locking, poison handling, in-place rebuilds, health checks, jobs table.
@@ -49,5 +49,45 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 3: Transaction modes are `store.UseTransaction(dbTransaction)` for Dapper/ADO.NET and `store.UseDbContext(context, params others)` for EF Core. The SDD names neither; gate 1 confirms.
 - Step 3: In EF mode, when the caller owns the transaction, Deedbox enlists the other contexts and leaves them enlisted. The caller completes the transaction.
 - Step 3: IEventStore is registered as scoped, for the tenant and metadata context in step 6.
+- Step 4: The torture suite also runs on SQL Server with READ_COMMITTED_SNAPSHOT on (a second database, deedbox_rcsi), because Azure SQL enables it by default and readers then skip locked rows instead of waiting.
+- Step 4: Torture tests carry the trait Category=Torture. DEEDBOX_TORTURE_SCALE multiplies the work; DEEDBOX_TORTURE_SEED replays a run's operation choices.
 
 ## Gate reports
+
+### HUMAN GATE 1: API shape and torture suite v1
+
+Status: waiting for review. Step 5 starts after sign-off.
+
+#### Public API to confirm
+
+The public surface is in `src/*/PublicAPI.Unshipped.txt`. These names differ from the SDD or fill a gap in it:
+
+1. `PostgresSchema.Script(from, schema)` and `SqlServerSchema.Script(from, schema)` replace the SDD's `EventStoreSchema.Script(...)`. The core has no provider type to pass, so each provider owns its script.
+2. `store.UseTransaction(dbTransaction)` is the Dapper / ADO.NET mode. `store.UseDbContext(context, params others)` is the EF Core mode. Both return a bound `IEventStore`.
+3. `Execute<TState>(id, decide)` locks the stream row (or the missing row's slot) when it loads, and decides on locked state. The SDD describes load-then-check with retries. Retries (`ExecuteRetries`, default 3, no delay) remain but only cover a lost race that the lock already prevents.
+4. `ExpectedVersion` is `Any`, `NoStream` or `Exact(n)`. `Exact(0)` equals `NoStream`.
+5. `LoadResult<TState>` is a record struct that deconstructs to `(state, version)`. `AppendResult` and `ExecuteResult<TState>` are records.
+6. `EventEnvelope` has no public constructor. Metadata properties arrive in step 6.
+7. `SnapshotPolicy.EveryAppend` (default), `Every(n)` and `Never`, set per stream with `.Snapshots(...)`; `.StateVersion(n)` sets the state version.
+8. `DeedboxException.Code` holds a DBX code; each message ends with `https://deedbox.dev/errors/dbxNNN`. The docs domain is still an open item.
+9. JSON: `ConfigureJson(...)` and `UseJsonContext(...)`. Defaults are camelCase; enums are numbers.
+10. `IEventStore` is scoped.
+
+#### Torture suite v1 results
+
+`tests/Deedbox.Tests/Torture/AppendTortureTests.cs` runs on Postgres 17, SQL Server 2022 (locking read committed) and SQL Server 2022 with read-committed snapshot.
+
+- Each run: 16 writers x 40 operations over 24 shared streams, and 3 observers that tail the global order. Operations mix owned Append and Execute, Execute whose decision throws, caller-transaction Append and Execute with 25% rollbacks, and long transactions (50-250 ms) that hold the position counter and then commit or roll back.
+- Assertions: positions are exactly 1..N and the counter is N; the store holds exactly the committed events at the positions their envelopes reported; no rolled-back event exists; each append's events are contiguous; each stream's versions run 1..n in global order; every observer saw the final order grow with no gap; after each caller commit, every lower position is already committed; each stream's stored state matches its events.
+- Two fixed scenarios: a long transaction makes a later append wait; its rollback gives the waiting append position 1, and its commit orders the waiting append after it.
+- Local run (Apple silicon; SQL Server runs under x64 emulation), both frameworks: all pass. About 520-545 committed and 80-105 discarded appends per run. Postgres ran each run in about 8 s, SQL Server in about 18-20 s. Long transactions hold the counter, so these numbers are not throughput benchmarks; step 11 measures throughput.
+- Mutation check: a Postgres sequence in place of the counter (the design behind the Marten skip bugs) fails all three Postgres torture tests. Observers report gaps such as "position 13 right after 11".
+
+#### Decisions to confirm
+
+Every decision under "Decisions" for steps 1-4. The ones with the most weight:
+
+- The write lock on the stream identity (advisory lock + FOR UPDATE on Postgres; UPDLOCK + HOLDLOCK on SQL Server).
+- Exact sibling-package version pins with shared internals.
+- Migration 0001 stays editable until 0.1.0 ships.
+- The added `streams.state_at` column.

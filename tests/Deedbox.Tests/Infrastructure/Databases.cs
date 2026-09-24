@@ -1,3 +1,4 @@
+using Microsoft.Data.SqlClient;
 using Testcontainers.MsSql;
 using Testcontainers.PostgreSql;
 
@@ -9,6 +10,9 @@ public enum Db
 {
     Postgres,
     SqlServer,
+
+    /// <summary>SQL Server with READ_COMMITTED_SNAPSHOT on, the Azure SQL default.</summary>
+    SqlServerRcsi,
 }
 
 /// <summary>
@@ -23,7 +27,14 @@ public sealed class Databases : IAsyncLifetime
     public string Postgres { get; private set; } = "";
     public string SqlServer { get; private set; } = "";
 
-    public string ConnectionString(Db db) => db == Db.Postgres ? Postgres : SqlServer;
+    public string SqlServerRcsi { get; private set; } = "";
+
+    public string ConnectionString(Db db) => db switch
+    {
+        Db.Postgres => Postgres,
+        Db.SqlServer => SqlServer,
+        _ => SqlServerRcsi,
+    };
 
     public async ValueTask InitializeAsync()
     {
@@ -52,12 +63,26 @@ public sealed class Databases : IAsyncLifetime
         if (!string.IsNullOrEmpty(external))
         {
             SqlServer = external;
-            return;
+        }
+        else
+        {
+            _sqlServer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
+            await _sqlServer.StartAsync();
+            SqlServer = _sqlServer.GetConnectionString() + ";Max Pool Size=200";
         }
 
-        _sqlServer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
-        await _sqlServer.StartAsync();
-        SqlServer = _sqlServer.GetConnectionString() + ";Max Pool Size=200";
+        await using var connection = new SqlConnection(SqlServer);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            IF DB_ID('deedbox_rcsi') IS NULL
+            BEGIN
+                CREATE DATABASE deedbox_rcsi;
+                ALTER DATABASE deedbox_rcsi SET READ_COMMITTED_SNAPSHOT ON;
+            END
+            """;
+        await command.ExecuteNonQueryAsync();
+        SqlServerRcsi = new SqlConnectionStringBuilder(SqlServer) { InitialCatalog = "deedbox_rcsi" }.ConnectionString;
     }
 
     public async ValueTask DisposeAsync()
