@@ -63,7 +63,10 @@ jobs:
         if: github.event_name == 'pull_request' && steps.deploy.outputs.url != ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr comment ${{ github.event.number }} --body "Docs preview: ${{ steps.deploy.outputs.url }}" --edit-last || gh pr comment ${{ github.event.number }} --body "Docs preview: ${{ steps.deploy.outputs.url }}"
+          PR: ${{ github.event.number }}
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          gh pr comment "$PR" --body "Docs preview - $URL" --edit-last || gh pr comment "$PR" --body "Docs preview - $URL"
 
       - name: Deploy skipped
         if: env.CLOUDFLARE_API_TOKEN == ''
