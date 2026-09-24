@@ -2,7 +2,7 @@
   <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
 
   <PropertyGroup>
-    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionPrefix>0.2.0</VersionPrefix>
     <VersionSuffix>alpha</VersionSuffix>
     <Authors>Deedbox contributors</Authors>
     <Copyright>Copyright (c) 2026 Deedbox contributors</Copyright>
@@ -18,8 +18,9 @@
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
-    <!-- Package validation compares TFMs now; a baseline version is set once 0.1.0 ships. -->
+    <!-- Package validation compares TFMs, and the API against the last release, so a break fails the pack. -->
     <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>0.1.0</PackageValidationBaselineVersion>
     <!-- Core and providers are AOT-compatible; a project opts out explicitly. -->
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>

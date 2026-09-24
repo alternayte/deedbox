@@ -90,6 +90,10 @@ public sealed class Databases : IAsyncLifetime
             SqlServer = _sqlServer.GetConnectionString() + ";Max Pool Size=200";
         }
 
+        // The torture suites queue writers behind long transactions on purpose. On a slow host, such as SQL Server 2025
+        // under x86 emulation, a queued lock wait can pass SqlClient's 30 s default; a client timeout is not a store guarantee.
+        SqlServer = new SqlConnectionStringBuilder(SqlServer) { CommandTimeout = 300 }.ConnectionString;
+
         await using var connection = new SqlConnection(SqlServer);
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();

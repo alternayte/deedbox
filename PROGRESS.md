@@ -270,3 +270,14 @@ Also still open from step 13: the CLOUDFLARE_API_TOKEN secret for docs deploys f
 - Anthology drops its unread outbox instead of running the QueueBox sidecar (Anthology PR, decision 1).
 - SDD open items that only you can close: a GitHub org (the repositories are under alternayte) and a docs domain (deedbox.dev is not registered).
 
+## 0.2.0
+
+Spec: `docs/specs/queuebox-message-shaping.md` (from the grill on 2026-09-24).
+
+- QueueBox message shaping: `Publish<TEvent>((e, pending) => QueueBoxMessage?)` returns topic, payload and extra headers per event, or null to skip it. Default headers stay; an app header replaces a default of the same name in any letter case, because header names are case-insensitive on every transport. Invalid messages and callback exceptions fail the append with DBX032; a callback exception is the inner exception.
+- `QueueBoxMessage` is a sealed class, not a record: a record would add value equality over an `object` payload and a dictionary, which compares by reference, and more public members.
+- The callback payload uses Deedbox's JSON options, the same as the payload overload. Returning the event itself sends it as plain JSON; the callback counts as a mapping for the `[PersonalData]` rule, so that is the app's choice.
+- CloudEvents: the "Wire QueueBox" guide shows structured and binary mode as compiled snippets; their tests read a valid CloudEvent back from an outbox table on Postgres. No CloudEvents type ships.
+- VersionPrefix is 0.2.0, and package validation uses 0.1.0 from nuget.org as its baseline, so a breaking change fails `just pack`.
+- `scripts/template-check.sh` takes the newest template package, because artifacts can hold templates of several versions.
+- SQL Server test connections use a 300 s command timeout. A native json gate run failed the append torture test with a SqlClient timeout in ReadStream: a writer queued behind the test's long transactions, at 2 commits/s under x86 emulation of SQL Server 2025, waited past the 30 s default. The torture checks (gaps, commit order, duplicates) are unchanged.

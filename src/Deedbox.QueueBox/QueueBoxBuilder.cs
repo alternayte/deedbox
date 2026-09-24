@@ -44,7 +44,7 @@ public sealed partial class QueueBoxBuilder
     /// <param name="topic">The QueueBox topic, such as <c>cart.checked_out</c>.</param>
     /// <typeparam name="TEvent">The event type, or a built-in such as <see cref="SubjectErased"/>.</typeparam>
     public QueueBoxBuilder Publish<TEvent>(string topic) where TEvent : notnull =>
-        Add(typeof(TEvent), topic, null);
+        Add(typeof(TEvent), Topic(topic), null, null);
 
     /// <summary>Publishes every <typeparamref name="TEvent"/> to <paramref name="topic"/>, with a payload you shape.</summary>
     /// <param name="topic">The QueueBox topic.</param>
@@ -53,17 +53,36 @@ public sealed partial class QueueBoxBuilder
     public QueueBoxBuilder Publish<TEvent>(string topic, Func<TEvent, PendingEvent, object> payload) where TEvent : notnull
     {
         ArgumentNullException.ThrowIfNull(payload);
-        return Add(typeof(TEvent), topic, (e, pending) => payload((TEvent)e, pending));
+        return Add(typeof(TEvent), Topic(topic), (e, pending) => payload((TEvent)e, pending), null);
     }
 
-    private QueueBoxBuilder Add(Type type, string topic, Func<object, PendingEvent, object>? payload)
+    /// <summary>
+    /// Publishes <typeparamref name="TEvent"/> with a message you build for each event: its topic, payload and extra
+    /// headers. Return null to write no message for that event. A message that is not valid, or an exception in
+    /// <paramref name="message"/>, fails the append with DBX032, so the events and their messages commit together.
+    /// </summary>
+    /// <param name="message">Builds the message from the event and its pending details.</param>
+    /// <typeparam name="TEvent">The event type, or a built-in such as <see cref="SubjectErased"/>.</typeparam>
+    public QueueBoxBuilder Publish<TEvent>(Func<TEvent, PendingEvent, QueueBoxMessage?> message) where TEvent : notnull
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(topic);
-        if (topic.Length > 255)
-            throw new DeedboxException(Errors.QueueBoxMapping, $"QueueBox topic '{topic}' is longer than 255 characters.");
-        if (!Publications.TryAdd(type, new Publication(topic, payload)))
+        ArgumentNullException.ThrowIfNull(message);
+        return Add(typeof(TEvent), null, null, (e, pending) => message((TEvent)e, pending));
+    }
+
+    private QueueBoxBuilder Add(Type type, string? topic, Func<object, PendingEvent, object>? payload, Func<object, PendingEvent, QueueBoxMessage?>? message)
+    {
+        if (!Publications.TryAdd(type, new Publication(topic, payload, message)))
             throw new DeedboxException(Errors.QueueBoxMapping, $"{type.Name} is published twice. Publish each event type to one topic.");
         return this;
+    }
+
+    internal static string Topic(string? topic)
+    {
+        if (string.IsNullOrWhiteSpace(topic))
+            throw new DeedboxException(Errors.QueueBoxMapping, "A QueueBox topic is empty. Give each message a topic.");
+        if (topic.Length > 255)
+            throw new DeedboxException(Errors.QueueBoxMapping, $"QueueBox topic '{topic}' is longer than 255 characters.");
+        return topic;
     }
 
     internal static string Identifier(string name)

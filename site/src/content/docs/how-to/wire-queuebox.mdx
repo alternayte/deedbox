@@ -4,6 +4,8 @@ description: Publish events to brokers and webhooks through QueueBox.
 ---
 
 import QueueBox from '../../../snippets/queuebox.md';
+import Structured from '../../../snippets/queuebox-cloudevents-structured.md';
+import Binary from '../../../snippets/queuebox-cloudevents-binary.md';
 
 This guide shows you how to send events to other systems with [QueueBox](https://github.com/alternayte/queuebox). Deedbox writes a QueueBox outbox row in the append's transaction, so a message exists exactly when its event commits. QueueBox delivers it, with retries, at least once.
 
@@ -26,9 +28,36 @@ This guide shows you how to send events to other systems with [QueueBox](https:/
 | `topic` | The topic you chose. |
 | `key` | The stream ID, so one stream's messages keep their order. |
 | `payload` | The event's JSON, or the payload you shaped. |
-| `headers` | `X-Correlation-Id`, `traceparent`, and the event's type, stream and version. |
+| `headers` | `X-Correlation-Id`, `traceparent`, and the event's type, stream and version, plus the headers you add. |
 | `aggregate_type` | The stream type. |
 
 An event with `[PersonalData]` needs a payload you shape; start-up fails otherwise ([DBX032](/reference/errors/dbx032/)).
 
 If QueueBox runs with a custom table or column mapping, match it with `UseTable` and `UseColumns`.
+
+## Shape each message
+
+`Publish<TEvent>((e, pending) => new QueueBoxMessage(topic, payload) { Headers = ... })` builds the message for each event. `pending` gives the event ID, type, version, stream ID, time and metadata.
+
+- The topic can differ per event, such as one topic per stream.
+- Your headers join the default headers. A header with the name of a default replaces its value, in any letter case. You cannot remove a default.
+- Deedbox does not send `EventMetadata.Headers`. Copy `pending.Metadata.Headers` into `Headers` to send them.
+- Return `null` to write no message for that event.
+- An empty topic, a topic over 255 characters, a header with an empty name or a null value, or an exception in the callback fails the append with [DBX032](/reference/errors/dbx032/). The events and their messages commit together or not at all.
+
+The row ID, the key and `aggregate_type` stay the event ID, the stream ID and the stream type.
+
+## Send CloudEvents
+
+Deedbox has no CloudEvents type. Build the envelope in the message callback.
+
+In structured mode, the payload is the whole CloudEvent:
+
+<Structured />
+
+In binary mode, the attributes are headers and the payload is the event:
+
+<Binary />
+
+The HTTP binding names the headers `ce-*`. For Kafka, the binding uses `ce_*`; name the headers the way your destination expects.
+

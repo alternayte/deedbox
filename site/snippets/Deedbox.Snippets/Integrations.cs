@@ -24,6 +24,49 @@ public static class Integrations
         // end-snippet
     }
 
+    public static QueueBoxBuilder CloudEventsStructured(QueueBoxBuilder q)
+    {
+        // begin-snippet: queuebox-cloudevents-structured
+        // Structured mode: the payload is the whole CloudEvent.
+        q.Publish<CheckedOut>((e, p) => new QueueBoxMessage("cart.checked_out", new
+        {
+            specversion = "1.0",
+            id = p.EventId,
+            source = "/shop/carts",
+            type = p.EventType,
+            subject = p.StreamId,
+            time = p.OccurredAt,
+            datacontenttype = "application/json",
+            data = e,
+        })
+        {
+            Headers = new Dictionary<string, string> { ["content-type"] = "application/cloudevents+json" },
+        });
+        // end-snippet
+        return q;
+    }
+
+    public static QueueBoxBuilder CloudEventsBinary(QueueBoxBuilder q)
+    {
+        // begin-snippet: queuebox-cloudevents-binary
+        // Binary mode: the attributes are headers, and the payload is the event.
+        q.Publish<CheckedOut>((e, p) => new QueueBoxMessage("cart.checked_out", e)
+        {
+            Headers = new Dictionary<string, string>
+            {
+                ["ce-specversion"] = "1.0",
+                ["ce-id"] = p.EventId.ToString(),
+                ["ce-source"] = "/shop/carts",
+                ["ce-type"] = p.EventType,
+                ["ce-subject"] = p.StreamId,
+                ["ce-time"] = p.OccurredAt.ToString("O"),
+                ["content-type"] = "application/json",
+            },
+        });
+        // end-snippet
+        return q;
+    }
+
     public static void Metadata(WebApplication app)
     {
         // begin-snippet: metadata-middleware

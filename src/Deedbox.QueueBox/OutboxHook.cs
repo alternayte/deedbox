@@ -6,18 +6,25 @@ using System.Text.Json.Nodes;
 
 namespace Deedbox.QueueBox;
 
-internal sealed record Publication(string Topic, Func<object, PendingEvent, object>? Payload);
+/// <summary>
+/// How one event type is published: a fixed topic with the event or a mapped payload, or a message callback.
+/// </summary>
+internal sealed record Publication(string? Topic, Func<object, PendingEvent, object>? Payload, Func<object, PendingEvent, QueueBoxMessage?>? Message)
+{
+    /// <summary>True when the app chooses what reaches the outbox, which the [PersonalData] rule requires.</summary>
+    public bool Maps => Payload is not null || Message is not null;
+}
 
 /// <summary>Writes one QueueBox outbox row per published event, in the append's transaction.</summary>
 internal sealed class OutboxHook(QueueBoxBuilder options, DeedboxRuntime runtime) : IAppendingHook
 {
     public async Task OnAppending(AppendingContext context, CancellationToken ct)
     {
-        var rows = new List<(PendingEvent Event, Publication Publication)>();
+        var rows = new List<(PendingEvent Event, string Topic, string Payload, string Headers)>();
         foreach (var e in context.Events)
         {
-            if (options.Publications.TryGetValue(e.Event.GetType(), out var publication))
-                rows.Add((e, publication));
+            if (options.Publications.TryGetValue(e.Event.GetType(), out var publication) && Row(context, e, publication) is { } row)
+                rows.Add(row);
         }
 
         if (rows.Count == 0)
@@ -30,27 +37,51 @@ internal sealed class OutboxHook(QueueBoxBuilder options, DeedboxRuntime runtime
 #pragma warning restore CA2100
         for (var i = 0; i < rows.Count; i++)
         {
-            var (e, publication) = rows[i];
+            var (e, topic, payload, headers) = rows[i];
             Add(command, $"id{i}", e.EventId);
-            Add(command, $"topic{i}", publication.Topic);
+            Add(command, $"topic{i}", topic);
             Add(command, $"key{i}", context.StreamId);
-            Add(command, $"payload{i}", Payload(e, publication));
-            Add(command, $"headers{i}", Headers(context, e));
+            Add(command, $"payload{i}", payload);
+            Add(command, $"headers{i}", headers);
             Add(command, $"aggregate{i}", context.StreamType);
         }
 
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    private string Payload(PendingEvent e, Publication publication)
+    /// <summary>The outbox row for one event, or null when a message callback skips it.</summary>
+    private (PendingEvent, string, string, string)? Row(AppendingContext context, PendingEvent e, Publication publication)
     {
-        if (publication.Payload is null)
-            return JsonSerializer.Serialize(e.Event, runtime.Registry.ForEvent(e.Event.GetType()).Json);
-        var shaped = publication.Payload(e.Event, e);
-        return JsonSerializer.Serialize(shaped, runtime.Json.TypeInfo(shaped.GetType()));
+        if (publication.Message is null)
+        {
+            var payload = publication.Payload is null
+                ? JsonSerializer.Serialize(e.Event, runtime.Registry.ForEvent(e.Event.GetType()).Json)
+                : Serialize(publication.Payload(e.Event, e));
+            return (e, publication.Topic!, payload, Headers(context, e, null));
+        }
+
+        QueueBoxMessage? message;
+        try
+        {
+            message = publication.Message(e.Event, e);
+        }
+        catch (Exception ex) when (ex is not DeedboxException and not OperationCanceledException)
+        {
+            throw new DeedboxException(Errors.QueueBoxMapping,
+                $"The QueueBox message for {e.Event.GetType().Name} '{e.EventType}' failed, so the append rolls back: {ex.Message}", ex);
+        }
+
+        if (message is null)
+            return null;
+        if (message.Payload is null)
+            throw new DeedboxException(Errors.QueueBoxMapping, $"The QueueBox message for {e.Event.GetType().Name} has no payload.");
+        return (e, QueueBoxBuilder.Topic(message.Topic), Serialize(message.Payload), Headers(context, e, message.Headers));
     }
 
-    private static string Headers(AppendingContext context, PendingEvent e)
+    private string Serialize(object payload) => JsonSerializer.Serialize(payload, runtime.Json.TypeInfo(payload.GetType()));
+
+    /// <summary>Deedbox's default headers, then the app's headers, which replace a default of the same name.</summary>
+    private static string Headers(AppendingContext context, PendingEvent e, IReadOnlyDictionary<string, string>? extra)
     {
         var headers = new JsonObject
         {
@@ -68,6 +99,16 @@ internal sealed class OutboxHook(QueueBoxBuilder options, DeedboxRuntime runtime
             headers["x-deedbox-causation-id"] = causation;
         if (e.Metadata.TraceParent is { } traceParent)
             headers["traceparent"] = traceParent;
+        foreach (var (name, value) in extra ?? new Dictionary<string, string>())
+        {
+            if (string.IsNullOrEmpty(name) || value is null)
+                throw new DeedboxException(Errors.QueueBoxMapping, $"A QueueBox header for {e.Event.GetType().Name} has an empty name or a null value.");
+            // Header names are case-insensitive on every transport, so the app's name replaces a default in any case.
+            if (headers.Select(h => h.Key).FirstOrDefault(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase)) is { } existing)
+                headers.Remove(existing);
+            headers[name] = value;
+        }
+
         return headers.ToJsonString();
     }
 
@@ -90,11 +131,11 @@ internal static class Outbox
             if (!registry.IsRegistered(type))
                 throw new DeedboxException(Errors.QueueBoxMapping, $"{type.Name} is published to QueueBox but is not a registered event.");
 
-            if (publication.Payload is null && registry.ForEvent(type).PersonalFields.Count > 0)
+            if (!publication.Maps && registry.ForEvent(type).PersonalFields.Count > 0)
             {
                 throw new DeedboxException(Errors.QueueBoxMapping,
                     $"{type.Name} has [PersonalData], so publishing it whole would put personal data in the outbox in plain text. " +
-                    $"Use Publish<{type.Name}>(topic, (e, info) => new {{ ... }}) and include only what the receiver needs.");
+                    $"Use Publish<{type.Name}>(topic, (e, info) => new {{ ... }}) or a message callback, and include only what the receiver needs.");
             }
         }
     }

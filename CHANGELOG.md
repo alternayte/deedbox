@@ -2,6 +2,12 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.2.0] - Unreleased
+
+### Added
+
+- `Deedbox.QueueBox`: `Publish<TEvent>((e, pending) => new QueueBoxMessage(topic, payload) { Headers = ... })` builds the whole message for each event: its topic, payload and extra headers. Extra headers replace a default header of the same name; the defaults stay. Return null to skip an event. An invalid message, or an exception in the callback, fails the append with DBX032. The "Wire QueueBox" guide shows CloudEvents in structured and binary mode.
+
 ## [0.1.0] - 2026-09-24
 
 The first release. It targets .NET 8 and .NET 10.
@@ -29,4 +35,5 @@ The first release. It targets .NET 8 and .NET 10.
 - `IEventStoreAdmin`, metrics, traces, and DBX error codes that link to their docs pages.
 - Native `json` columns on SQL Server 2025 and Azure SQL, with `UseSqlServer(connectionString, sql => sql.NativeJson = true)`. Applying the schema converts existing `nvarchar(max)` columns.
 
+[0.2.0]: https://github.com/alternayte/deedbox/compare/v0.1.0...main
 [0.1.0]: https://github.com/alternayte/deedbox/releases/tag/v0.1.0

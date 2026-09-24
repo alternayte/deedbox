@@ -9,7 +9,7 @@ feed="$root/artifacts/package/release"
 work="$(mktemp -d)/deedbox-template-check"
 mkdir -p "$work"
 trap 'rm -rf "$(dirname "$work")"' EXIT
-template="$(ls "$feed"/Deedbox.Templates.*.nupkg | head -1)"
+template="$(ls -t "$feed"/Deedbox.Templates.*.nupkg | head -1)"
 dotnet new install "$template" --debug:custom-hive "$work/hive" >/dev/null
 
 cat > "$work/nuget.config" <<CONFIG

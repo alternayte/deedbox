@@ -1,1 +1,8 @@
 #nullable enable
+Deedbox.QueueBoxBuilder.Publish<TEvent>(System.Func<TEvent, Deedbox.PendingEvent!, Deedbox.QueueBoxMessage?>! message) -> Deedbox.QueueBoxBuilder!
+Deedbox.QueueBoxMessage
+Deedbox.QueueBoxMessage.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>?
+Deedbox.QueueBoxMessage.Headers.init -> void
+Deedbox.QueueBoxMessage.Payload.get -> object!
+Deedbox.QueueBoxMessage.QueueBoxMessage(string! topic, object! payload) -> void
+Deedbox.QueueBoxMessage.Topic.get -> string!

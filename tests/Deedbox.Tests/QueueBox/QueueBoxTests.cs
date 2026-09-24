@@ -40,12 +40,70 @@ public abstract class QueueBoxTests(Databases databases, Db db) : RunnerTest(dat
     }
 
     [Fact]
+    public async Task A_message_callback_shapes_topic_payload_and_headers_per_event_and_can_skip_one()
+    {
+        var host = await StartHost(NewProbe(), b => b.UseQueueBox(q => q.UseTable("outbox", Schema).Publish<ItemAdded>((e, p) => e.Sku == "skip"
+            ? null
+            : new QueueBoxMessage($"cart.{p.StreamId}", new { specversion = "1.0", id = p.EventId, type = p.EventType, data = e })
+            {
+                Headers = new Dictionary<string, string>
+                {
+                    ["ce-type"] = p.EventType,
+                    ["x-correlation-id"] = "override",
+                    ["tenant"] = p.Metadata.Headers["tenant"],
+                },
+            })));
+        await CreateOutbox("outbox", QueueBoxDdl);
+        var scope = host.Services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<DeedboxContext>().Metadata =
+            new EventMetadata { CorrelationId = "req-7", Headers = new Dictionary<string, string> { ["tenant"] = "acme" } };
+
+        var result = await scope.ServiceProvider.GetRequiredService<IEventStore>()
+            .Append("cart-1", ExpectedVersion.NoStream, [new ItemAdded("a", 1), new ItemAdded("skip", 1)]);
+
+        var row = Assert.Single(await Rows("outbox", "id", "topic", "key", "payload", "headers"));
+        var added = result.Events[0];
+        Assert.Equal((added.EventId, "cart.cart-1", "cart-1"), (Guid.Parse(row["id"]), row["topic"], row["key"]));
+        var payload = JsonDocument.Parse(row["payload"]).RootElement;
+        Assert.Equal((added.EventType, "a"), (payload.GetProperty("type").GetString(), payload.GetProperty("data").GetProperty("sku").GetString()));
+        var headers = JsonDocument.Parse(row["headers"]).RootElement.EnumerateObject().ToDictionary(h => h.Name, h => h.Value.GetString());
+        Assert.Equal((added.EventType, "acme", added.EventId.ToString("D")), (headers["ce-type"], headers["tenant"], headers["x-deedbox-event-id"]));
+        Assert.Equal("override", Assert.Single(headers, h => string.Equals(h.Key, "X-Correlation-Id", StringComparison.OrdinalIgnoreCase)).Value);
+    }
+
+    [Fact]
+    public async Task An_invalid_message_or_a_failing_callback_fails_the_append_with_DBX032_and_writes_nothing()
+    {
+        var host = await StartHost(NewProbe(), b => b.UseQueueBox(q => q.UseTable("outbox", Schema).Publish<ItemAdded>((e, _) => e.Sku switch
+        {
+            "empty" => new QueueBoxMessage(" ", e),
+            "long" => new QueueBoxMessage(new string('t', 256), e),
+            "no-value" => new QueueBoxMessage("cart.item_added", e) { Headers = new Dictionary<string, string> { ["h"] = null! } },
+            _ => throw new InvalidOperationException("boom"),
+        })));
+        await CreateOutbox("outbox", QueueBoxDdl);
+
+        foreach (var sku in new[] { "empty", "long", "no-value", "throws" })
+        {
+            var error = await Assert.ThrowsAsync<DeedboxException>(() => StoreOf(host).Append($"cart-{sku}", ExpectedVersion.NoStream, [new ItemAdded(sku, 1)]));
+            Assert.Equal((sku, "DBX032"), (sku, error.Code));
+            if (sku == "throws")
+                Assert.IsType<InvalidOperationException>(error.InnerException);
+        }
+
+        Assert.Empty(await Rows("outbox", "id"));
+        Assert.Equal(0, await Scalar<int>($"SELECT COUNT(*) FROM {Table("events")}"));
+    }
+
+    [Fact]
     public async Task Personal_data_is_published_only_through_a_payload_mapping_and_erasure_is_forwarded()
     {
         var error = Assert.Throws<DeedboxException>(() => new ServiceCollection().AddDeedbox(b => Configure(UseDatabase(b))
             .UseQueueBox(q => q.Publish<ReviewerInvited>("review.invited"))));
         Assert.Equal("DBX032", error.Code);
         Assert.Contains("plain text", error.Message, StringComparison.Ordinal);
+        new ServiceCollection().AddDeedbox(b => Configure(UseDatabase(b))
+            .UseQueueBox(q => q.Publish<ReviewerInvited>((e, _) => new QueueBoxMessage("review.invited", new { e.ManuscriptId }))));
 
         var host = await StartHost(NewProbe(), b => Configure(b).UseQueueBox(q => q
             .UseTable("outbox", Schema)
