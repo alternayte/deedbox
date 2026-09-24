@@ -181,7 +181,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
             var stored = await Provider.ReadEventsAfter(connection, transaction, row.Position, limit, consumer.PayloadTypes, ct);
             if (stored.Count == 0)
             {
-                if (row.Status != CheckpointStatus.Rebuilding)
+                if (row.Status != CheckpointStatus.Rebuilding || consumer.IsInline)
                     return Outcome.Idle;
 
                 await Provider.UpdateCheckpoint(connection, transaction, row with { Status = CheckpointStatus.Running, Mode = consumer.Mode, Error = null }, ct);
@@ -195,7 +195,8 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
             var last = stored[^1].GlobalPosition;
 
             // A stalled consumer that got past its event, or an async rebuild that read to the end, is running again.
-            var status = row.Status == CheckpointStatus.Stalled || (row.Status == CheckpointStatus.Rebuilding && stored.Count < limit)
+            // An inline rebuild never finishes here: only the cut-over, under the counter lock, may flip it back.
+            var status = row.Status == CheckpointStatus.Stalled || (row.Status == CheckpointStatus.Rebuilding && !consumer.IsInline && stored.Count < limit)
                 ? CheckpointStatus.Running
                 : row.Status;
             await Provider.UpdateCheckpoint(connection, transaction, row with { Position = last, Status = status, Mode = consumer.Mode, Error = status == row.Status ? row.Error : null }, ct);
@@ -252,13 +253,13 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
     }
 
     /// <summary>
-    /// Ends an inline projection's rebuild. It locks the checkpoint row, which waits for open appends that read the
-    /// old status, then locks the counter, so no append commits while the last events are applied and the status
-    /// flips back to running. Appends that follow see running and apply the projection inline again.
+    /// Ends an inline projection's rebuild. It takes the projection's gate exclusively, which waits for open appends
+    /// that read the old status, then locks the counter, so no append commits while the last events are applied and
+    /// the status flips back to running. Appends that follow see running and apply the projection inline again.
     /// </summary>
     private async Task CutOver(DbConnection connection, DbTransaction transaction, CheckpointRow row, CancellationToken ct)
     {
-        await Provider.LockCheckpoint(connection, transaction, consumer.Name, CheckpointLock.Exclusive, ct);
+        await Provider.LockInlineGate(connection, transaction, consumer.Name, ct);
         var head = await Provider.LockCounter(connection, transaction, ct);
         var position = row.Position;
         while (position < head)

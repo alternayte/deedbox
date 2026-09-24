@@ -188,8 +188,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
 
     public override async Task<CheckpointRow?> LockCheckpoint(DbConnection connection, DbTransaction transaction, string name, CheckpointLock mode, CancellationToken ct)
     {
-        // Appends read inline statuses with shared locks. An update lock (batch) is compatible with them and READPAST
-        // skips a row another runner holds; an exclusive lock waits for open appends and holds back new ones.
+        // A batch lock skips a row another runner holds; an exclusive lock waits for it.
         await using var command = Command(connection, transaction, mode == CheckpointLock.Batch ? Sql.LockCheckpointBatch : Sql.LockCheckpointExclusive);
         AddText(command, "name", name, 200);
         return (await ReadCheckpointRows(command, ct)).FirstOrDefault();
@@ -208,14 +207,35 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
 
     public override async Task<Dictionary<string, string>> ReadInlineStatuses(DbConnection connection, DbTransaction transaction, IReadOnlyList<string> names, CancellationToken ct)
     {
-        await using var command = Command(connection, transaction, Sql.ReadInlineStatuses);
-        AddJson(command, "names", names.Select(n => new[] { n }).ToArray());
+        var ordered = names.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        var sql = new StringBuilder();
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            sql.Append(System.Globalization.CultureInfo.InvariantCulture,
+                $"EXEC sp_getapplock @Resource = @r{i}, @LockMode = 'Shared', @LockOwner = 'Transaction', @LockTimeout = -1;\n");
+        }
+
+        sql.Append(Sql.ReadStatuses);
+        await using var command = Command(connection, transaction, sql.ToString());
+        for (var i = 0; i < ordered.Count; i++)
+            AddText(command, "r" + i.ToString(System.Globalization.CultureInfo.InvariantCulture), GateResource(ordered[i]), 255);
+        AddJson(command, "names", ordered.Select(n => new[] { n }).ToArray());
         await using var reader = await command.ExecuteReaderAsync(ct);
         var statuses = new Dictionary<string, string>(StringComparer.Ordinal);
         while (await reader.ReadAsync(ct))
             statuses[reader.GetString(0)] = reader.GetString(1);
         return statuses;
     }
+
+    public override async Task LockInlineGate(DbConnection connection, DbTransaction transaction, string name, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction,
+            "EXEC sp_getapplock @Resource = @resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = -1;");
+        AddText(command, "resource", GateResource(name), 255);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    private string GateResource(string name) => $"deedbox:{Schema}:inline:{name}";
 
     public override async Task<List<StoredEvent>> ReadEventsAfter(
         DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, CancellationToken ct)
@@ -459,8 +479,8 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             WHERE name = @name
             """;
 
-        public readonly string ReadInlineStatuses = $"""
-            SELECT name, status FROM [{s}].[checkpoints] WITH (HOLDLOCK, ROWLOCK)
+        public readonly string ReadStatuses = $"""
+            SELECT name, status FROM [{s}].[checkpoints]
             WHERE name IN (SELECT n FROM OPENJSON(@names) WITH (n nvarchar(200) '$[0]'))
             """;
 

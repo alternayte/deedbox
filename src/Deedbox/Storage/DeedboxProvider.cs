@@ -84,10 +84,16 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     public abstract Task UpdateCheckpoint(DbConnection connection, DbTransaction transaction, CheckpointRow row, CancellationToken ct);
 
     /// <summary>
-    /// The statuses of inline projections, read with a shared lock held until commit, so a rebuild cannot change a
-    /// status while an append that read it is still open.
+    /// Takes the shared gate lock of each inline projection, then reads their statuses in a later statement, so the
+    /// read sees any status change whose exclusive gate lock it waited for. The shared locks last until commit.
     /// </summary>
     public abstract Task<Dictionary<string, string>> ReadInlineStatuses(DbConnection connection, DbTransaction transaction, IReadOnlyList<string> names, CancellationToken ct);
+
+    /// <summary>
+    /// Takes an inline projection's gate lock exclusively until commit. It waits for open appends that read the
+    /// projection's status, and holds back new ones, so a status change never races an append.
+    /// </summary>
+    public abstract Task LockInlineGate(DbConnection connection, DbTransaction transaction, string name, CancellationToken ct);
 
     /// <summary>
     /// Up to <paramref name="limit"/> committed events after <paramref name="after"/>, in position order. Payload and

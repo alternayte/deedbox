@@ -206,8 +206,8 @@ internal sealed class EventStore(
         if (projections.Count == 0)
             return;
 
-        // A projection that is rebuilding or stalled catches up in the runner instead. The shared lock on its status
-        // keeps a rebuild from starting or finishing while this append is open.
+        // A projection that is rebuilding or stalled catches up in the runner instead. The shared gate lock keeps a
+        // rebuild from starting or finishing while this append is open.
         var statuses = await Provider.ReadInlineStatuses(work.Connection, work.Transaction, projections.Select(p => p.Name).ToList(), work.CancellationToken);
         projections.RemoveAll(p => statuses.GetValueOrDefault(p.Name, CheckpointStatus.Running) != CheckpointStatus.Running);
 

@@ -55,6 +55,8 @@ internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServicePro
                 continue;
 
             await using var transaction = await connection.BeginTransactionAsync(ct);
+            if (mode == CheckpointMode.Inline || row.Mode == CheckpointMode.Inline)
+                await runtime.Provider.LockInlineGate(connection, transaction, name, ct);
             var locked = await runtime.Provider.LockCheckpoint(connection, transaction, name, CheckpointLock.Exclusive, ct);
             var error = new System.Text.Json.Nodes.JsonObject { ["reason"] = "mode_changed", ["from"] = row.Mode, ["to"] = mode }.ToJsonString();
             await runtime.Provider.UpdateCheckpoint(connection, transaction, locked! with { Status = CheckpointStatus.Stalled, Error = error }, ct);

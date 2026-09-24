@@ -110,15 +110,17 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
     }
 
     /// <summary>
-    /// Resets a projection and replays it from position 0 in the background. The exclusive checkpoint lock waits
-    /// for open appends that applied it inline, so the reset removes their writes too, and holds back new ones until
-    /// the rebuilding status commits.
+    /// Resets a projection and replays it from position 0 in the background. For an inline projection, the exclusive
+    /// gate lock waits for open appends that applied it inline, so the reset removes their writes too, and holds back
+    /// new ones until the rebuilding status commits.
     /// </summary>
     private async Task<JsonObject> Rebuild(string name, DbConnection connection, DbTransaction transaction, CancellationToken ct)
     {
         var projection = services.GetRequiredService<ProjectionSet>().All.FirstOrDefault(p => p.Name == name)
             ?? throw new InvalidOperationException($"'{name}' is not a registered projection. Subscriptions cannot be rebuilt.");
 
+        if (projection.Run == Deedbox.Run.Inline)
+            await Provider.LockInlineGate(connection, transaction, name, ct);
         var row = await Provider.LockCheckpoint(connection, transaction, name, CheckpointLock.Exclusive, ct)
             ?? throw new InvalidOperationException($"Projection '{name}' has no checkpoint row yet; start the app once first.");
 

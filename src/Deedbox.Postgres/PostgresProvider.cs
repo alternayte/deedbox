@@ -15,6 +15,7 @@ internal sealed partial class PostgresProvider : DeedboxProvider
     private readonly NpgsqlDataSource _dataSource;
     private readonly bool _ownsDataSource;
     private readonly int _streamLockSpace;
+    private readonly int _inlineLockSpace;
 
     public PostgresProvider(NpgsqlDataSource dataSource, bool ownsDataSource, string schema)
         : base(schema)
@@ -23,6 +24,7 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         _ownsDataSource = ownsDataSource;
         Sql = new Statements(Schema);
         _streamLockSpace = (int)LockKey("deedbox:streams:" + Schema);
+        _inlineLockSpace = (int)LockKey("deedbox:inline:" + Schema);
     }
 
 
@@ -195,9 +197,7 @@ internal sealed partial class PostgresProvider : DeedboxProvider
 
     public override async Task<CheckpointRow?> LockCheckpoint(DbConnection connection, DbTransaction transaction, string name, CheckpointLock mode, CancellationToken ct)
     {
-        // Appends read inline statuses FOR KEY SHARE. A batch lock (FOR NO KEY UPDATE) does not conflict with that;
-        // an exclusive lock (FOR UPDATE) does, so a status change waits for open appends and holds back new ones.
-        var sql = Sql.ReadCheckpoint + (mode == CheckpointLock.Batch ? " FOR NO KEY UPDATE SKIP LOCKED" : " FOR UPDATE");
+        var sql = Sql.ReadCheckpoint + (mode == CheckpointLock.Batch ? " FOR UPDATE SKIP LOCKED" : " FOR UPDATE");
         await using var command = Command(connection, transaction, sql);
         Add(command, "name", name);
         return (await ReadCheckpointRows(command, ct)).FirstOrDefault();
@@ -216,14 +216,29 @@ internal sealed partial class PostgresProvider : DeedboxProvider
 
     public override async Task<Dictionary<string, string>> ReadInlineStatuses(DbConnection connection, DbTransaction transaction, IReadOnlyList<string> names, CancellationToken ct)
     {
-        await using var command = Command(connection, transaction, Sql.ReadInlineStatuses);
+        // Two statements: the read gets its own snapshot after the locks are held.
+        await using var command = Command(connection, transaction,
+            $"SELECT pg_advisory_xact_lock_shared(@space, k) FROM unnest(@keys) AS k ORDER BY k; {Sql.ReadStatuses}");
+        Add(command, "space", _inlineLockSpace);
+        Add(command, "keys", names.Select(n => GateKey(n)).Distinct().ToArray());
         Add(command, "names", names.ToArray());
         await using var reader = await command.ExecuteReaderAsync(ct);
+        await reader.NextResultAsync(ct);
         var statuses = new Dictionary<string, string>(StringComparer.Ordinal);
         while (await reader.ReadAsync(ct))
             statuses[reader.GetString(0)] = reader.GetString(1);
         return statuses;
     }
+
+    public override async Task LockInlineGate(DbConnection connection, DbTransaction transaction, string name, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, "SELECT pg_advisory_xact_lock(@space, @key)");
+        Add(command, "space", _inlineLockSpace);
+        Add(command, "key", GateKey(name));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    private static int GateKey(string name) => BitConverter.ToInt32(SHA256.HashData(Encoding.UTF8.GetBytes(name)), 0);
 
     public override async Task<List<StoredEvent>> ReadEventsAfter(
         DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, CancellationToken ct)
@@ -434,7 +449,7 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             WHERE name = @name
             """;
 
-        public readonly string ReadInlineStatuses = $"SELECT name, status FROM {s}.checkpoints WHERE name = ANY(@names) FOR KEY SHARE";
+        public readonly string ReadStatuses = $"SELECT name, status FROM {s}.checkpoints WHERE name = ANY(@names)";
 
         public readonly string ReadEventsAfter = $"""
             SELECT {EventColumns}, payload::text, metadata::text, occurred_at
