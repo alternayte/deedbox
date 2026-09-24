@@ -14,7 +14,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 8. Torture suite v2: projector kills, competing instances, sparse filters, idle query budget; every Anthology regression test.
 - [x] 9. Personal data: [DataSubject] / [PersonalData], contract-customization encryption, key hierarchy, Database / Environment / Azure Key Vault key modes, subject_streams, erasure job, SubjectErased, stream deletion, startup safety rules, key provider compliance suite. HUMAN GATE 2: security review of crypto, key handling and erasure.
 - [x] 10. Operations: remaining CLI commands, IEventStoreAdmin, metrics, traces, DBX error codes with docs URLs.
-- [ ] 11. Benchmarks: the matrix, nightly job, published results.
+- [x] 11. Benchmarks: the matrix, nightly job, published results.
 - [ ] 12. Deedbox.QueueBox package against the confirmed QueueBox contract.
 - [ ] 13. Docs: Starlight site, MarkdownSnippets, Vale, error catalogue, README, dotnet new template, llms.txt, agent skill, Cloudflare deploy.
 - [ ] 14. Anthology migration: data migration script, module rewrites, remove replaced kernel code, move event-store tests into Deedbox.
@@ -105,6 +105,10 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 10: IEventStoreAdmin covers status, job lookup, rebuild, skip, erase (with an explicit tenant), snapshot rebuild, key re-wrap and tenant shred. Status lists every checkpoint row, whether or not this app registers it.
 - Step 10: Metrics are on the Meter "Deedbox". Append: duration, events, conflicts, Execute retries, counter duration. Consumers: lag, lag in seconds, status (gauges), batch duration, failures, stalls. Also jobs, erased streams, decrypts and redactions. Spans on the ActivitySource "Deedbox": append, execute, load, delete_stream, batch, handle, job, erase_stream. The lag gauge reads the head only after a full batch, so an idle runner sends no extra statements.
 - Step 10: `Errors.Titles` is the error catalogue: one title per DBX code. A test fails if a code has no title; the docs step builds one page per entry.
+- Step 11: Benchmarks are a custom harness (`bench/Deedbox.Benchmarks`), not BenchmarkDotNet, because the matrix measures concurrent throughput. Each writer appends to its own stream, so the counter is the only contention. `just bench` runs it; the nightly workflow runs it with the torture suite at scale 5.
+- Step 11: Throughput regression threshold: 30% below `bench/baseline.json` per cell. The baseline comes from the first nightly run on a GitHub-hosted runner. This settles the open item; revisit the threshold if nightly noise exceeds it.
+- Step 11: Published results are in `bench/results.md`; the docs site (step 13) includes them. Peak on the CI runner: about 1,170 appends/s on Postgres, 700 on SQL Server.
+- Step 11: CI on pushes still runs the full suite on both frameworks, stricter than the SDD's PR smoke subset on net8.0, because the whole suite takes about 2.5 minutes.
 
 ## Gate reports
 
