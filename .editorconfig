@@ -15,8 +15,8 @@ indent_size = 2
 csharp_style_namespace_declarations = file_scoped:warning
 dotnet_sort_system_directives_first = true
 
-# Library code never captures a synchronization context.
-dotnet_diagnostic.CA2007.severity = warning
+# Deedbox targets hosts without a synchronization context; ConfigureAwait adds noise, not safety.
+dotnet_diagnostic.CA2007.severity = none
 
 [tests/**.cs]
 dotnet_diagnostic.CA2007.severity = none

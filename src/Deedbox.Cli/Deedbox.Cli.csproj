@@ -16,4 +16,8 @@
     <ProjectReference Include="../Deedbox.SqlServer/Deedbox.SqlServer.csproj" />
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Deedbox.Tests" />
+  </ItemGroup>
 </Project>

@@ -1,1 +1,9 @@
 #nullable enable
+Deedbox.DeedboxBuilder
+Deedbox.DeedboxBuilder.ApplySchemaOnStartup() -> Deedbox.DeedboxBuilder!
+Deedbox.DeedboxBuilder.Schema(string! name) -> Deedbox.DeedboxBuilder!
+Deedbox.DeedboxException
+Deedbox.DeedboxException.Code.get -> string!
+Deedbox.DeedboxException.DeedboxException(string! code, string! message, System.Exception? innerException = null) -> void
+Microsoft.Extensions.DependencyInjection.DeedboxServiceCollectionExtensions
+static Microsoft.Extensions.DependencyInjection.DeedboxServiceCollectionExtensions.AddDeedbox(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Deedbox.DeedboxBuilder!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!

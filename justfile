@@ -15,3 +15,7 @@ check:
     @for c in checks/*.sh; do bash "$c" || { echo "FAIL $c" >&2; exit 1; }; done
     just test
     just pack
+
+# Record new public API symbols in PublicAPI.Unshipped.txt after a deliberate API change.
+api:
+    scripts/record-public-api.sh

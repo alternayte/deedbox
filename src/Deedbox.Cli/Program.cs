@@ -1,4 +1,3 @@
-using System.CommandLine;
+using Deedbox.Cli;
 
-var root = new RootCommand("Deedbox command-line tool.");
-return await root.Parse(args).InvokeAsync().ConfigureAwait(false);
+return await CliApp.Run(args, Console.Out, Console.Error);
