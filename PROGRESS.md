@@ -241,6 +241,8 @@ Status: approved on 2026-09-24, with one addition: tenant shredding goes into st
 
 Status: approved on 2026-09-24, with native json on SQL Server added to 0.1.0.
 
+Released on 2026-09-24: https://github.com/alternayte/deedbox/releases/tag/v0.1.0. All nine packages are on nuget.org, owned by alternayte. The trusted publishing push needed three attempts: the first two got 403 on new package IDs until the nuget.org policy was corrected; Deedbox.Cli went out in the first attempt, and the reruns skipped it as a duplicate.
+
 #### State
 
 - CI is green on the step 15 commit: Postgres and SQL Server, net8.0 and net10.0, 315 tests per framework, plus the docs snippets and both template variants.
