@@ -6,4 +6,8 @@
   <ItemGroup>
     <ProjectReference Include="../Deedbox/Deedbox.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Deedbox.Tests" />
+  </ItemGroup>
 </Project>

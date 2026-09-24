@@ -169,6 +169,14 @@ public sealed class DeedboxBuilder
         return this;
     }
 
+    private readonly List<Action<DeedboxRuntime>> _checks = [];
+
+    /// <summary>Lets an extension package register services with AddDeedbox.</summary>
+    internal void AddServices(Action<IServiceCollection> register) => _services.Add(register);
+
+    /// <summary>Lets an extension package check its configuration against the built runtime, so mistakes fail at start-up.</summary>
+    internal void AddCheck(Action<DeedboxRuntime> check) => _checks.Add(check);
+
     internal void RegisterServices(IServiceCollection services)
     {
         foreach (var register in _services)
@@ -225,7 +233,10 @@ public sealed class DeedboxBuilder
         var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries, _projections, _subscriptions, _runner, _keys.Placeholder);
         var provider = _provider(_schema);
         var keys = _keys.Factory is { } factory ? new KeyRing(provider, factory(provider)) : null;
-        return new DeedboxRuntime(options, provider, registry, json) { Keys = keys };
+        var runtime = new DeedboxRuntime(options, provider, registry, json) { Keys = keys };
+        foreach (var check in _checks)
+            check(runtime);
+        return runtime;
     }
 }
 

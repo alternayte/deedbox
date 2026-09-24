@@ -15,7 +15,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 9. Personal data: [DataSubject] / [PersonalData], contract-customization encryption, key hierarchy, Database / Environment / Azure Key Vault key modes, subject_streams, erasure job, SubjectErased, stream deletion, startup safety rules, key provider compliance suite. HUMAN GATE 2: security review of crypto, key handling and erasure.
 - [x] 10. Operations: remaining CLI commands, IEventStoreAdmin, metrics, traces, DBX error codes with docs URLs.
 - [x] 11. Benchmarks: the matrix, nightly job, published results.
-- [ ] 12. Deedbox.QueueBox package against the confirmed QueueBox contract.
+- [x] 12. Deedbox.QueueBox package against the confirmed QueueBox contract.
 - [ ] 13. Docs: Starlight site, MarkdownSnippets, Vale, error catalogue, README, dotnet new template, llms.txt, agent skill, Cloudflare deploy.
 - [ ] 14. Anthology migration: data migration script, module rewrites, remove replaced kernel code, move event-store tests into Deedbox.
 - [ ] 15. Release prep: changelog, package metadata, NuGet prefix check, security policy, full nightly run green. HUMAN GATE 3: release sign-off for 0.1.0.
@@ -109,6 +109,10 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 11: Throughput regression threshold: 30% below `bench/baseline.json` per cell. The baseline comes from the first nightly run on a GitHub-hosted runner. This settles the open item; revisit the threshold if nightly noise exceeds it.
 - Step 11: Published results are in `bench/results.md`; the docs site (step 13) includes them. Peak on the CI runner: about 1,170 appends/s on Postgres, 700 on SQL Server.
 - Step 11: CI on pushes still runs the full suite on both frameworks, stricter than the SDD's PR smoke subset on net8.0, because the whole suite takes about 2.5 minutes.
+- Step 12: The QueueBox contract is QueueBox's published integration contract: `docs/integration.md` in alternayte/queuebox, which its own tests execute. It is one INSERT into the `outbox` table in the business transaction; only topic and payload are required. This settles the SDD open item. The tests create the table from QueueBox's migrations V1 and V9.
+- Step 12: `UseQueueBox(q => q.Publish<T>(topic[, payload]))` writes one row per published event from an OnAppending hook. Row id = event ID, so a destination's X-Message-Id is an idempotency key. key = stream ID, so one stream's messages keep their order. aggregate_type = stream type. Headers carry X-Correlation-Id (QueueBox's correlation header), traceparent, causation and the event's identity.
+- Step 12: Publishing an event with [PersonalData] requires a payload mapping (DBX032). Personal data never reaches the outbox in plain text by default. SubjectErased and StreamDeleted can be published like any event, which is how erasure reaches downstream systems.
+- Step 12: `UseTable(name, schema)` and `UseColumns(...)` follow QueueBox's custom table and column mapping. Identifiers must be plain names and are quoted for the dialect.
 
 ## Gate reports
 

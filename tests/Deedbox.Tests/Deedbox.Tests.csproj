@@ -11,6 +11,7 @@
     <ProjectReference Include="../../src/Deedbox.Testing/Deedbox.Testing.csproj" />
     <ProjectReference Include="../../src/Deedbox.Cli/Deedbox.Cli.csproj" />
     <ProjectReference Include="../../src/Deedbox.Keys.AzureKeyVault/Deedbox.Keys.AzureKeyVault.csproj" />
+    <ProjectReference Include="../../src/Deedbox.QueueBox/Deedbox.QueueBox.csproj" />
   </ItemGroup>
 
   <ItemGroup>

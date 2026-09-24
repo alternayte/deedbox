@@ -19,6 +19,7 @@
     <InternalsVisibleTo Include="Deedbox.Testing" />
     <InternalsVisibleTo Include="Deedbox.Cli" />
     <InternalsVisibleTo Include="Deedbox.Keys.AzureKeyVault" />
+    <InternalsVisibleTo Include="Deedbox.QueueBox" />
     <InternalsVisibleTo Include="Deedbox.Tests" />
   </ItemGroup>
 </Project>
