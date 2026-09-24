@@ -300,4 +300,4 @@ Spec: `docs/specs/queuebox-message-shaping.md` (from the grill on 2026-09-24).
 - Fix: every read by position (runner, rebuild, skip) reads the counter first and stops at it, in one batch on SQL Server and one statement on Postgres. Positions at or below the committed counter are committed, so no row in the range is in flight or reused. On locking SQL Server, the counter read waits for an append in flight; that is the wait the old read had too, one row earlier.
 - The torture observers now read through the provider, as the runner does, instead of their own range query. The ordering concept page states the bound, and shows it for apps that read the events table with their own SQL.
 - VersionPrefix is 0.2.1, with package validation against 0.2.0.
-
+- Released on 2026-09-25: https://github.com/alternayte/deedbox/releases/tag/v0.2.1. All nine packages pushed through trusted publishing.
