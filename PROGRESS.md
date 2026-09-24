@@ -244,6 +244,7 @@ Status: approved on 2026-09-24, with native json on SQL Server added to 0.1.0.
 
 - CI is green on the step 15 commit: Postgres and SQL Server, net8.0 and net10.0, 315 tests per framework, plus the docs snippets and both template variants.
 - Nightly is green on the step 15 commit: torture scale 5 on both providers, and benchmarks within 30% of the baseline in every cell (run 35975600158).
+- With native json: CI (run 35980778671) and nightly (run 35980785754, torture scale 5 including the SQL Server 2025 pass, and benchmarks) are green.
 - Anthology runs on Deedbox in https://github.com/alternayte/anthology/pull/2. All 149 Anthology tests pass on data that the old event store wrote and the migration script moved. Step 14 found four Deedbox gaps; each is fixed and tested (see the step 14 decisions).
 - The docs are live at https://deedbox-docs.pages.dev.
 
