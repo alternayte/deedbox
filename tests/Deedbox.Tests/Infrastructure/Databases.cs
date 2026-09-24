@@ -18,9 +18,15 @@ public enum Db
 /// <summary>
 /// One Postgres and one SQL Server for the whole test run. Set DEEDBOX_TEST_POSTGRES or
 /// DEEDBOX_TEST_SQLSERVER to a connection string to use an existing server instead of a container.
+/// DEEDBOX_TEST_SQLSERVER_NATIVE_JSON=1 runs SQL Server 2025 and gives every SQL Server store native json columns.
 /// </summary>
 public sealed class Databases : IAsyncLifetime
 {
+    public static bool NativeJson { get; } = Environment.GetEnvironmentVariable("DEEDBOX_TEST_SQLSERVER_NATIVE_JSON") == "1";
+
+    /// <summary>The SQL Server storage options of this run, for <c>UseSqlServer(connectionString, Databases.SqlServerOptions)</c>.</summary>
+    public static void SqlServerOptions(SqlServerOptions options) => options.NativeJson = NativeJson;
+
     private PostgreSqlContainer? _postgres;
     private MsSqlContainer? _sqlServer;
 
@@ -38,11 +44,13 @@ public sealed class Databases : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        await Task.WhenAll(StartPostgres(), StartSqlServer());
+        // The native json pass runs only SQL Server tests, so it starts no Postgres.
+        await Task.WhenAll(NativeJson ? Task.CompletedTask : StartPostgres(), StartSqlServer());
 
         // Tables the EF Core tests share, created once so test classes never race to create them.
-        await using (var pg = new Npgsql.NpgsqlConnection(Postgres))
+        if (!NativeJson)
         {
+            await using var pg = new Npgsql.NpgsqlConnection(Postgres);
             await pg.OpenAsync();
             await EfTables.Ensure(pg, Db.Postgres, CancellationToken.None);
         }
@@ -77,7 +85,7 @@ public sealed class Databases : IAsyncLifetime
         }
         else
         {
-            _sqlServer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-latest").Build();
+            _sqlServer = new MsSqlBuilder(NativeJson ? "mcr.microsoft.com/mssql/server:2025-latest" : "mcr.microsoft.com/mssql/server:2022-latest").Build();
             await _sqlServer.StartAsync();
             SqlServer = _sqlServer.GetConnectionString() + ";Max Pool Size=200";
         }

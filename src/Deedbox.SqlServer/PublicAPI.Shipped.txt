@@ -1,7 +1,13 @@
 #nullable enable
 Deedbox.DeedboxSqlServerExtensions
+Deedbox.SqlServerOptions
+Deedbox.SqlServerOptions.NativeJson.get -> bool
+Deedbox.SqlServerOptions.NativeJson.set -> void
+Deedbox.SqlServerOptions.SqlServerOptions() -> void
 Deedbox.SqlServerSchema
 static Deedbox.DeedboxSqlServerExtensions.UseSqlServer(this Deedbox.DeedboxBuilder! builder, System.Func<System.IServiceProvider!, string!>! connectionString) -> Deedbox.DeedboxBuilder!
+static Deedbox.DeedboxSqlServerExtensions.UseSqlServer(this Deedbox.DeedboxBuilder! builder, System.Func<System.IServiceProvider!, string!>! connectionString, System.Action<Deedbox.SqlServerOptions!>! configure) -> Deedbox.DeedboxBuilder!
 static Deedbox.DeedboxSqlServerExtensions.UseSqlServer(this Deedbox.DeedboxBuilder! builder, string! connectionString) -> Deedbox.DeedboxBuilder!
+static Deedbox.DeedboxSqlServerExtensions.UseSqlServer(this Deedbox.DeedboxBuilder! builder, string! connectionString, System.Action<Deedbox.SqlServerOptions!>! configure) -> Deedbox.DeedboxBuilder!
 static Deedbox.SqlServerSchema.LatestVersion.get -> int
-static Deedbox.SqlServerSchema.Script(int fromVersion = 0, string! schema = "deedbox") -> string!
+static Deedbox.SqlServerSchema.Script(int fromVersion = 0, string! schema = "deedbox", bool nativeJson = false) -> string!

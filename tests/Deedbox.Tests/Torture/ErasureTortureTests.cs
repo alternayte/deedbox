@@ -138,7 +138,8 @@ public abstract class ErasureTortureTests(Databases databases, Db db) : RunnerTe
             ? $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = '{RunnerApp}'"
             : $"""
                DECLARE @sql nvarchar(max) = N'';
-               SELECT @sql += N'KILL ' + CAST(session_id AS nvarchar(10)) + N';' FROM sys.dm_exec_sessions
+               -- A session can end between the list and its KILL; that one is already gone.
+               SELECT @sql += N'BEGIN TRY KILL ' + CAST(session_id AS nvarchar(10)) + N'; END TRY BEGIN CATCH END CATCH;' FROM sys.dm_exec_sessions
                WHERE program_name = N'{RunnerApp}' AND session_id <> @@SPID;
                EXEC (@sql);
                """;

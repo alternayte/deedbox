@@ -35,6 +35,19 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     public abstract Task<int> ReadSchemaVersion(DbConnection connection, DbTransaction? transaction, CancellationToken ct);
 
     /// <summary>
+    /// An idempotent script that applies this provider's storage options, such as native json columns, after the
+    /// migrations; null when the options need no schema change.
+    /// </summary>
+    public virtual string? StorageScript => null;
+
+    /// <summary>
+    /// Why the database cannot hold this provider's storage options, or, unless <paramref name="supportOnly"/>, why the
+    /// schema does not have them yet; null when there is no problem.
+    /// </summary>
+    public virtual Task<string?> StorageProblem(DbConnection connection, DbTransaction? transaction, bool supportOnly, CancellationToken ct) =>
+        Task.FromResult<string?>(null);
+
+    /// <summary>
     /// Reads a stream row. With <paramref name="forUpdate"/>, the row stays locked until the transaction ends;
     /// when the row does not exist, a provider that can lock the gap (SQL Server) does so, and one that cannot
     /// (Postgres) relies on <see cref="InsertStream"/> reporting a lost race.

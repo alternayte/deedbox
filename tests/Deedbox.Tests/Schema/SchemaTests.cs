@@ -1,3 +1,4 @@
+using Deedbox.SqlServer;
 using Deedbox.Tests.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -8,6 +9,48 @@ public sealed class PostgresSchemaTests(Databases databases) : SchemaTests(datab
 
 public sealed class SqlServerSchemaTests(Databases databases) : SchemaTests(databases, Db.SqlServer)
 {
+    private static readonly string[] JsonColumns = ["streams.state", "events.payload", "events.metadata", "checkpoints.error", "jobs.args", "jobs.progress"];
+
+    [Fact]
+    public async Task Native_json_converts_an_existing_store_on_a_server_with_the_type_and_fails_with_DBX034_elsewhere()
+    {
+        await using (var plain = new SqlServerProvider(ConnectionString, Schema, nativeJson: false))
+            await SchemaManager.Apply(plain, Ct);
+        var plainServices = new ServiceCollection().AddDeedbox(b => b.UseSqlServer(ConnectionString).Schema(Schema).Stream<Counter>(s => s.Events<Incremented>()));
+        await using (var before = plainServices.BuildServiceProvider())
+            await before.CreateScope().ServiceProvider.GetRequiredService<IEventStore>()
+                .Append("counter-1", ExpectedVersion.NoStream, [new Incremented(2), new Incremented(3)]);
+        var supported = await Scalar<int>("SELECT CASE WHEN TYPE_ID(N'json') IS NULL THEN 0 ELSE 1 END") == 1;
+
+        using (var notApplied = BuildHost(b => b.UseSqlServer(ConnectionString, o => o.NativeJson = true).Schema(Schema).Stream<Counter>(s => s.Events<Incremented>())))
+        {
+            var error = await Assert.ThrowsAsync<DeedboxException>(() => notApplied.StartAsync(Ct));
+            Assert.Equal(Errors.StorageOptions, error.Code);
+            Assert.Contains(supported ? "still nvarchar(max)" : "SQL Server 2025", error.Message, StringComparison.Ordinal);
+        }
+
+        if (!supported)
+        {
+            await using var json = new SqlServerProvider(ConnectionString, Schema, nativeJson: true);
+            Assert.Equal(Errors.StorageOptions, (await Assert.ThrowsAsync<DeedboxException>(() => SchemaManager.Apply(json, Ct))).Code);
+            var plainTypes = await ColumnTypes();
+            Assert.All(JsonColumns, c => Assert.Equal((c, "nvarchar"), (c, plainTypes[c])));
+            return;
+        }
+
+        using var host = BuildHost(b => b.UseSqlServer(ConnectionString, o => o.NativeJson = true).Schema(Schema).ApplySchemaOnStartup()
+            .Stream<Counter>(s => s.Events<Incremented>()));
+        await host.StartAsync(Ct);
+        var store = host.Services.CreateScope().ServiceProvider.GetRequiredService<IEventStore>();
+
+        Assert.Equal(new Counter(5, 2), (await store.Load<Counter>("counter-1")).State);
+        await store.Append("counter-1", ExpectedVersion.Exact(2), [new Incremented(1)]);
+        Assert.Equal(new Counter(6, 3), (await store.Load<Counter>("counter-1")).State);
+        var types = await ColumnTypes();
+        Assert.All(JsonColumns, c => Assert.Equal((c, "json"), (c, types[c])));
+        await host.StopAsync(Ct);
+    }
+
     [Fact]
     public async Task Stream_ids_compare_case_sensitively()
     {
@@ -99,7 +142,9 @@ public abstract class SchemaTests(Databases databases, Db db) : DatabaseTest(dat
     {
         await using var provider = CreateProvider();
 
-        Assert.Equal("", SchemaManager.Script(provider, provider.LatestSchemaVersion));
+        // Only the storage options batch remains, when the provider has one.
+        Assert.Equal(provider.StorageScript is null ? "" : SchemaScript.Render([], provider.Schema, 0, provider.StorageScript),
+            SchemaManager.Script(provider, provider.LatestSchemaVersion));
     }
 
     [Fact]
@@ -134,12 +179,12 @@ public abstract class SchemaTests(Databases databases, Db db) : DatabaseTest(dat
                 ["events.version"] = "bigint",
                 ["events.event_id"] = "uniqueidentifier",
                 ["events.event_version"] = "int",
-                ["events.payload"] = "nvarchar",
-                ["events.metadata"] = "nvarchar",
+                ["events.payload"] = Databases.NativeJson ? "json" : "nvarchar",
+                ["events.metadata"] = Databases.NativeJson ? "json" : "nvarchar",
                 ["events.occurred_at"] = "datetimeoffset",
                 ["events.stream_id"] = "nvarchar",
                 ["streams.version"] = "bigint",
-                ["streams.state"] = "nvarchar",
+                ["streams.state"] = Databases.NativeJson ? "json" : "nvarchar",
                 ["streams.state_version"] = "int",
                 ["streams.state_at"] = "bigint",
                 ["position.value"] = "bigint",
@@ -191,7 +236,7 @@ public abstract class SchemaTests(Databases databases, Db db) : DatabaseTest(dat
         await host.StopAsync(Ct);
     }
 
-    private static IHost BuildHost(Action<DeedboxBuilder> configure)
+    private protected static IHost BuildHost(Action<DeedboxBuilder> configure)
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddDeedbox(configure);
@@ -210,7 +255,7 @@ public abstract class SchemaTests(Databases databases, Db db) : DatabaseTest(dat
         return [.. names.Order(StringComparer.Ordinal)];
     }
 
-    private async Task<Dictionary<string, string>> ColumnTypes()
+    private protected async Task<Dictionary<string, string>> ColumnTypes()
     {
         await using var connection = await OpenConnection();
         await using var command = connection.CreateCommand();

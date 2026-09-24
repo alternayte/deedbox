@@ -10,6 +10,7 @@ This page lists every setting of `AddDeedbox`.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `UsePostgres(...)` or `UseSqlServer(...)` | none; required | The database: a connection string, an app-owned `NpgsqlDataSource`, or `sp => connectionString`. The last form reads the connection string from the app's services at start-up, so configuration that tests override, as with `WebApplicationFactory`, applies. |
+| `UseSqlServer(..., sql => sql.NativeJson = true)` | off | Stores JSON in SQL Server's native `json` type. Needs SQL Server 2025 or Azure SQL. |
 | `Schema(name)` | `deedbox` | The schema for Deedbox's tables. |
 | `ApplySchemaOnStartup()` | off | Applies pending migrations at start-up, under a lock. |
 | `ExecuteRetries(n)` | 3 | How often `Execute` reruns a decision after a creation race. |

@@ -13,13 +13,78 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
     internal static readonly IReadOnlyList<Migration> AllMigrations =
         Migration.LoadEmbedded(typeof(SqlServerProvider).Assembly, "Deedbox.SqlServer.Schema.");
 
+    /// <summary>The columns that hold JSON, as (table, column, nullable).</summary>
+    private static readonly (string Table, string Column, bool Nullable)[] JsonColumns =
+    [
+        ("streams", "state", true),
+        ("events", "payload", false),
+        ("events", "metadata", false),
+        ("checkpoints", "error", true),
+        ("jobs", "args", false),
+        ("jobs", "progress", true),
+    ];
+
     private readonly string _connectionString;
 
-    public SqlServerProvider(string connectionString, string schema)
+    public SqlServerProvider(string connectionString, string schema, bool nativeJson = false)
         : base(schema)
     {
         _connectionString = connectionString;
+        NativeJson = nativeJson;
         Sql = new Statements(Schema);
+    }
+
+    public bool NativeJson { get; }
+
+    public override string? StorageScript => NativeJson ? NativeJsonScript(Schema) : null;
+
+    /// <summary>
+    /// Converts every JSON column that is still nvarchar(max) to the json type, in one batch. It stops before any change
+    /// when the server has no json type. Converting a column rewrites its rows.
+    /// </summary>
+    internal static string NativeJsonScript(string schema)
+    {
+        var sql = new StringBuilder();
+        sql.AppendLine("IF TYPE_ID(N'json') IS NULL");
+        sql.AppendLine("BEGIN;");
+        sql.Append("    THROW 51000, N'").Append(NoJsonType.Replace("'", "''", StringComparison.Ordinal)).AppendLine("', 1;");
+        sql.AppendLine("END;");
+        foreach (var (table, column, nullable) in JsonColumns)
+        {
+            sql.Append("IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'[").Append(schema).Append("].[").Append(table)
+                .Append("]') AND name = N'").Append(column).AppendLine("' AND TYPE_NAME(user_type_id) <> N'json')");
+            sql.Append("    EXEC(N'ALTER TABLE [").Append(schema).Append("].[").Append(table).Append("] ALTER COLUMN ").Append(column)
+                .Append(" json ").Append(nullable ? "NULL" : "NOT NULL").AppendLine("');");
+        }
+
+        sql.AppendLine("GO");
+        return sql.ToString();
+    }
+
+    private const string NoJsonType =
+        "Native json columns need a server with the json type: SQL Server 2025, Azure SQL Database or Azure SQL Managed Instance. " +
+        "Use such a server, or turn NativeJson off.";
+
+    public override async Task<string?> StorageProblem(DbConnection connection, DbTransaction? transaction, bool supportOnly, CancellationToken ct)
+    {
+        if (!NativeJson)
+            return null;
+
+        var pending = string.Join(" OR ", JsonColumns.Select(c =>
+            $"(object_id = OBJECT_ID(N'[{Schema}].[{c.Table}]') AND name = N'{c.Column}')"));
+        await using var command = Command(connection, transaction, $"""
+            SELECT CASE WHEN TYPE_ID(N'json') IS NULL THEN -1
+                        ELSE (SELECT COUNT(*) FROM sys.columns WHERE ({pending}) AND TYPE_NAME(user_type_id) <> N'json') END
+            """);
+        var result = (int)(await command.ExecuteScalarAsync(ct))!;
+        if (result < 0)
+            return NoJsonType;
+        if (result == 0 || supportOnly)
+            return null;
+
+        return $"NativeJson is on, but {result} JSON column(s) in schema '{Schema}' are still nvarchar(max). " +
+            $"Convert them with 'deedbox schema apply --provider sqlserver --schema {Schema} --native-json --connection <connection string>', " +
+            $"or print the SQL with 'deedbox schema script --provider sqlserver --schema {Schema} --native-json', or call ApplySchemaOnStartup() in AddDeedbox.";
     }
 
     public override string Name => "sqlserver";

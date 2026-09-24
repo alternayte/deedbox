@@ -22,11 +22,11 @@ public abstract class DatabaseTest(Databases databases, Db db)
 
     internal DeedboxProvider CreateProvider(string? schema = null) => Db == Db.Postgres
         ? new PostgresProvider(NpgsqlDataSource.Create(ConnectionString), ownsDataSource: true, schema ?? Schema)
-        : new SqlServerProvider(ConnectionString, schema ?? Schema);
+        : new SqlServerProvider(ConnectionString, schema ?? Schema, Databases.NativeJson);
 
     protected DeedboxBuilder UseDatabase(DeedboxBuilder builder) => Db == Db.Postgres
         ? builder.UsePostgres(ConnectionString).Schema(Schema)
-        : builder.UseSqlServer(ConnectionString).Schema(Schema);
+        : builder.UseSqlServer(ConnectionString, Databases.SqlServerOptions).Schema(Schema);
 
     protected async Task<DbConnection> OpenConnection()
     {

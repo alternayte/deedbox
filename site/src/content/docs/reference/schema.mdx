@@ -20,6 +20,6 @@ This page describes the tables in the Deedbox schema. Deedbox owns only these ta
 | `subject_streams` | `(tenant_id, subject_id, stream_id)` | Which streams hold which subject's data. |
 | `schema_version` | `version` | Applied migrations. |
 
-On Postgres, JSON columns are `jsonb`. On SQL Server, they are `nvarchar(max)`, and key columns use the `Latin1_General_100_BIN2` collation, so IDs compare case-sensitively on both databases.
+On Postgres, JSON columns are `jsonb`. On SQL Server, they are `nvarchar(max)`, or `json` with [native json](/how-to/apply-the-schema/#use-native-json-columns-on-sql-server), and key columns use the `Latin1_General_100_BIN2` collation, so IDs compare case-sensitively on both databases.
 
 Migrations are numbered, idempotent and forward-only. See [apply the schema](/how-to/apply-the-schema/).

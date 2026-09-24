@@ -48,6 +48,8 @@ public abstract class AppendTortureTests(Databases databases, Db db) : StoreTest
 
         Log($"{run.Committed.Count} appends committed, {run.Discarded.Count} discarded ({run.Counts}), {writeTime.TotalSeconds:F1}s, " +
             $"{run.Committed.Count / writeTime.TotalSeconds:F0} commits/s");
+        foreach (var violation in run.Violations)
+            Log(violation);
         Assert.Empty(run.Violations);
         Assert.True(run.Discarded.Count > 0 && run.LongTransactions > 0, "The run must include rollbacks and long transactions.");
 

@@ -15,8 +15,8 @@ Every command that reaches the database takes `--provider postgres|sqlserver`, `
 
 | Command | Does | Runs where |
 | --- | --- | --- |
-| `deedbox schema script --from <n>` | Prints the migration SQL after version n. | CLI |
-| `deedbox schema apply` | Applies pending migrations under a lock. | CLI |
+| `deedbox schema script --from <n>` | Prints the migration SQL after version n. `--native-json` adds the SQL Server `json` conversion. | CLI |
+| `deedbox schema apply` | Applies pending migrations under a lock. `--native-json` also converts SQL Server JSON columns to `json`. | CLI |
 | `deedbox status [--json]` | Checkpoints, lag, stalled consumers with their poison event, recent jobs. | CLI |
 | `deedbox keys rewrap --from <key> --to <key>` | Re-wraps tenant keys. A key is `database`, `env:<VARIABLE>` or `azure:<key URL>`. | CLI |
 | `deedbox tenant shred <tenant> --yes` | Crypto-shreds a tenant. | CLI |

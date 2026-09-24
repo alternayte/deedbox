@@ -41,19 +41,28 @@ internal static class CliApp
 
         // ---- schema ----
         var from = new Option<int>("--from") { Description = "The schema version the database has now; 0 for a new database.", DefaultValueFactory = _ => 0 };
-        var script = new Command("script", "Print the SQL for every migration after --from.") { from };
+        var nativeJson = new Option<bool>("--native-json")
+        {
+            Description = "SQL Server: convert the JSON columns to the native json type (SQL Server 2025, Azure SQL).",
+        };
+        var script = new Command("script", "Print the SQL for every migration after --from.") { from, nativeJson };
         script.SetAction(async (result, ct) =>
         {
+            RequireSqlServerForNativeJson(result, provider, nativeJson);
             var name = SchemaName.Validate(result.GetValue(schema)!);
-            var migrations = RequireProvider(result, provider) == Postgres ? PostgresProvider.AllMigrations : SqlServerProvider.AllMigrations;
-            await output.WriteAsync(SchemaScript.Render(migrations, name, result.GetValue(from)));
+            var sql = RequireProvider(result, provider) == Postgres
+                ? SchemaScript.Render(PostgresProvider.AllMigrations, name, result.GetValue(from))
+                : SchemaScript.Render(SqlServerProvider.AllMigrations, name, result.GetValue(from),
+                    result.GetValue(nativeJson) ? SqlServerProvider.NativeJsonScript(name) : null);
+            await output.WriteAsync(sql);
             return 0;
         });
 
-        var apply = new Command("apply", "Apply pending migrations under a database lock.");
+        var apply = new Command("apply", "Apply pending migrations under a database lock.") { nativeJson };
         apply.SetAction(async (result, ct) =>
         {
-            await using var db = target.Open(result);
+            RequireSqlServerForNativeJson(result, provider, nativeJson);
+            await using var db = target.Open(result, result.GetValue(nativeJson));
             var (before, after) = await SchemaManager.Apply(db, ct);
             await output.WriteLineAsync(before == after
                 ? $"Schema '{db.Schema}' is up to date at version {after}."
@@ -236,9 +245,15 @@ internal static class CliApp
 
     private static string Text(JsonElement e, string name) => e.TryGetProperty(name, out var value) ? value.ToString() : "";
 
+    private static void RequireSqlServerForNativeJson(ParseResult result, Option<string?> provider, Option<bool> nativeJson)
+    {
+        if (result.GetValue(nativeJson) && RequireProvider(result, provider) == Postgres)
+            throw new CliException("--native-json is for SQL Server; Postgres always stores jsonb.");
+    }
+
     private sealed class Target(Option<string?> provider, Option<string> schema, Option<string?> connection)
     {
-        public DeedboxProvider Open(ParseResult result)
+        public DeedboxProvider Open(ParseResult result, bool nativeJson = false)
         {
             var name = SchemaName.Validate(result.GetValue(schema)!);
             var connectionString = result.GetValue(connection) ?? Environment.GetEnvironmentVariable("DEEDBOX_CONNECTION");
@@ -246,7 +261,7 @@ internal static class CliApp
                 throw new CliException("Pass --connection or set DEEDBOX_CONNECTION.");
             return RequireProvider(result, provider) == Postgres
                 ? new PostgresProvider(NpgsqlDataSource.Create(connectionString), ownsDataSource: true, name)
-                : new SqlServerProvider(connectionString, name);
+                : new SqlServerProvider(connectionString, name, nativeJson);
         }
     }
 }

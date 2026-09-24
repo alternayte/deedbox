@@ -5,6 +5,9 @@ build:
 # Run every test on both providers (Testcontainers) and both frameworks.
 test: build
     dotnet test Deedbox.slnx -c Release --no-build
+    # Every SQL Server test again, on SQL Server 2025 with native json columns; one framework at a time.
+    DEEDBOX_TEST_SQLSERVER_NATIVE_JSON=1 dotnet test tests/Deedbox.Tests -c Release --no-build -f net8.0 --filter "FullyQualifiedName~SqlServer"
+    DEEDBOX_TEST_SQLSERVER_NATIVE_JSON=1 dotnet test tests/Deedbox.Tests -c Release --no-build -f net10.0 --filter "FullyQualifiedName~SqlServer"
 
 # Pack every package; runs package validation.
 pack: build

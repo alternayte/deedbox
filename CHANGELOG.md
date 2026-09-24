@@ -27,5 +27,6 @@ The first release. It targets .NET 8 and .NET 10.
 - Metadata, causation and correlation, trace context capture, and shared-table tenancy.
 - Crypto-shredding of `[PersonalData]` with a per-subject key under a per-tenant key and a master key. Key modes: database, environment and Azure Key Vault. Subject erasure, tenant shredding and stream deletion.
 - `IEventStoreAdmin`, metrics, traces, and DBX error codes that link to their docs pages.
+- Native `json` columns on SQL Server 2025 and Azure SQL, with `UseSqlServer(connectionString, sql => sql.NativeJson = true)`. Applying the schema converts existing `nvarchar(max)` columns.
 
 [0.1.0]: https://github.com/alternayte/deedbox/releases/tag/v0.1.0

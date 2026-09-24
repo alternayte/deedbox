@@ -15,6 +15,13 @@ public static class SqlServerSchema
     /// </summary>
     /// <param name="fromVersion">The schema version the database has now; 0 for a new database.</param>
     /// <param name="schema">The schema name, <c>deedbox</c> by default.</param>
-    public static string Script(int fromVersion = 0, string schema = "deedbox") =>
-        SchemaScript.Render(SqlServerProvider.AllMigrations, SchemaName.Validate(schema), fromVersion);
+    /// <param name="nativeJson">
+    /// Adds the batch that converts the JSON columns to the native json type, for a store configured with
+    /// <see cref="SqlServerOptions.NativeJson"/>. It runs after the migrations and stops on a server without the type.
+    /// </param>
+    public static string Script(int fromVersion = 0, string schema = "deedbox", bool nativeJson = false)
+    {
+        var name = SchemaName.Validate(schema);
+        return SchemaScript.Render(SqlServerProvider.AllMigrations, name, fromVersion, nativeJson ? SqlServerProvider.NativeJsonScript(name) : null);
+    }
 }

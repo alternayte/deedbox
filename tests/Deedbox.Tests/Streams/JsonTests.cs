@@ -35,7 +35,7 @@ public abstract class JsonTests(Databases databases, Db db) : StoreTest(database
         var settings = new Dictionary<string, string> { ["db"] = "" };
         var services = new ServiceCollection().AddSingleton(settings);
         Func<IServiceProvider, string> connectionString = sp => sp.GetRequiredService<Dictionary<string, string>>()["db"];
-        services.AddDeedbox(b => (Db == Db.Postgres ? b.UsePostgres(connectionString) : b.UseSqlServer(connectionString))
+        services.AddDeedbox(b => (Db == Db.Postgres ? b.UsePostgres(connectionString) : b.UseSqlServer(connectionString, Databases.SqlServerOptions))
             .Schema(Schema).Stream<Counter>(s => s.Events<Incremented>()));
 
         settings["db"] = ConnectionString;

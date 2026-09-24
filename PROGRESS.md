@@ -141,6 +141,13 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 15: `.github/workflows/release.yml` runs on a v* tag. It fails unless the tag matches VersionPrefix, every Unshipped file is empty, and the changelog has a dated entry. Then it runs `just check`, packs without the suffix, pushes to nuget.org with NUGET_API_KEY, and creates the GitHub release with the changelog section.
 - Step 15: Private vulnerability reporting is on for the repository. SECURITY.md and CODE_OF_CONDUCT.md route reports through it; no personal address is published.
 - Step 15: The first gate run failed once on net8.0: a metadata test captured a trace context it did not set. DiagnosticsTests registers process-wide listeners, which make Deedbox's append span current in tests that run at the same time. Recording the append span is intended, because async handler spans continue its trace (DiagnosticsTests checks this). DiagnosticsTests now runs in a collection without parallelization.
+- Gate 3: Native json is an option of the SQL Server provider, `UseSqlServer(cs, sql => sql.NativeJson = true)`, not a numbered migration. Migration 0001 still creates nvarchar(max). A storage batch runs after the migrations on every apply, when the option is on, and converts each of the six JSON columns that is not json yet. So new stores and existing stores take the same path, and the schema version does not depend on the option. It stops before any change on a server without the json type.
+- Gate 3: The runtime SQL is the same for both column types: parameters stay nvarchar, SQL Server converts them on write, and SqlClient 5.2 reads json as text. No statement compares, sorts or groups a JSON column. The server stores JSON without insignificant whitespace, which nothing in Deedbox depends on.
+- Gate 3: With the option on, start-up fails with DBX034 when the server has no json type or a column is not converted, and names the fix. Without the option, json columns work too; nothing checks.
+- Gate 3: `SqlServerSchema.Script` gains `nativeJson`, and the CLI gains `--native-json` for schema script and apply (Postgres rejects it). The new members are recorded as shipped, because they are part of 0.1.0.
+- Gate 3: `just test` runs every SQL Server test a second time on SQL Server 2025 with native json (DEEDBOX_TEST_SQLSERVER_NATIVE_JSON=1). The first pass stays on SQL Server 2022 with nvarchar(max). The conversion test converts a store that already holds events on 2025, and expects DBX034 on 2022.
+- Gate 3: The native json pass exposed a race in the torture suites' session killer: a session could end between the list and its KILL, and the batch failed. Each KILL now ignores a session that is already gone.
+- Gate 3: One local gate run failed the append torture test in the native json pass. Both frameworks ran at once, each against an emulated SQL Server 2025 container, at 2 commits/s, and a writer's SqlException counted as a violation. Alone, the test passes in 39 s; both frameworks at once passed on a rerun. The pass now runs one framework at a time and starts no Postgres. The torture test logs each violation in full, so the next failure shows its cause.
 
 ## Gate reports
 
@@ -231,7 +238,7 @@ Status: approved on 2026-09-24, with one addition: tenant shredding goes into st
 
 ### HUMAN GATE 3: release sign-off for 0.1.0
 
-Status: waiting for sign-off.
+Status: approved on 2026-09-24, with native json on SQL Server added to 0.1.0.
 
 #### State
 
@@ -255,7 +262,7 @@ Also still open from step 13: the CLOUDFLARE_API_TOKEN secret for docs deploys f
 
 #### Decisions to confirm
 
-- SQL Server JSON columns are nvarchar(max) only. The SDD lists a native `json` opt-in "where available" (SQL Server 2025 and Azure SQL), and its open item on supported versions was never settled. Recommendation: ship 0.1.0 without it. The opt-in is additive: a later migration can change the columns for stores that choose it.
+- SQL Server native `json`: you chose to ship it in 0.1.0. It is in (see the Gate 3 decisions below).
 - Anthology drops its unread outbox instead of running the QueueBox sidecar (Anthology PR, decision 1).
 - SDD open items that only you can close: a GitHub org (the repositories are under alternayte) and a docs domain (deedbox.dev is not registered).
 

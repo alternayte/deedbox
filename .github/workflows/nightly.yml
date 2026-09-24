@@ -27,6 +27,7 @@ jobs:
         run: |
           docker pull postgres:17-alpine &
           docker pull mcr.microsoft.com/mssql/server:2022-latest &
+          docker pull mcr.microsoft.com/mssql/server:2025-latest &
           wait
       - name: just check, torture scale 5
         run: just check

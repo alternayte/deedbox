@@ -27,6 +27,16 @@ public static class Registration
         // end-snippet
     }
 
+    public static void SqlServerNativeJson(WebApplicationBuilder builder, string connStr)
+    {
+        // begin-snippet: register-sqlserver-native-json
+        builder.Services.AddDeedbox(es => es
+            .UseSqlServer(connStr, sql => sql.NativeJson = true) // SQL Server 2025 or Azure SQL
+            .ApplySchemaOnStartup()                             // converts nvarchar(max) columns to json
+            .Stream<Cart>(s => s.Events<ItemAdded, CheckedOut>()));
+        // end-snippet
+    }
+
     public static void Full(WebApplicationBuilder builder, string connStr)
     {
         // begin-snippet: register-full

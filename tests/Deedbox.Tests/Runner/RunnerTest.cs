@@ -162,7 +162,7 @@ public abstract class RunnerTest(Databases databases, Db db) : DatabaseTest(data
         builder.Services.AddHealthChecks().AddDeedboxHealthChecks();
         builder.Services.AddDeedbox(b =>
         {
-            (Db == Db.Postgres ? b.UsePostgres(connectionString) : b.UseSqlServer(connectionString)).Schema(Schema)
+            (Db == Db.Postgres ? b.UsePostgres(connectionString) : b.UseSqlServer(connectionString, Databases.SqlServerOptions)).Schema(Schema)
                 .ApplySchemaOnStartup().Stream<Cart>(s => s.Events<ItemAdded, CheckedOut>()).Stream<Order>(s => s.Events<OrderPlaced>());
             b.Runner(o =>
             {

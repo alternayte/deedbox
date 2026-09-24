@@ -3,9 +3,43 @@ using Deedbox.Tests.Infrastructure;
 
 namespace Deedbox.Tests.Schema;
 
-public sealed class PostgresCliSchemaTests(Databases databases) : CliSchemaTests(databases, Db.Postgres);
+public sealed class PostgresCliSchemaTests(Databases databases) : CliSchemaTests(databases, Db.Postgres)
+{
+    [Fact]
+    public async Task Native_json_is_rejected_for_postgres()
+    {
+        var (code, _, error) = await Cli("schema", "script", "--provider", "postgres", "--native-json");
 
-public sealed class SqlServerCliSchemaTests(Databases databases) : CliSchemaTests(databases, Db.SqlServer);
+        Assert.Equal(1, code);
+        Assert.Contains("--native-json is for SQL Server", error, StringComparison.Ordinal);
+    }
+}
+
+public sealed class SqlServerCliSchemaTests(Databases databases) : CliSchemaTests(databases, Db.SqlServer)
+{
+    [Fact]
+    public async Task Native_json_adds_the_conversion_to_the_script_and_apply_converts_or_fails_with_DBX034()
+    {
+        var (code, output, _) = await Cli("schema", "script", "--provider", "sqlserver", "--schema", Schema, "--native-json");
+        Assert.Equal((0, SqlServerSchema.Script(0, Schema, nativeJson: true)), (code, output));
+        Assert.Contains($"ALTER TABLE [{Schema}].[events] ALTER COLUMN payload json NOT NULL", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("json NOT NULL", SqlServerSchema.Script(0, Schema), StringComparison.Ordinal);
+
+        (code, output, var error) = await Cli("schema", "apply", "--provider", "sqlserver", "--schema", Schema, "--native-json", "--connection", ConnectionString);
+
+        if (await Scalar<int>("SELECT CASE WHEN TYPE_ID(N'json') IS NULL THEN 0 ELSE 1 END") == 1)
+        {
+            Assert.Equal((0, ""), (code, error));
+            Assert.Equal("json", await Scalar<string>(
+                $"SELECT data_type FROM information_schema.columns WHERE table_schema = '{Schema}' AND table_name = 'events' AND column_name = 'payload'"));
+        }
+        else
+        {
+            Assert.Equal(1, code);
+            Assert.StartsWith("DBX034:", error, StringComparison.Ordinal);
+        }
+    }
+}
 
 public abstract class CliSchemaTests(Databases databases, Db db) : DatabaseTest(databases, db)
 {
@@ -52,7 +86,7 @@ public abstract class CliSchemaTests(Databases databases, Db db) : DatabaseTest(
         Assert.Contains("mysql", error, StringComparison.Ordinal);
     }
 
-    private static async Task<(int Code, string Output, string Error)> Cli(params string[] args)
+    protected static async Task<(int Code, string Output, string Error)> Cli(params string[] args)
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
