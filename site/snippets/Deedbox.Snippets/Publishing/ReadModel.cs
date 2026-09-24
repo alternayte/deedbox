@@ -26,7 +26,15 @@ public record SectionView(string SectionId, string Heading, string ContentUrl);
 
 public record SectionChange(string SectionId, string Heading, string Change);  // added, changed or removed
 
-public record AuthorView(string AuthorId, string? Name, string Affiliation);
+public record AuthorView(string PersonId, string? Name, string Affiliation, bool Corresponding);
+
+public record PersonSummary(string PersonId, string? Name, string? Orcid, int Manuscripts);
+
+public record PersonView(string PersonId, string? Name, string? Orcid, IReadOnlyList<Authorship> Manuscripts);
+
+public record Authorship(string ManuscriptId, string Title, Status Status, string Affiliation, bool Corresponding);
+
+public record InstitutionCount(string Affiliation, int People, int Manuscripts);
 
 public record RoundView(int Round, int Version, Decision? Decision);
 
@@ -68,8 +76,27 @@ public class VersionSectionRow
     public required string ContentHash { get; set; }
 }
 
+// One row per person, and one per authorship: who wrote what, across every manuscript.
+public class PersonRow
+{
+    public required string PersonId { get; set; }
+    public string? Name { get; set; }   // null once the person is erased
+    public string? Orcid { get; set; }
+}
+
+public class ManuscriptAuthorRow
+{
+    public required string ManuscriptId { get; set; }
+    public required string PersonId { get; set; }
+    public long Position { get; set; }  // byline order
+    public required string Affiliation { get; set; }
+    public bool Corresponding { get; set; }
+}
+
 public class PublishingDb(DbContextOptions<PublishingDb> options) : DbContext(options)
 {
+    public DbSet<PersonRow> People => Set<PersonRow>();
+    public DbSet<ManuscriptAuthorRow> ManuscriptAuthors => Set<ManuscriptAuthorRow>();
     public DbSet<ManuscriptRow> Manuscripts => Set<ManuscriptRow>();
     public DbSet<VersionRow> Versions => Set<VersionRow>();
     public DbSet<VersionSectionRow> VersionSections => Set<VersionSectionRow>();
@@ -88,6 +115,14 @@ public class PublishingDb(DbContextOptions<PublishingDb> options) : DbContext(op
         manuscripts.HasIndex(m => m.Title).HasMethod("gin").HasOperators("gin_trgm_ops");  // title search
         model.Entity<VersionRow>().ToTable("versions").HasKey(v => new { v.ManuscriptId, v.Number });
         model.Entity<VersionSectionRow>().ToTable("version_sections").HasKey(s => new { s.ManuscriptId, s.Version, s.Position });
+
+        var people = model.Entity<PersonRow>().ToTable("people");
+        people.HasKey(p => p.PersonId);
+        people.HasIndex(p => p.Name).HasMethod("gin").HasOperators("gin_trgm_ops");               // search by name
+        var authors = model.Entity<ManuscriptAuthorRow>().ToTable("manuscript_authors");
+        authors.HasKey(a => new { a.ManuscriptId, a.PersonId });
+        authors.HasIndex(a => a.PersonId);                                                          // manuscripts by person
+        authors.HasIndex(a => a.Affiliation).HasMethod("gin").HasOperators("gin_trgm_ops");       // search by affiliation
     }
 }
 
@@ -114,7 +149,7 @@ public sealed class ManuscriptProjection : Projection<PublishingDb>
             return Task.CompletedTask;
         });
 
-        On<AuthorAdded>((e, ctx) => Change(ctx, m => m with { Authors = [.. m.Authors, new AuthorView(e.AuthorId, e.Name, e.Affiliation)] }));
+        On<AuthorAdded>((e, ctx) => Change(ctx, m => m with { Authors = [.. m.Authors, new AuthorView(e.PersonId, e.Name, e.Affiliation, e.Corresponding)] }));
 
         On<VersionFrozen>(async (e, ctx) =>
         {
@@ -155,7 +190,7 @@ public sealed class ManuscriptProjection : Projection<PublishingDb>
         // Erasure deletes the author's key; the read model drops the name too.
         On<SubjectErased>((e, ctx) => Change(ctx, m => m with
         {
-            Authors = [.. m.Authors.Select(a => a.AuthorId == e.SubjectId ? a with { Name = null } : a)],
+            Authors = [.. m.Authors.Select(a => a.PersonId == e.SubjectId ? a with { Name = null } : a)],
         }));
     }
 
@@ -176,6 +211,42 @@ public sealed class ManuscriptProjection : Projection<PublishingDb>
         row.Document = Documents.Write(document);
         (row.Status, row.Doi, row.LatestVersion, row.PublishedVersion, row.UpdatedAt) =
             (document.Status, document.Doi, document.Latest?.Number, document.Published?.Number, ctx.OccurredAt);
+    }
+}
+// end-snippet
+
+// begin-snippet: publishing-people-projection
+// A second read model from the same events, for questions across manuscripts. It rebuilds on its own.
+public sealed class PeopleProjection : Projection<PublishingDb>
+{
+    public PeopleProjection()
+    {
+        On<AuthorAdded>(async (e, ctx) =>
+        {
+            // One profile per person: the newest name and ORCID win.
+            if (await ctx.Db.People.FindAsync([e.PersonId], ctx.CancellationToken) is { } person)
+                (person.Name, person.Orcid) = (e.Name, e.Orcid);
+            else
+                ctx.Db.People.Add(new PersonRow { PersonId = e.PersonId, Name = e.Name, Orcid = e.Orcid });
+
+            ctx.Db.ManuscriptAuthors.Add(new ManuscriptAuthorRow
+            {
+                ManuscriptId = ctx.StreamId, PersonId = e.PersonId, Position = ctx.Version, Affiliation = e.Affiliation, Corresponding = e.Corresponding,
+            });
+        });
+
+        // Erasure reaches every manuscript of the person; each one clears the same profile.
+        On<SubjectErased>(async (e, ctx) =>
+        {
+            if (await ctx.Db.People.FindAsync([e.SubjectId], ctx.CancellationToken) is { } person)
+                (person.Name, person.Orcid) = (null, null);
+        });
+    }
+
+    protected override async Task ResetAsync(WriteContext<PublishingDb> context)
+    {
+        await context.Db.ManuscriptAuthors.ExecuteDeleteAsync(context.CancellationToken);
+        await context.Db.People.ExecuteDeleteAsync(context.CancellationToken);
     }
 }
 // end-snippet

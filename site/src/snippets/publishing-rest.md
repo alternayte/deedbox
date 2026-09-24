@@ -18,6 +18,14 @@ public static class ManuscriptEndpoints
         api.MapGet("/{id}/versions/{number:int}/changes", async (string id, int number, int from, ManuscriptQueries q, CancellationToken ct) =>
             Results.Ok(await q.Changes(id, from, number, ct)));
 
+        // People and institutions come from the second read model.
+        app.MapGet("/people", async (string? search, int? limit, ManuscriptQueries q, CancellationToken ct) =>
+            Results.Ok(await q.People(search, Math.Clamp(limit ?? 20, 1, 100), ct)));
+        app.MapGet("/people/{personId}", async (string personId, ManuscriptQueries q, CancellationToken ct) =>
+            await q.Person(personId, ct) is { } p ? Results.Ok(p) : Results.NotFound());
+        app.MapGet("/institutions", async (string? search, int? limit, ManuscriptQueries q, CancellationToken ct) =>
+            Results.Ok(await q.Institutions(search, Math.Clamp(limit ?? 20, 1, 100), ct)));
+
         // Commands go through the stream. A rule the decider enforces becomes 409 Conflict.
         api.MapPost("/{id}/submit", (string id, IEventStore store, CancellationToken ct) =>
             Run(() => store.Execute<Manuscript>(id, Editorial.Submit, ct)));

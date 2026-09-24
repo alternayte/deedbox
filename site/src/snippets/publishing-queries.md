@@ -68,6 +68,50 @@ public sealed class ManuscriptQueries(IDbContextFactory<PublishingDb> contexts)
         return changes;
     }
 
+    // People, most prolific first. The search matches a name or any affiliation the person wrote under.
+    public async Task<List<PersonSummary>> People(string? search, int limit, CancellationToken ct = default)
+    {
+        await using var db = await contexts.CreateDbContextAsync(ct);
+        var people = db.People.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var pattern = $"%{Escape(search)}%";
+            people = people.Where(p => EF.Functions.ILike(p.Name!, pattern, @"")
+                || db.ManuscriptAuthors.Any(a => a.PersonId == p.PersonId && EF.Functions.ILike(a.Affiliation, pattern, @"")));
+        }
+
+        return await people
+            .Select(p => new { p.PersonId, p.Name, p.Orcid, Manuscripts = db.ManuscriptAuthors.Count(a => a.PersonId == p.PersonId) })
+            .OrderByDescending(p => p.Manuscripts).ThenBy(p => p.PersonId).Take(limit)
+            .Select(p => new PersonSummary(p.PersonId, p.Name, p.Orcid, p.Manuscripts)).ToListAsync(ct);
+    }
+
+    // One profile with every manuscript the person wrote, in one query.
+    public async Task<PersonView?> Person(string personId, CancellationToken ct = default)
+    {
+        await using var db = await contexts.CreateDbContextAsync(ct);
+        return await db.People.AsNoTracking().Where(p => p.PersonId == personId)
+            .Select(p => new PersonView(p.PersonId, p.Name, p.Orcid,
+                db.ManuscriptAuthors.Where(a => a.PersonId == personId)
+                    .Join(db.Manuscripts, a => a.ManuscriptId, m => m.Id, (a, m) => new { a, m })
+                    .OrderByDescending(x => x.m.UpdatedAt)
+                    .Select(x => new Authorship(x.m.Id, x.m.Title, x.m.Status, x.a.Affiliation, x.a.Corresponding)).ToList()))
+            .SingleOrDefaultAsync(ct);
+    }
+
+    // Authors and manuscripts per affiliation, most manuscripts first.
+    public async Task<List<InstitutionCount>> Institutions(string? search, int limit, CancellationToken ct = default)
+    {
+        await using var db = await contexts.CreateDbContextAsync(ct);
+        var authors = db.ManuscriptAuthors.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(search))
+            authors = authors.Where(a => EF.Functions.ILike(a.Affiliation, $"%{Escape(search)}%", @""));
+        return await authors.GroupBy(a => a.Affiliation)
+            .Select(g => new { Affiliation = g.Key, People = g.Select(a => a.PersonId).Distinct().Count(), Manuscripts = g.Select(a => a.ManuscriptId).Distinct().Count() })
+            .OrderByDescending(i => i.Manuscripts).ThenBy(i => i.Affiliation).Take(limit)
+            .Select(i => new InstitutionCount(i.Affiliation, i.People, i.Manuscripts)).ToListAsync(ct);
+    }
+
     private static string Escape(string text) => text.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
 }
 

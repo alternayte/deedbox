@@ -13,6 +13,7 @@ import Decider from '../../../snippets/publishing-decider.md';
 import DeciderTests from '../../../snippets/publishing-decider-tests.md';
 import ReadModel from '../../../snippets/publishing-read-model.md';
 import Projection from '../../../snippets/publishing-projection.md';
+import PeopleProjection from '../../../snippets/publishing-people-projection.md';
 import Views from '../../../snippets/publishing-views.md';
 import Queries from '../../../snippets/publishing-queries.md';
 import Rest from '../../../snippets/publishing-rest.md';
@@ -55,6 +56,8 @@ The names come from scholarly publishing standards:
 
    Two rules shape these events. A section's text stays out of the event: the event holds a content hash, and blob storage holds the text. `AuthorAdded` is flat, because Deedbox encrypts top-level `[PersonalData]` properties only.
 
+   `PersonId` names the person across every manuscript they write, so one person has one profile. The affiliation and the corresponding-author flag belong to this authorship: a person can write under a different affiliation on each manuscript.
+
    A version is a `VersionFrozen` event. It lists the sections as they are at that moment, and nothing changes it later.
 
 2. Write the state. It holds only what the decisions need: the working copy, the sections of the latest version, and the status. The version history does not go in the state; the read model keeps it.
@@ -87,6 +90,7 @@ The names come from scholarly publishing standards:
    | --- | --- | --- |
    | `manuscripts` | The title, status, DOI and version numbers as columns, and the whole `ManuscriptView` as a `jsonb` document | The list, from the columns; the detail page, from the document |
    | `versions` and `version_sections` | Every frozen version and its sections | The history, one version, and changes between two |
+   | `people` and `manuscript_authors` | One profile per person, and one row per authorship | Manuscripts by person, search by name or affiliation, counts per person and per institution |
 
    The document is a read model built for one query: the detail page reads one row by its key. Writes are rare, so the projection can rewrite the document on every event. The history stays in its own tables, because a manuscript can have many versions.
 
@@ -94,11 +98,17 @@ The names come from scholarly publishing standards:
 
    <Projection />
 
-   Inline suits editorial screens: an author who submits sees the new version at once, and manuscripts get few writes. Register a second projection with `Run.Async` for work that may lag, such as a search index or the public site. See [add a projection](/how-to/add-a-projection/).
+   Inline suits editorial screens: an author who submits sees the new version at once, and manuscripts get few writes. Register a second projection with `Run.Async` for work that may lag, such as a search index or the public site. See [inline or async projections](/concepts/inline-or-async/).
 
    Each handler changes the document, and `Change` copies the fields that the list filters and sorts on into their columns. The projection also handles `SubjectErased`: when an author is erased, Deedbox deletes their key and appends `SubjectErased`, and the projection clears their name.
 
-7. Write the queries. Every read goes through this class.
+7. Write a second projection for people. Questions across manuscripts, such as "every manuscript by this person", need rows to filter and join on, not a document per manuscript.
+
+   <PeopleProjection />
+
+   Both projections read the same events, and each one keeps its own checkpoint, so you can rebuild one without the other. The detail page still shows the authors from the manuscript document, so it stays one read.
+
+8. Write the queries. Every read goes through this class.
 
    <Queries />
 
@@ -107,12 +117,15 @@ The names come from scholarly publishing standards:
    | `List` | One query on the `manuscripts` columns. Keyset paging stays correct while manuscripts change, unlike page numbers. The title search is case-insensitive, and a trigram index keeps it fast. |
    | `Manuscript` | One read of the document by its key |
    | `Versions`, `Version`, `Changes` | One query each. `Changes` compares the content hashes of two versions, so no event stores a diff. |
+   | `People` | One query. It matches a name, or any affiliation the person wrote under, and sorts by manuscript count. |
+   | `Person` | One query: the profile and every manuscript, with the affiliation of each authorship |
+   | `Institutions` | One query that counts people and manuscripts per affiliation |
 
-8. Serve the queries over REST, and send commands through the stream.
+9. Serve the queries over REST, and send commands through the stream.
 
    <Rest />
 
-9. Register everything in `Program.cs`, and map the endpoints.
+10. Register everything in `Program.cs`, and map the endpoints.
 
     <Register />
 
@@ -132,6 +145,9 @@ curl localhost:5000/manuscripts/m-1                                          # l
 curl localhost:5000/manuscripts/m-1/versions                                 # the history
 curl localhost:5000/manuscripts/m-1/versions/2                               # one frozen version
 curl "localhost:5000/manuscripts/m-1/versions/2/changes?from=1"              # what the revision changed
+curl "localhost:5000/people?search=royal"                                    # people by name or affiliation
+curl localhost:5000/people/person:ada                                        # one profile and every manuscript
+curl localhost:5000/institutions                                             # people and manuscripts per affiliation
 ```
 
 A command that breaks a rule, such as submitting a published article, returns 409 Conflict with the decider's message.
@@ -144,4 +160,4 @@ To serve the same read model over GraphQL, see [serve a read model over GraphQL]
 - Start an `article-{doi}` stream at publication, so post-publication events stay apart from the editorial history.
 - Send `Published` and `UpdateIssued` to your Crossref deposit service with [QueueBox](/how-to/wire-queuebox/), as CloudEvents if it expects them.
 - Add the other stages when you need them: preprints, proofs, and the Enhanced Version of Record.
-- Rebuild the read model after you change it. See [rebuild a projection](/how-to/rebuild-a-projection/).
+- Rebuild a read model after you change its logic. See [rebuild a projection](/how-to/rebuild-a-projection/). To change its tables while the old ones serve reads, see [replace a read model without downtime](/how-to/replace-a-read-model/).

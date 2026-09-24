@@ -21,7 +21,15 @@ public record SectionView(string SectionId, string Heading, string ContentUrl);
 
 public record SectionChange(string SectionId, string Heading, string Change);  // added, changed or removed
 
-public record AuthorView(string AuthorId, string? Name, string Affiliation);
+public record AuthorView(string PersonId, string? Name, string Affiliation, bool Corresponding);
+
+public record PersonSummary(string PersonId, string? Name, string? Orcid, int Manuscripts);
+
+public record PersonView(string PersonId, string? Name, string? Orcid, IReadOnlyList<Authorship> Manuscripts);
+
+public record Authorship(string ManuscriptId, string Title, Status Status, string Affiliation, bool Corresponding);
+
+public record InstitutionCount(string Affiliation, int People, int Manuscripts);
 
 public record RoundView(int Round, int Version, Decision? Decision);
 

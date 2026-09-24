@@ -9,7 +9,8 @@ builder.Services.AddDeedbox(es => es
     .Stream<Manuscript>("manuscript", s => s
         .Events<ManuscriptStarted, SectionRevised, AuthorAdded, VersionFrozen, ReviewRoundOpened, DecisionMade>()
         .Events<Published, UpdateIssued>())
-    .Projection<ManuscriptProjection>("manuscripts", Run.Inline));
+    .Projection<ManuscriptProjection>("manuscripts", Run.Inline)
+    .Projection<PeopleProjection>("people", Run.Inline));
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));  // "Published", not 5
 ```
 <!-- endSnippet -->

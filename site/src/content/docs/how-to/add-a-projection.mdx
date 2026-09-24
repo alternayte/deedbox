@@ -31,7 +31,7 @@ Override `ResetAsync` to delete what the projection wrote. A [rebuild](/how-to/r
 - `Run.Inline` applies the projection in the append's transaction. The read model is never behind, and a failing handler fails the append.
 - `Run.Async` applies the projection in the background runner. The checkpoint commits in the same transaction as the projection's writes, so each event applies exactly once.
 
-A projection has one run mode. Registering one class twice fails at start-up, because two registrations apply each event twice.
+A projection has one run mode. Registering one class twice fails at start-up, because two registrations apply each event twice. To choose the mode, see [inline or async projections](/concepts/inline-or-async/).
 
 ## Handle large async workloads in batches
 

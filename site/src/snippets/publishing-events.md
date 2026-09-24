@@ -8,10 +8,13 @@ public record ManuscriptStarted(string Title);
 public record SectionRevised(string SectionId, string Heading, string ContentHash);
 
 // Flat on purpose: Deedbox encrypts top-level [PersonalData] properties only.
+// PersonId names the person across every manuscript they write; the affiliation belongs to this authorship.
 public record AuthorAdded(
-    [property: DataSubject] string AuthorId,
+    [property: DataSubject] string PersonId,
     [property: PersonalData] string Name,
-    string Affiliation);
+    [property: PersonalData] string? Orcid,
+    string Affiliation,
+    bool Corresponding);
 
 // A version is a frozen list of sections. Nothing changes it later.
 public record VersionFrozen(int Number, Stage Stage, IReadOnlyList<SectionRef> Sections, int? BasedOn, string? Reason);

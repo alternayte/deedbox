@@ -23,10 +23,13 @@ public record ManuscriptStarted(string Title);
 public record SectionRevised(string SectionId, string Heading, string ContentHash);
 
 // Flat on purpose: Deedbox encrypts top-level [PersonalData] properties only.
+// PersonId names the person across every manuscript they write; the affiliation belongs to this authorship.
 public record AuthorAdded(
-    [property: DataSubject] string AuthorId,
+    [property: DataSubject] string PersonId,
     [property: PersonalData] string Name,
-    string Affiliation);
+    [property: PersonalData] string? Orcid,
+    string Affiliation,
+    bool Corresponding);
 
 // A version is a frozen list of sections. Nothing changes it later.
 public record VersionFrozen(int Number, Stage Stage, IReadOnlyList<SectionRef> Sections, int? BasedOn, string? Reason);
@@ -47,15 +50,17 @@ public record Manuscript(
     Status Status,
     ImmutableList<SectionRef> Draft,   // the working copy that authors edit
     ImmutableList<SectionRef> Frozen,  // the sections of the latest version
+    ImmutableList<string> Authors,     // person IDs, in byline order
     int LatestVersion,
     int Round) : IState<Manuscript>
 {
-    public static Manuscript Initial { get; } = new(null, Status.Draft, [], [], 0, 0);
+    public static Manuscript Initial { get; } = new(null, Status.Draft, [], [], [], 0, 0);
 
     public static Manuscript Evolve(Manuscript m, object e) => e switch
     {
         ManuscriptStarted s => m with { Title = s.Title },
         SectionRevised r => m with { Draft = Put(m.Draft, new(r.SectionId, r.Heading, r.ContentHash)) },
+        AuthorAdded a => m with { Authors = m.Authors.Add(a.PersonId) },
         VersionFrozen v => m with { Frozen = [.. v.Sections], LatestVersion = v.Number },
         ReviewRoundOpened o => m with { Status = Status.UnderReview, Round = o.Round },
         DecisionMade { Decision: Decision.Accept } => m with { Status = Status.Accepted },
@@ -81,11 +86,13 @@ public static class Editorial
         yield return new ManuscriptStarted(title);
     }
 
-    public static IEnumerable<object> AddAuthor(Manuscript m, string authorId, string name, string affiliation)
+    public static IEnumerable<object> AddAuthor(Manuscript m, string personId, string name, string? orcid, string affiliation, bool corresponding = false)
     {
         if (m.Status is not (Status.Draft or Status.InRevision))
             throw new InvalidOperationException($"Authors cannot change while the manuscript is {m.Status}.");
-        yield return new AuthorAdded(authorId, name, affiliation);
+        if (m.Authors.Contains(personId))
+            throw new InvalidOperationException($"{personId} is an author already.");
+        yield return new AuthorAdded(personId, name, orcid, affiliation, corresponding);
     }
 
     // Authors edit the working copy before submission and during a revision, never while reviewers read it.

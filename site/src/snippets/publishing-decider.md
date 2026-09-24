@@ -9,11 +9,13 @@ public static class Editorial
         yield return new ManuscriptStarted(title);
     }
 
-    public static IEnumerable<object> AddAuthor(Manuscript m, string authorId, string name, string affiliation)
+    public static IEnumerable<object> AddAuthor(Manuscript m, string personId, string name, string? orcid, string affiliation, bool corresponding = false)
     {
         if (m.Status is not (Status.Draft or Status.InRevision))
             throw new InvalidOperationException($"Authors cannot change while the manuscript is {m.Status}.");
-        yield return new AuthorAdded(authorId, name, affiliation);
+        if (m.Authors.Contains(personId))
+            throw new InvalidOperationException($"{personId} is an author already.");
+        yield return new AuthorAdded(personId, name, orcid, affiliation, corresponding);
     }
 
     // Authors edit the working copy before submission and during a revision, never while reviewers read it.

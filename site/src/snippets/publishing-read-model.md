@@ -34,8 +34,27 @@ public class VersionSectionRow
     public required string ContentHash { get; set; }
 }
 
+// One row per person, and one per authorship: who wrote what, across every manuscript.
+public class PersonRow
+{
+    public required string PersonId { get; set; }
+    public string? Name { get; set; }   // null once the person is erased
+    public string? Orcid { get; set; }
+}
+
+public class ManuscriptAuthorRow
+{
+    public required string ManuscriptId { get; set; }
+    public required string PersonId { get; set; }
+    public long Position { get; set; }  // byline order
+    public required string Affiliation { get; set; }
+    public bool Corresponding { get; set; }
+}
+
 public class PublishingDb(DbContextOptions<PublishingDb> options) : DbContext(options)
 {
+    public DbSet<PersonRow> People => Set<PersonRow>();
+    public DbSet<ManuscriptAuthorRow> ManuscriptAuthors => Set<ManuscriptAuthorRow>();
     public DbSet<ManuscriptRow> Manuscripts => Set<ManuscriptRow>();
     public DbSet<VersionRow> Versions => Set<VersionRow>();
     public DbSet<VersionSectionRow> VersionSections => Set<VersionSectionRow>();
@@ -54,6 +73,14 @@ public class PublishingDb(DbContextOptions<PublishingDb> options) : DbContext(op
         manuscripts.HasIndex(m => m.Title).HasMethod("gin").HasOperators("gin_trgm_ops");  // title search
         model.Entity<VersionRow>().ToTable("versions").HasKey(v => new { v.ManuscriptId, v.Number });
         model.Entity<VersionSectionRow>().ToTable("version_sections").HasKey(s => new { s.ManuscriptId, s.Version, s.Position });
+
+        var people = model.Entity<PersonRow>().ToTable("people");
+        people.HasKey(p => p.PersonId);
+        people.HasIndex(p => p.Name).HasMethod("gin").HasOperators("gin_trgm_ops");               // search by name
+        var authors = model.Entity<ManuscriptAuthorRow>().ToTable("manuscript_authors");
+        authors.HasKey(a => new { a.ManuscriptId, a.PersonId });
+        authors.HasIndex(a => a.PersonId);                                                          // manuscripts by person
+        authors.HasIndex(a => a.Affiliation).HasMethod("gin").HasOperators("gin_trgm_ops");       // search by affiliation
     }
 }
 

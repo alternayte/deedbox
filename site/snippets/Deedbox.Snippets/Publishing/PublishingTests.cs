@@ -34,7 +34,7 @@ public sealed class PublishingTutorialTests : IAsyncLifetime
         Task Run(Func<Manuscript, IEnumerable<object>> decide) => store.Execute("m-1", decide, Ct);
 
         await Run(m => Editorial.Start(m, "Frozen versions in practice"));
-        await Run(m => Editorial.AddAuthor(m, "author:ada", "Ada Lovelace", "Analytical Engines Ltd"));
+        await Run(m => Editorial.AddAuthor(m, "person:ada", "Ada Lovelace", "0000-0002-1825-0097", "Analytical Engines Ltd", corresponding: true));
         await Run(m => Editorial.Revise(m, "intro", "Introduction", "h1"));
         await Run(m => Editorial.Revise(m, "methods", "Methods", "h2"));
         Assert.Equal(HttpStatusCode.OK, (await http.PostAsync("/manuscripts/m-1/submit", null, Ct)).StatusCode);
@@ -70,7 +70,7 @@ public sealed class PublishingTutorialTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Conflict, (await http.PostAsync("/manuscripts/m-1/submit", null, Ct)).StatusCode);
 
         // Erasure: the key goes at once; the job appends SubjectErased, and the projection drops the name.
-        await app.Services.CreateScope().ServiceProvider.GetRequiredService<ISubjectErasure>().EraseSubjectAsync("author:ada", Ct);
+        await app.Services.CreateScope().ServiceProvider.GetRequiredService<ISubjectErasure>().EraseSubjectAsync("person:ada", Ct);
         for (var i = 0; i < 300 && (await Json(http.GetAsync("/manuscripts/m-1", Ct))).GetProperty("authors")[0].GetProperty("name").ValueKind != JsonValueKind.Null; i++)
             await Task.Delay(100, Ct);
         Assert.Equal(JsonValueKind.Null, (await Json(http.GetAsync("/manuscripts/m-1", Ct))).GetProperty("authors")[0].GetProperty("name").ValueKind);
@@ -103,6 +103,42 @@ public sealed class PublishingTutorialTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task People_have_one_profile_across_manuscripts_and_can_be_searched_counted_and_erased()
+    {
+        await using var app = await Start();
+        var http = app.GetTestClient();
+        var store = Store(app);
+        foreach (var (id, title) in new[] { ("m-1", "Frozen versions"), ("m-2", "Peer review at scale") })
+            await store.Execute<Manuscript>(id, m => Editorial.Start(m, title), Ct);
+        await store.Execute<Manuscript>("m-1", m => Editorial.AddAuthor(m, "person:ada", "Ada Lovelace", "0000-0002-1825-0097", "Analytical Engines Ltd", true), Ct);
+        await store.Execute<Manuscript>("m-1", m => Editorial.AddAuthor(m, "person:grace", "Grace Hopper", null, "Harvard"), Ct);
+        await store.Execute<Manuscript>("m-2", m => Editorial.AddAuthor(m, "person:ada", "Ada King", "0000-0002-1825-0097", "Royal Society"), Ct);
+
+        var people = await Json(http.GetAsync("/people", Ct));
+        Assert.Equal([("person:ada", "Ada King", 2), ("person:grace", "Grace Hopper", 1)], people.EnumerateArray()
+            .Select(p => (p.GetProperty("personId").GetString(), p.GetProperty("name").GetString(), p.GetProperty("manuscripts").GetInt32())));
+        Assert.Equal(["person:ada"], (await Json(http.GetAsync("/people?search=royal", Ct))).EnumerateArray().Select(p => p.GetProperty("personId").GetString()));
+        Assert.Equal(["person:grace"], (await Json(http.GetAsync("/people?search=HOPPER", Ct))).EnumerateArray().Select(p => p.GetProperty("personId").GetString()));
+
+        var ada = await Json(http.GetAsync("/people/person:ada", Ct));
+        Assert.Equal([("m-2", "Royal Society", false), ("m-1", "Analytical Engines Ltd", true)], ada.GetProperty("manuscripts").EnumerateArray()
+            .Select(m => (m.GetProperty("manuscriptId").GetString(), m.GetProperty("affiliation").GetString(), m.GetProperty("corresponding").GetBoolean())));
+
+        var institutions = await Json(http.GetAsync("/institutions", Ct));
+        Assert.Equal(3, institutions.GetArrayLength());
+        Assert.Equal((1, 1), (institutions[0].GetProperty("people").GetInt32(), institutions[0].GetProperty("manuscripts").GetInt32()));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.Execute<Manuscript>("m-1", m => Editorial.AddAuthor(m, "person:ada", "Ada", null, "Elsewhere"), Ct));
+
+        await app.Services.CreateScope().ServiceProvider.GetRequiredService<ISubjectErasure>().EraseSubjectAsync("person:ada", Ct);
+        for (var i = 0; i < 300 && (await Json(http.GetAsync("/people/person:ada", Ct))).GetProperty("name").ValueKind != JsonValueKind.Null; i++)
+            await Task.Delay(100, Ct);
+        var erased = await Json(http.GetAsync("/people/person:ada", Ct));
+        Assert.Equal((JsonValueKind.Null, JsonValueKind.Null, 2),
+            (erased.GetProperty("name").ValueKind, erased.GetProperty("orcid").ValueKind, erased.GetProperty("manuscripts").GetArrayLength()));
+    }
+
+    [Fact]
     public async Task GraphQL_loads_a_page_of_manuscripts_and_their_fields_with_one_query_per_dataloader()
     {
         await using var app = await Start();
@@ -111,7 +147,7 @@ public sealed class PublishingTutorialTests : IAsyncLifetime
         foreach (var id in new[] { "m-1", "m-2", "m-3" })
         {
             await store.Execute<Manuscript>(id, m => Editorial.Start(m, $"Title {id}"), Ct);
-            await store.Execute<Manuscript>(id, m => Editorial.AddAuthor(m, $"author:{id}", $"Author of {id}", "Lab"), Ct);
+            await store.Execute<Manuscript>(id, m => Editorial.AddAuthor(m, $"person:{id}", $"Author of {id}", null, "Lab"), Ct);
             await store.Execute<Manuscript>(id, m => Editorial.Revise(m, "intro", "Introduction", $"h-{id}"), Ct);
             await store.Execute<Manuscript>(id, Editorial.Submit, Ct);
         }

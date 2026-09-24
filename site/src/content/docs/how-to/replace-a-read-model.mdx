@@ -1,0 +1,46 @@
+---
+title: Replace a read model without downtime
+description: Build a changed read model in new tables while the old one serves reads, then switch.
+---
+
+import Register from '../../../snippets/blue-green-register.md';
+import Ready from '../../../snippets/blue-green-ready.md';
+
+This guide shows you how to change a read model's tables or shape while the old read model keeps serving reads. An [in-place rebuild](/how-to/rebuild-a-projection/) is simpler, but the read model is empty or partial until it finishes. For a large read model, that gap can be long.
+
+The method is often called a blue/green rebuild: the old projection is blue, the new one is green. Deedbox builds it from the events, so the new read model gets every change since the first event.
+
+1. Write the new projection as a new class that writes to new tables, such as `cart_summary_v2`. Create the tables.
+
+2. Register it under a new name, next to the old one. Keep the old one as it is: it serves reads until the switch.
+
+   <Register />
+
+   Register the new one as async. The runner reads every event by position, so it misses nothing during a rolling deploy. A new inline projection can miss appends from instances of the old version; see [inline or async projections](/concepts/inline-or-async/#add-an-inline-projection-during-a-rolling-deploy).
+
+3. Deploy. The runner applies every earlier event to the new projection, then keeps it current. Watch it with `deedbox status`, or from code:
+
+   <Ready />
+
+   The health check stays healthy while the new projection catches up.
+
+4. When the new projection is caught up, switch the reads to the new tables. Use a configuration flag or a deploy. Both read models stay current until the next step, so you can switch back.
+
+5. Remove the old projection's registration, and deploy.
+
+6. Drop the old tables, and delete the old projection's checkpoint:
+
+   ```sql
+   -- Postgres
+   DELETE FROM deedbox.checkpoints WHERE name = 'cart_summary';
+   -- SQL Server
+   DELETE FROM [deedbox].[checkpoints] WHERE name = N'cart_summary';
+   ```
+
+   Do this only when no running instance registers the old name. If an instance still registers it, that instance creates a new checkpoint at its next start, and replays every event into the old tables.
+
+Without step 6, `deedbox status` still lists the old projection, with a growing lag. The health check ignores it, because the app no longer registers it.
+
+## Make the new read model inline
+
+The new projection runs async, and its mode is part of its checkpoint. To run it inline after the switch, change its mode when every instance runs the new version, then rebuild it, as a projection whose mode changes stalls until it is rebuilt. During that rebuild, reads from it are partial. To avoid that gap, repeat this guide with a third name, registered inline, and deploy with the `Recreate` strategy.

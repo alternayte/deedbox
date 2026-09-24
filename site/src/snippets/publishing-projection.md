@@ -12,7 +12,7 @@ public sealed class ManuscriptProjection : Projection<PublishingDb>
             return Task.CompletedTask;
         });
 
-        On<AuthorAdded>((e, ctx) => Change(ctx, m => m with { Authors = [.. m.Authors, new AuthorView(e.AuthorId, e.Name, e.Affiliation)] }));
+        On<AuthorAdded>((e, ctx) => Change(ctx, m => m with { Authors = [.. m.Authors, new AuthorView(e.PersonId, e.Name, e.Affiliation, e.Corresponding)] }));
 
         On<VersionFrozen>(async (e, ctx) =>
         {
@@ -53,7 +53,7 @@ public sealed class ManuscriptProjection : Projection<PublishingDb>
         // Erasure deletes the author's key; the read model drops the name too.
         On<SubjectErased>((e, ctx) => Change(ctx, m => m with
         {
-            Authors = [.. m.Authors.Select(a => a.AuthorId == e.SubjectId ? a with { Name = null } : a)],
+            Authors = [.. m.Authors.Select(a => a.PersonId == e.SubjectId ? a with { Name = null } : a)],
         }));
     }
 

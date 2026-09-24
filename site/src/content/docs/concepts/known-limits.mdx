@@ -2,7 +2,7 @@
 title: Known limits
 description: What Deedbox does not do in 0.1, stated plainly.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 This page lists the limits of Deedbox 0.1, so you can plan around them.
@@ -10,7 +10,9 @@ This page lists the limits of Deedbox 0.1, so you can plan around them.
 - **Appends take turns.** One counter orders all appends. See [the benchmarks](/operations/benchmarks/) for the ceiling.
 - **Two streams in one transaction can deadlock.** A transaction that appends to two streams can deadlock with a concurrent append; the database aborts one. Nothing is lost. Append to one stream per transaction, or retry.
 - **One database per store.** Database-per-tenant comes in a later release.
-- **Rebuilds are in place.** The read model is empty or partial during a rebuild.
+- **Rebuilds are in place.** The read model is empty or partial during a rebuild. To keep serving reads, build the new read model under a new name; see [replace a read model without downtime](/how-to/replace-a-read-model/).
+- **A new inline projection can miss appends during a rolling deploy.** Instances of the old version do not apply it. Add it as async, or deploy without overlap; see [inline or async projections](/concepts/inline-or-async/).
+- **A retired projection keeps its checkpoint.** `deedbox status` lists it until you delete the row.
 - **Projections run one event at a time, in order.**
 - **Only top-level properties hold personal data.**
 - **Start-up needs the database.** Deedbox checks the schema when the host starts. Build-time OpenAPI generation starts the host too; skip hosted services when `Assembly.GetEntryAssembly()?.GetName().Name` is `GetDocument.Insider`.
