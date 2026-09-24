@@ -19,3 +19,8 @@ check:
 # Record new public API symbols in PublicAPI.Unshipped.txt after a deliberate API change.
 api:
     scripts/record-public-api.sh
+
+# Run the benchmark matrix; fails when throughput drops more than 30% below bench/baseline.json.
+bench:
+    mkdir -p artifacts/bench
+    dotnet run --project bench/Deedbox.Benchmarks -c Release -- --out artifacts/bench/results.json --markdown artifacts/bench/results.md {{ if path_exists("bench/baseline.json") == "true" { "--baseline bench/baseline.json" } else { "" } }}

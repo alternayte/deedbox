@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/bench/">
+    <Project Path="bench/Deedbox.Benchmarks/Deedbox.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Deedbox.Cli/Deedbox.Cli.csproj" />
     <Project Path="src/Deedbox.EntityFrameworkCore/Deedbox.EntityFrameworkCore.csproj" />

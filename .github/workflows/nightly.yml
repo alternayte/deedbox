@@ -1,0 +1,57 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  torture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      DEEDBOX_TORTURE_SCALE: "5"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          global-json-file: global.json
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Pull database images
+        run: |
+          docker pull postgres:17-alpine &
+          docker pull mcr.microsoft.com/mssql/server:2022-latest &
+          wait
+      - name: just check, torture scale 5
+        run: just check
+
+  benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Pull database images
+        run: |
+          docker pull postgres:17-alpine &
+          docker pull mcr.microsoft.com/mssql/server:2022-latest &
+          wait
+      # Fails when a cell's throughput is more than 30% below bench/baseline.json.
+      - name: Benchmarks
+        run: just bench
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmarks
+          path: artifacts/bench/
