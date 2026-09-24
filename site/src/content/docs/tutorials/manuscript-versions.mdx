@@ -1,0 +1,153 @@
+---
+title: Version a manuscript
+description: Model submission, review rounds, acceptance, publication and corrections, and serve every version through REST and GraphQL.
+sidebar:
+  order: 3
+---
+
+import { Steps } from '@astrojs/starlight/components';
+import Vocabulary from '../../../snippets/publishing-vocabulary.md';
+import Events from '../../../snippets/publishing-events.md';
+import State from '../../../snippets/publishing-state.md';
+import Decider from '../../../snippets/publishing-decider.md';
+import DeciderTests from '../../../snippets/publishing-decider-tests.md';
+import ReadModel from '../../../snippets/publishing-read-model.md';
+import Projection from '../../../snippets/publishing-projection.md';
+import Views from '../../../snippets/publishing-views.md';
+import Queries from '../../../snippets/publishing-queries.md';
+import Rest from '../../../snippets/publishing-rest.md';
+import GraphQL from '../../../snippets/publishing-graphql.md';
+import Register from '../../../snippets/publishing-register.md';
+import Map from '../../../snippets/publishing-map.md';
+
+In this tutorial, you build the editorial core of a journal. A manuscript goes through review rounds, acceptance, publication and a correction. Each version that a reviewer or a reader sees stays frozen, and an API serves the latest version and the full history.
+
+Do [your first stream](/tutorials/first-stream/) first. You need a Postgres database and these packages:
+
+```sh
+dotnet add package Deedbox.Postgres --prerelease
+dotnet add package Deedbox.EntityFrameworkCore --prerelease
+dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL
+dotnet add package HotChocolate.AspNetCore   # only for the GraphQL step
+```
+
+## Three kinds of version
+
+Keep these apart, or the design goes wrong:
+
+- **Stream version**: Deedbox counts every event. It serves concurrency only. Never show it to a reviewer.
+- **Event shape version**: `Event<T>(2, ...)` and its upcasters, for when an event's JSON changes. See [change an event's shape](/how-to/change-an-event-shape/).
+- **Manuscript version**: a frozen copy of the content that someone submitted, reviewed or published. This tutorial is about this kind.
+
+The names come from scholarly publishing standards:
+
+| Standard | What it says | Where it shows up here |
+| --- | --- | --- |
+| [NISO Journal Article Versions](https://www.niso.org/publications/niso-rp-8-2008-jav) | Names the stages: Submitted Manuscript Under Review, Accepted Manuscript, Version of Record, Corrected Version of Record, and others. | `Stage` |
+| [Crossref versioning](https://www.crossref.org/documentation/principles-practices/best-practices/versioning/) | The accepted manuscript and the Version of Record share one DOI. A correction does not change the article; a separate notice with its own DOI explains it. | `Published`, `UpdateIssued` |
+| [NISO CREC](https://www.niso.org/publications/rp-45-2024-crec) | A retracted article stays findable and marked. | `Retract` deletes nothing |
+
+<Steps>
+
+1. Write the vocabulary and the events.
+
+   <Vocabulary />
+
+   <Events />
+
+   Two rules shape these events. A section's text stays out of the event: the event holds a content hash, and blob storage holds the text. `AuthorAdded` is flat, because Deedbox encrypts top-level `[PersonalData]` properties only.
+
+   A version is a `VersionFrozen` event. It lists the sections as they are at that moment, and nothing changes it later.
+
+2. Write the state. It holds only what the decisions need: the working copy, the sections of the latest version, and the status. The version history does not go in the state; the read model keeps it.
+
+   <State />
+
+3. Write the decisions.
+
+   <Decider />
+
+   | Rule | Where |
+   | --- | --- |
+   | Authors edit the working copy only in a draft or during a revision. | `Revise` |
+   | Submitting freezes the working copy and pins the review round to that version. | `Submit` |
+   | Acceptance freezes the reviewed content again, as the Accepted Manuscript. | `Decide` |
+   | An editor changes an accepted manuscript without a new round: a new version at the same stage, with a reason. | `EditorialChange` |
+   | A correction adds a Corrected Version of Record and a notice. The earlier versions stay. | `Correct` |
+
+4. Test the decisions. They are pure functions, so the tests need no database.
+
+   <DeciderTests />
+
+5. Write the read model. The API reads these tables, never the events.
+
+   <ReadModel />
+
+   | Table | Holds | Serves |
+   | --- | --- | --- |
+   | `manuscripts` | Status, DOI, and the numbers of the latest and the published version | Lists and the top of a detail page |
+   | `versions` and `version_sections` | Every frozen version and its sections | The history, one version, and changes between two |
+   | `authors`, `review_rounds`, `updates` | The related records | The rest of a detail page |
+
+6. Write the projection. It runs inline, in the append's transaction, so a read right after a command sees the command's effect.
+
+   <Projection />
+
+   The projection handles `SubjectErased`. When an author is erased, Deedbox deletes their key and appends `SubjectErased` to their manuscripts, and the projection clears their name.
+
+7. Write the views and one query class. REST and GraphQL both call it, so both return the same shapes.
+
+   <Views />
+
+   <Queries />
+
+   `Latest` is the newest version, for authors and editors. `Published` is the version readers see: the Version of Record, or its latest correction. `Changes` compares two versions section by section, from the content hashes, so no event stores a diff.
+
+8. Serve the queries over REST, and send commands through the stream.
+
+   <Rest />
+
+9. Optionally, serve the same queries over GraphQL with Hot Chocolate.
+
+   <GraphQL />
+
+10. Register everything in `Program.cs`, and map the endpoints.
+
+    <Register />
+
+    <Map />
+
+    Create the read model tables with an EF Core migration, or with `EnsureCreated()` while you try this out.
+
+</Steps>
+
+## Try it
+
+```sh
+curl -X POST localhost:5000/manuscripts/m-1/submit                           # version 1, round 1
+curl -X POST "localhost:5000/manuscripts/m-1/decision?decision=MajorRevision"
+curl localhost:5000/manuscripts/m-1                                          # latest and published versions
+curl localhost:5000/manuscripts/m-1/versions                                 # the history
+curl localhost:5000/manuscripts/m-1/versions/2                               # one frozen version
+curl "localhost:5000/manuscripts/m-1/versions/2/changes?from=1"              # what the revision changed
+```
+
+The same with GraphQL:
+
+```graphql
+{
+  manuscript(id: "m-1") { status latest { number stage } published { number stage sections { heading contentUrl } } }
+  versions(id: "m-1") { number stage basedOn reason frozenAt }
+  changes(id: "m-1", from: 1, to: 2) { sectionId change }
+}
+```
+
+A command that breaks a rule, such as submitting a published article, returns 409 Conflict with the decider's message.
+
+## Next steps
+
+- Move review rounds to their own stream, such as `review-m-1-2`, with reviewer invitations and reports as `[PersonalData]` events. A [subscription](/concepts/projections-and-subscriptions/) links the round decision to the manuscript. Do not append to two streams in one transaction.
+- Start an `article-{doi}` stream at publication, so post-publication events stay apart from the editorial history.
+- Send `Published` and `UpdateIssued` to your Crossref deposit service with [QueueBox](/how-to/wire-queuebox/), as CloudEvents if it expects them.
+- Add the other stages when you need them: preprints, proofs, and the Enhanced Version of Record.
+- Rebuild the read model after you change it. See [rebuild a projection](/how-to/rebuild-a-projection/).

@@ -282,3 +282,9 @@ Spec: `docs/specs/queuebox-message-shaping.md` (from the grill on 2026-09-24).
 - `scripts/template-check.sh` takes the newest template package, because artifacts can hold templates of several versions.
 - SQL Server test connections use a 300 s command timeout. A native json gate run failed the append torture test with a SqlClient timeout in ReadStream: a writer queued behind the test's long transactions, at 2 commits/s under x86 emulation of SQL Server 2025, waited past the 30 s default. The torture checks (gaps, commit order, duplicates) are unchanged.
 - Released on 2026-09-24: https://github.com/alternayte/deedbox/releases/tag/v0.2.0. All nine packages pushed through trusted publishing in one attempt.
+
+## Docs after 0.2.0
+
+- Tutorial "Version a manuscript" (`tutorials/manuscript-versions.mdx`): versions are VersionFrozen events that list their sections, named after NISO JAV stages; corrections follow Crossref (notice with its own DOI, article DOI kept) and retractions follow NISO CREC (nothing deleted). The state keeps only what decisions need; an inline EF Core projection keeps the history in six tables; one query class serves REST and GraphQL, including the latest version, the published version, the history, one version, and section changes between two versions.
+- The tutorial code is in `site/snippets/Deedbox.Snippets/Publishing`. Its test runs the whole lifecycle on Postgres through the HTTP endpoints, a GraphQL query and an erasure. Hot Chocolate and Microsoft.AspNetCore.TestHost are docs-only package versions in Directory.Packages.props; no Deedbox package depends on them.
+
