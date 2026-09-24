@@ -281,3 +281,4 @@ Spec: `docs/specs/queuebox-message-shaping.md` (from the grill on 2026-09-24).
 - VersionPrefix is 0.2.0, and package validation uses 0.1.0 from nuget.org as its baseline, so a breaking change fails `just pack`.
 - `scripts/template-check.sh` takes the newest template package, because artifacts can hold templates of several versions.
 - SQL Server test connections use a 300 s command timeout. A native json gate run failed the append torture test with a SqlClient timeout in ReadStream: a writer queued behind the test's long transactions, at 2 commits/s under x86 emulation of SQL Server 2025, waited past the 30 s default. The torture checks (gaps, commit order, duplicates) are unchanged.
+- Released on 2026-09-24: https://github.com/alternayte/deedbox/releases/tag/v0.2.0. All nine packages pushed through trusted publishing in one attempt.
