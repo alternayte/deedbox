@@ -2,7 +2,7 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-09-24
 
 The first release. It targets .NET 8 and .NET 10.
 
