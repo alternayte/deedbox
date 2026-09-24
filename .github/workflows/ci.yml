@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          global-json-file: global.json
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      # Pull images up front so container start-up does not count against test timeouts.
+      - name: Pull database images
+        run: |
+          docker pull postgres:17-alpine &
+          docker pull mcr.microsoft.com/mssql/server:2022-latest &
+          wait
+
+      - name: just check
+        run: just check
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-results
+          path: artifacts/**/TestResults/**
+          if-no-files-found: ignore

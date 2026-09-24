@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Test helpers for Deedbox: Given/When/Then for deciders, event-contract lockfile and the provider compliance suite.</Description>
+    <IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Deedbox/Deedbox.csproj" />
+  </ItemGroup>
+</Project>

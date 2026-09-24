@@ -1,0 +1,12 @@
+# Design doc stays local
+docs/SDD.md
+
+bin/
+obj/
+artifacts/
+TestResults/
+*.user
+*.suo
+.vs/
+.idea/
+.DS_Store

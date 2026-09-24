@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>SQL Server provider for Deedbox.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Deedbox/Deedbox.csproj" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Deedbox.Cli" />
+    <InternalsVisibleTo Include="Deedbox.Tests" />
+  </ItemGroup>
+</Project>

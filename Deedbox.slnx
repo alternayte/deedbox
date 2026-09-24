@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Deedbox.Cli/Deedbox.Cli.csproj" />
+    <Project Path="src/Deedbox.EntityFrameworkCore/Deedbox.EntityFrameworkCore.csproj" />
+    <Project Path="src/Deedbox.Keys.AzureKeyVault/Deedbox.Keys.AzureKeyVault.csproj" />
+    <Project Path="src/Deedbox.Postgres/Deedbox.Postgres.csproj" />
+    <Project Path="src/Deedbox.QueueBox/Deedbox.QueueBox.csproj" />
+    <Project Path="src/Deedbox.SqlServer/Deedbox.SqlServer.csproj" />
+    <Project Path="src/Deedbox.Templates/Deedbox.Templates.csproj" />
+    <Project Path="src/Deedbox.Testing/Deedbox.Testing.csproj" />
+    <Project Path="src/Deedbox/Deedbox.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Deedbox.Tests/Deedbox.Tests.csproj" />
+  </Folder>
+</Solution>

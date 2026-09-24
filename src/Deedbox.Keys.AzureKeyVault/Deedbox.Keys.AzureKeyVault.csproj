@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Keep the Deedbox master key in Azure Key Vault or Managed HSM.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Deedbox/Deedbox.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>The deedbox command-line tool: schema scripts, status, key rewrap and lockfile diff.</Description>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>deedbox</ToolCommandName>
+    <PackageId>Deedbox.Cli</PackageId>
+    <RootNamespace>Deedbox.Cli</RootNamespace>
+    <IsAotCompatible>false</IsAotCompatible>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Deedbox/Deedbox.csproj" />
+    <ProjectReference Include="../Deedbox.Postgres/Deedbox.Postgres.csproj" />
+    <ProjectReference Include="../Deedbox.SqlServer/Deedbox.SqlServer.csproj" />
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+</Project>

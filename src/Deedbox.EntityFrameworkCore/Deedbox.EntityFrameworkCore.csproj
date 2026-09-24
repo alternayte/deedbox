@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Run Deedbox appends inside a DbContext transaction and write projections with EF Core.</Description>
+    <!-- EF Core itself is not AOT-compatible. -->
+    <IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Deedbox/Deedbox.csproj" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Deedbox.Tests" />
+  </ItemGroup>
+</Project>

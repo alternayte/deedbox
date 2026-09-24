@@ -1,0 +1,11 @@
+<Project>
+  <!--
+    Deedbox packages share internals and ship in lockstep, so a package depends on
+    the exact version of its sibling packages rather than a minimum.
+  -->
+  <Target Name="PinSiblingPackageVersions" AfterTargets="_GetProjectReferenceVersions">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Update="@(_ProjectReferencesWithVersions)" ProjectVersion="[%(_ProjectReferencesWithVersions.ProjectVersion)]" />
+    </ItemGroup>
+  </Target>
+</Project>

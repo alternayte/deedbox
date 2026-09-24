@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Deedbox/Deedbox.csproj" />
+    <ProjectReference Include="../../src/Deedbox.Postgres/Deedbox.Postgres.csproj" />
+    <ProjectReference Include="../../src/Deedbox.SqlServer/Deedbox.SqlServer.csproj" />
+    <ProjectReference Include="../../src/Deedbox.EntityFrameworkCore/Deedbox.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="../../src/Deedbox.Testing/Deedbox.Testing.csproj" />
+    <ProjectReference Include="../../src/Deedbox.Cli/Deedbox.Cli.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+</Project>
