@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write # trusted publishing: nuget.org trades the GitHub OIDC token for a short-lived API key
 
 jobs:
   release:
@@ -48,9 +49,15 @@ jobs:
       - name: Pack the release
         run: dotnet pack Deedbox.slnx -c Release -p:VersionSuffix= -o release
 
+      - name: Log in to nuget.org
+        id: nuget
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
       - name: Push to nuget.org
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
         run: dotnet nuget push "release/*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Create the GitHub release

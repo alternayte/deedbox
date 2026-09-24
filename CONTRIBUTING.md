@@ -25,7 +25,7 @@ To use an existing server, set `DEEDBOX_TEST_POSTGRES` or `DEEDBOX_TEST_SQLSERVE
 
 1. Move each `PublicAPI.Unshipped.txt` into `PublicAPI.Shipped.txt`.
 2. Set the release date in `CHANGELOG.md`.
-3. Push the tag `v<VersionPrefix>`, such as `v0.1.0`. The release workflow runs `just check`, packs without the prerelease suffix, pushes the packages to nuget.org and creates the GitHub release.
+3. Push the tag `v<VersionPrefix>`, such as `v0.1.0`. The release workflow runs `just check`, packs without the prerelease suffix, pushes the packages to nuget.org through trusted publishing, and creates the GitHub release. The nuget.org trusted publishing policy names this repository and `release.yml`; the repository variable NUGET_USER holds the nuget.org user name.
 4. Set `PackageValidationBaselineVersion` to the released version, so package validation compares the next build against it. Raise `VersionPrefix`.
 
 ## Conduct and security

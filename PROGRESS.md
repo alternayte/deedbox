@@ -148,6 +148,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Gate 3: `just test` runs every SQL Server test a second time on SQL Server 2025 with native json (DEEDBOX_TEST_SQLSERVER_NATIVE_JSON=1). The first pass stays on SQL Server 2022 with nvarchar(max). The conversion test converts a store that already holds events on 2025, and expects DBX034 on 2022.
 - Gate 3: The native json pass exposed a race in the torture suites' session killer: a session could end between the list and its KILL, and the batch failed. Each KILL now ignores a session that is already gone.
 - Gate 3: One local gate run failed the append torture test in the native json pass. Both frameworks ran at once, each against an emulated SQL Server 2025 container, at 2 commits/s, and a writer's SqlException counted as a violation. Alone, the test passes in 39 s; both frameworks at once passed on a rerun. The pass now runs one framework at a time and starts no Postgres. The torture test logs each violation in full, so the next failure shows its cause.
+- Gate 3: The release workflow publishes through nuget.org trusted publishing (GitHub OIDC, NuGet/login) instead of a stored NUGET_API_KEY. The temporary key lasts one hour and exists only in that run.
 
 ## Gate reports
 
@@ -254,7 +255,7 @@ All nine package IDs are free on nuget.org (checked 2026-09-24), and no package 
 
 #### What you do to release
 
-1. Reserve the prefix, and add the repository secret NUGET_API_KEY (a key scoped to push `Deedbox*`).
+1. Add a trusted publishing policy on nuget.org for alternayte/deedbox and `release.yml`. The workflow logs in with NuGet/login, so no API key is stored. The repository variable NUGET_USER holds the nuget.org user name. Reserving the prefix is optional and is requested by email.
 2. Set the date of the 0.1.0 entry in CHANGELOG.md.
 3. Push the tag v0.1.0. The release workflow checks, packs, pushes and creates the GitHub release.
 4. After the release, set PackageValidationBaselineVersion to 0.1.0 and raise VersionPrefix.
