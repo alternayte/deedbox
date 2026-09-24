@@ -299,6 +299,121 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
 
     public override Task Listen(Action wake, CancellationToken ct) => Task.CompletedTask;
 
+    public override async Task<List<MasterKeyRow>> ReadMasterKeys(DbConnection connection, DbTransaction? transaction, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadMasterKeys);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<MasterKeyRow>();
+        while (await reader.ReadAsync(ct))
+            rows.Add(new MasterKeyRow(reader.GetString(0), reader.GetInt32(1), (byte[])reader.GetValue(2), reader.GetString(3)));
+        return rows;
+    }
+
+    public override async Task<bool> InsertMasterKey(DbConnection connection, DbTransaction? transaction, MasterKeyRow row, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.InsertMasterKey);
+        AddMasterKey(command, row);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public override async Task UpdateMasterKey(DbConnection connection, DbTransaction transaction, MasterKeyRow row, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.UpdateMasterKey);
+        AddMasterKey(command, row);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task DeleteMasterKey(DbConnection connection, DbTransaction transaction, string tenantId, int keyVersion, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, $"DELETE FROM [{Schema}].[master_keys] WHERE tenant_id = @tenant AND key_version = @version");
+        AddText(command, "tenant", tenantId, 100);
+        Add(command, "version", keyVersion);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<SubjectKeyRow?> ReadSubjectKey(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadSubjectKey);
+        AddText(command, "tenant", tenantId, 100);
+        AddText(command, "subject", subjectId, 100);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? new SubjectKeyRow(tenantId, subjectId, reader.GetString(0), (byte[])reader.GetValue(1)) : null;
+    }
+
+    public override async Task InsertSubjectKey(DbConnection connection, DbTransaction transaction, SubjectKeyRow row, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.InsertSubjectKey);
+        AddText(command, "tenant", row.TenantId, 100);
+        AddText(command, "subject", row.SubjectId, 100);
+        AddText(command, "key_id", row.KeyId, 100);
+        ((SqlCommand)command).Parameters.Add(new SqlParameter("wrapped", SqlDbType.VarBinary, -1) { Value = row.WrappedKey });
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<Dictionary<string, byte[]>> ReadSubjectKeysById(DbConnection connection, DbTransaction? transaction, string tenantId, IReadOnlyList<string> keyIds, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadSubjectKeysById);
+        AddText(command, "tenant", tenantId, 100);
+        AddJson(command, "ids", keyIds.Select(k => new[] { k }).ToArray());
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var keys = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(ct))
+            keys[reader.GetString(0)] = (byte[])reader.GetValue(1);
+        return keys;
+    }
+
+    public override async Task<int> DeleteSubjectKey(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.DeleteSubjectKey);
+        AddText(command, "tenant", tenantId, 100);
+        AddText(command, "subject", subjectId, 100);
+        return await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task RecordSubjectStreams(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, IReadOnlyList<string> subjectIds, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.RecordSubjectStreams);
+        AddKey(command, tenantId, streamId);
+        AddJson(command, "subjects", subjectIds.Select(s => new[] { s }).ToArray());
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<List<string>> ReadSubjectStreams(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadSubjectStreams);
+        AddText(command, "tenant", tenantId, 100);
+        AddText(command, "subject", subjectId, 100);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var streams = new List<string>();
+        while (await reader.ReadAsync(ct))
+            streams.Add(reader.GetString(0));
+        return streams;
+    }
+
+    public override async Task<int> DeleteSubjectStream(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, string streamId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.DeleteSubjectStream);
+        AddKey(command, tenantId, streamId);
+        AddText(command, "subject", subjectId, 100);
+        return await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task DeleteStreamData(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, long keepFromVersion, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.DeleteStreamData);
+        AddKey(command, tenantId, streamId);
+        Add(command, "keep", keepFromVersion);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    private static void AddMasterKey(DbCommand command, MasterKeyRow row)
+    {
+        AddText(command, "tenant", row.TenantId, 100);
+        Add(command, "version", row.KeyVersion);
+        ((SqlCommand)command).Parameters.Add(new SqlParameter("wrapped", SqlDbType.VarBinary, -1) { Value = row.WrappedKey });
+        AddText(command, "wrapped_by", row.WrappedBy, 200);
+    }
+
     private static void AddJob(DbCommand command, JobRow job)
     {
         Add(command, "id", job.Id);
@@ -518,6 +633,57 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             """;
 
         public readonly string ReadJob = $"SELECT {JobColumns} FROM [{s}].[jobs] WHERE id = @id";
+
+        public readonly string ReadMasterKeys = $"SELECT tenant_id, key_version, wrapped_key, wrapped_by FROM [{s}].[master_keys] ORDER BY tenant_id, key_version";
+
+        public readonly string InsertMasterKey = $"""
+            INSERT INTO [{s}].[master_keys] (tenant_id, key_version, wrapped_key, wrapped_by)
+            SELECT @tenant, @version, @wrapped, @wrapped_by
+            WHERE NOT EXISTS (SELECT 1 FROM [{s}].[master_keys] WITH (UPDLOCK, HOLDLOCK) WHERE tenant_id = @tenant AND key_version = @version)
+            """;
+
+        public readonly string UpdateMasterKey =
+            $"UPDATE [{s}].[master_keys] SET wrapped_key = @wrapped, wrapped_by = @wrapped_by WHERE tenant_id = @tenant AND key_version = @version";
+
+        public readonly string ReadSubjectKey =
+            $"SELECT key_id, wrapped_key FROM [{s}].[subject_keys] WITH (HOLDLOCK, ROWLOCK) WHERE tenant_id = @tenant AND subject_id = @subject";
+
+        public readonly string InsertSubjectKey = $"""
+            INSERT INTO [{s}].[subject_keys] (tenant_id, subject_id, key_id, wrapped_key)
+            SELECT @tenant, @subject, @key_id, @wrapped
+            WHERE NOT EXISTS (SELECT 1 FROM [{s}].[subject_keys] WITH (UPDLOCK, HOLDLOCK) WHERE tenant_id = @tenant AND subject_id = @subject)
+            """;
+
+        public readonly string ReadSubjectKeysById = $"""
+            SELECT key_id, wrapped_key FROM [{s}].[subject_keys]
+            WHERE tenant_id = @tenant AND key_id IN (SELECT i FROM OPENJSON(@ids) WITH (i nvarchar(100) '$[0]'))
+            """;
+
+        public readonly string DeleteSubjectKey = $"""
+            UPDATE [{s}].[streams] SET state = NULL
+            WHERE tenant_id = @tenant AND stream_id IN (SELECT stream_id FROM [{s}].[subject_streams] WHERE tenant_id = @tenant AND subject_id = @subject);
+            DELETE FROM [{s}].[subject_keys] WHERE tenant_id = @tenant AND subject_id = @subject;
+            """;
+
+        public readonly string RecordSubjectStreams = $"""
+            INSERT INTO [{s}].[subject_streams] (tenant_id, subject_id, stream_id)
+            SELECT DISTINCT @tenant, j.s, @stream FROM OPENJSON(@subjects) WITH (s nvarchar(100) '$[0]') AS j
+            WHERE NOT EXISTS (
+                SELECT 1 FROM [{s}].[subject_streams] WITH (UPDLOCK, HOLDLOCK)
+                WHERE tenant_id = @tenant AND subject_id = j.s COLLATE Latin1_General_100_BIN2 AND stream_id = @stream)
+            """;
+
+        public readonly string ReadSubjectStreams =
+            $"SELECT stream_id FROM [{s}].[subject_streams] WHERE tenant_id = @tenant AND subject_id = @subject ORDER BY stream_id";
+
+        public readonly string DeleteSubjectStream =
+            $"DELETE FROM [{s}].[subject_streams] WHERE {Key} AND subject_id = @subject";
+
+        public readonly string DeleteStreamData = $"""
+            DELETE FROM [{s}].[events] WHERE {Key} AND version < @keep;
+            DELETE FROM [{s}].[subject_streams] WHERE {Key};
+            UPDATE [{s}].[streams] SET state = NULL, state_version = 0, state_at = 0, deleted_at = {Now}, updated_at = {Now} WHERE {Key};
+            """;
 
         public readonly string SaveSnapshot = $"""
             UPDATE [{s}].[streams] SET state = @state, state_version = @state_version, state_at = @state_at

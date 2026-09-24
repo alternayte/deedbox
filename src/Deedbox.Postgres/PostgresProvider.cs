@@ -314,6 +314,124 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             await connection.WaitAsync(ct);
     }
 
+    public override async Task<List<MasterKeyRow>> ReadMasterKeys(DbConnection connection, DbTransaction? transaction, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadMasterKeys);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<MasterKeyRow>();
+        while (await reader.ReadAsync(ct))
+            rows.Add(new MasterKeyRow(reader.GetString(0), reader.GetInt32(1), (byte[])reader.GetValue(2), reader.GetString(3)));
+        return rows;
+    }
+
+    public override async Task<bool> InsertMasterKey(DbConnection connection, DbTransaction? transaction, MasterKeyRow row, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.InsertMasterKey);
+        AddMasterKey(command, row);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public override async Task UpdateMasterKey(DbConnection connection, DbTransaction transaction, MasterKeyRow row, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.UpdateMasterKey);
+        AddMasterKey(command, row);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task DeleteMasterKey(DbConnection connection, DbTransaction transaction, string tenantId, int keyVersion, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, $"DELETE FROM {Schema}.master_keys WHERE tenant_id = @tenant AND key_version = @version");
+        Add(command, "tenant", tenantId);
+        Add(command, "version", keyVersion);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<SubjectKeyRow?> ReadSubjectKey(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadSubjectKey);
+        Add(command, "tenant", tenantId);
+        Add(command, "subject", subjectId);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? new SubjectKeyRow(tenantId, subjectId, reader.GetString(0), (byte[])reader.GetValue(1)) : null;
+    }
+
+    public override async Task InsertSubjectKey(DbConnection connection, DbTransaction transaction, SubjectKeyRow row, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.InsertSubjectKey);
+        Add(command, "tenant", row.TenantId);
+        Add(command, "subject", row.SubjectId);
+        Add(command, "key_id", row.KeyId);
+        Add(command, "wrapped", row.WrappedKey);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<Dictionary<string, byte[]>> ReadSubjectKeysById(DbConnection connection, DbTransaction? transaction, string tenantId, IReadOnlyList<string> keyIds, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadSubjectKeysById);
+        Add(command, "tenant", tenantId);
+        Add(command, "ids", keyIds.ToArray());
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var keys = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(ct))
+            keys[reader.GetString(0)] = (byte[])reader.GetValue(1);
+        return keys;
+    }
+
+    public override async Task<int> DeleteSubjectKey(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.DeleteSubjectKey);
+        Add(command, "tenant", tenantId);
+        Add(command, "subject", subjectId);
+        return await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task RecordSubjectStreams(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, IReadOnlyList<string> subjectIds, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.RecordSubjectStreams);
+        Add(command, "tenant", tenantId);
+        Add(command, "stream", streamId);
+        Add(command, "subjects", subjectIds.ToArray());
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<List<string>> ReadSubjectStreams(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadSubjectStreams);
+        Add(command, "tenant", tenantId);
+        Add(command, "subject", subjectId);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var streams = new List<string>();
+        while (await reader.ReadAsync(ct))
+            streams.Add(reader.GetString(0));
+        return streams;
+    }
+
+    public override async Task<int> DeleteSubjectStream(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, string streamId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.DeleteSubjectStream);
+        Add(command, "tenant", tenantId);
+        Add(command, "subject", subjectId);
+        Add(command, "stream", streamId);
+        return await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task DeleteStreamData(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, long keepFromVersion, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.DeleteStreamData);
+        Add(command, "tenant", tenantId);
+        Add(command, "stream", streamId);
+        Add(command, "keep", keepFromVersion);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    private static void AddMasterKey(DbCommand command, MasterKeyRow row)
+    {
+        Add(command, "tenant", row.TenantId);
+        Add(command, "version", row.KeyVersion);
+        Add(command, "wrapped", row.WrappedKey);
+        Add(command, "wrapped_by", row.WrappedBy);
+    }
+
     private static void AddJob(DbCommand command, JobRow job)
     {
         Add(command, "id", job.Id);
@@ -482,6 +600,52 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             """;
 
         public readonly string ReadJob = $"SELECT {JobColumns} FROM {s}.jobs WHERE id = @id";
+
+        public readonly string ReadMasterKeys = $"SELECT tenant_id, key_version, wrapped_key, wrapped_by FROM {s}.master_keys ORDER BY tenant_id, key_version";
+
+        public readonly string InsertMasterKey = $"""
+            INSERT INTO {s}.master_keys (tenant_id, key_version, wrapped_key, wrapped_by) VALUES (@tenant, @version, @wrapped, @wrapped_by)
+            ON CONFLICT (tenant_id, key_version) DO NOTHING
+            """;
+
+        public readonly string UpdateMasterKey =
+            $"UPDATE {s}.master_keys SET wrapped_key = @wrapped, wrapped_by = @wrapped_by WHERE tenant_id = @tenant AND key_version = @version";
+
+        public readonly string ReadSubjectKey =
+            $"SELECT key_id, wrapped_key FROM {s}.subject_keys WHERE tenant_id = @tenant AND subject_id = @subject FOR SHARE";
+
+        public readonly string InsertSubjectKey = $"""
+            INSERT INTO {s}.subject_keys (tenant_id, subject_id, key_id, wrapped_key) VALUES (@tenant, @subject, @key_id, @wrapped)
+            ON CONFLICT (tenant_id, subject_id) DO NOTHING
+            """;
+
+        public readonly string ReadSubjectKeysById =
+            $"SELECT key_id, wrapped_key FROM {s}.subject_keys WHERE tenant_id = @tenant AND key_id = ANY(@ids)";
+
+        public readonly string DeleteSubjectKey = $"""
+            UPDATE {s}.streams SET state = NULL
+            WHERE tenant_id = @tenant AND stream_id IN (SELECT stream_id FROM {s}.subject_streams WHERE tenant_id = @tenant AND subject_id = @subject);
+            DELETE FROM {s}.subject_keys WHERE tenant_id = @tenant AND subject_id = @subject;
+            """;
+
+        public readonly string RecordSubjectStreams = $"""
+            INSERT INTO {s}.subject_streams (tenant_id, subject_id, stream_id)
+            SELECT @tenant, subject, @stream FROM unnest(@subjects) AS subject
+            ON CONFLICT DO NOTHING
+            """;
+
+        public readonly string ReadSubjectStreams =
+            $"SELECT stream_id FROM {s}.subject_streams WHERE tenant_id = @tenant AND subject_id = @subject ORDER BY stream_id";
+
+        public readonly string DeleteSubjectStream =
+            $"DELETE FROM {s}.subject_streams WHERE tenant_id = @tenant AND subject_id = @subject AND stream_id = @stream";
+
+        public readonly string DeleteStreamData = $"""
+            DELETE FROM {s}.events WHERE tenant_id = @tenant AND stream_id = @stream AND version < @keep;
+            DELETE FROM {s}.subject_streams WHERE tenant_id = @tenant AND stream_id = @stream;
+            UPDATE {s}.streams SET state = NULL, state_version = 0, state_at = 0, deleted_at = now(), updated_at = now()
+            WHERE tenant_id = @tenant AND stream_id = @stream;
+            """;
 
         public readonly string SaveSnapshot = $"""
             UPDATE {s}.streams SET state = @state, state_version = @state_version, state_at = @state_at

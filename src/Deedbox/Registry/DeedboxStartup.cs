@@ -29,6 +29,12 @@ internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServicePro
         }
 
         await StoredNames.Verify(runtime, cancellationToken);
+        if (runtime.Keys is { } keys)
+        {
+            await keys.LoadAll(cancellationToken);
+            if (keys.Master is DatabaseMasterKey)
+                LogDatabaseMasterKey();
+        }
         await EnsureCheckpoints(projections, cancellationToken);
     }
 
@@ -67,6 +73,9 @@ internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServicePro
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
+    [LoggerMessage(EventId = 3, Level = LogLevel.Warning, Message = "Deedbox keeps its master key in the database. Erasure works, but a database copy or backup exposes personal data. Move the key out with deedbox keys rewrap.")]
+    private partial void LogDatabaseMasterKey();
+
     [LoggerMessage(EventId = 2, Level = LogLevel.Error, Message = "Deedbox projection '{Name}' changed from {From} to {To}; it is stalled until you rebuild it.")]
     private partial void LogModeChanged(string name, string from, string to);
 
@@ -103,10 +112,10 @@ internal static class StoredNames
             {
                 problems.Add((Errors.UnmappedStoredEvent, $"Stored events '{row.EventType}' v{row.EventVersion} have no mapping. {RenameHint(registry, row, storedNames)}"));
             }
-            else if (!string.Equals(registration.Stream.Name, row.StreamType, StringComparison.Ordinal))
+            else if (registration.Stream is { } stream && !string.Equals(stream.Name, row.StreamType, StringComparison.Ordinal))
             {
                 problems.Add((Errors.StoredStreamTypeMismatch,
-                    $"Stored events '{row.EventType}' belong to stream type '{row.StreamType}', but {registration.ClrType.Name} is registered under '{registration.Stream.Name}'. Register it in the '{row.StreamType}' stream."));
+                    $"Stored events '{row.EventType}' belong to stream type '{row.StreamType}', but {registration.ClrType.Name} is registered under '{stream.Name}'. Register it in the '{row.StreamType}' stream."));
             }
             else if (row.EventVersion > registration.Version)
             {

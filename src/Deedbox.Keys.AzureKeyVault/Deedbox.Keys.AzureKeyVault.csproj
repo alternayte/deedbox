@@ -5,5 +5,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../Deedbox/Deedbox.csproj" />
+    <PackageReference Include="Azure.Security.KeyVault.Keys" />
   </ItemGroup>
 </Project>

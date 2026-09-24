@@ -1,5 +1,7 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 
@@ -16,6 +18,9 @@ internal sealed class StreamRegistration(string name, Type stateType, Func<objec
     public List<EventRegistration> Events { get; } = [];
     public JsonTypeInfo StateJson { get; set; } = null!;
 
+    /// <summary>True when any of the stream's events has [PersonalData], so its stored state is encrypted.</summary>
+    public bool HasPersonalData => Events.Any(e => e.PersonalFields.Count > 0);
+
     public object Fold(object state, IEnumerable<object> events)
     {
         foreach (var e in events)
@@ -24,12 +29,21 @@ internal sealed class StreamRegistration(string name, Type stateType, Func<objec
     }
 }
 
-internal sealed class EventRegistration(Type clrType, string name, StreamRegistration stream)
+internal sealed class EventRegistration(Type clrType, string name, StreamRegistration? stream, IReadOnlyList<PropertyInfo> properties)
 {
     public Type ClrType { get; } = clrType;
     public string Name { get; set; } = name;
     public int Version { get; set; } = 1;
-    public StreamRegistration Stream { get; } = stream;
+
+    /// <summary>The stream type the event belongs to; null for a built-in event, which any stream can hold.</summary>
+    public StreamRegistration? Stream { get; } = stream;
+
+    public bool IsBuiltIn => Stream is null;
+
+    public IReadOnlyList<PropertyInfo> Properties { get; } = properties;
+
+    /// <summary>The event's [PersonalData] properties, mapped to JSON names when the registry is built.</summary>
+    public IReadOnlyList<PersonalField> PersonalFields { get; set; } = [];
     public List<string> Aliases { get; } = [];
 
     /// <summary>Upcast steps keyed by the version each one starts from.</summary>
@@ -66,8 +80,14 @@ internal sealed partial class EventRegistry
     private readonly Dictionary<Type, EventRegistration> _byEvent = [];
     private readonly Dictionary<string, EventRegistration> _byStoredName = new(StringComparer.Ordinal);
 
-    public EventRegistry(IEnumerable<StreamRegistration> streams, DeedboxJson json)
+    public EventRegistry(IEnumerable<StreamRegistration> streams, DeedboxJson json, bool keysConfigured = true)
     {
+        foreach (var builtIn in BuiltIns())
+        {
+            _byEvent[builtIn.ClrType] = builtIn;
+            _byStoredName[builtIn.Name] = builtIn;
+        }
+
         foreach (var stream in streams)
         {
             ValidateName(stream.Name, "Stream type");
@@ -89,7 +109,26 @@ internal sealed partial class EventRegistry
             foreach (var e in stream.Events)
                 AddEvent(e, json);
         }
+
+        var personal = _byEvent.Values.Where(e => e.PersonalFields.Count > 0).Select(e => e.ClrType.Name).ToList();
+        if (personal.Count > 0 && !keysConfigured)
+        {
+            throw new DeedboxException(Errors.NoKeyMode,
+                $"Events {string.Join(", ", personal)} have [PersonalData], so Deedbox needs a key mode. Choose one in AddDeedbox: " +
+                ".Keys(keys => keys.StoreInDatabase()) to start, or .Keys(keys => keys.FromEnvironment(\"DEEDBOX_MASTER_KEY\")) to keep the master key out of the database.");
+        }
     }
+
+    public bool HasPersonalData => _byEvent.Values.Any(e => e.PersonalFields.Count > 0);
+
+    /// <summary>The stream registration for a stored stream type name, or null when that type is no longer registered.</summary>
+    public StreamRegistration? FindStream(string streamType) => _byName.GetValueOrDefault(streamType);
+
+    public static IEnumerable<EventRegistration> BuiltIns() =>
+    [
+        new EventRegistration(typeof(SubjectErased), "deedbox.subject_erased", null, []) { Json = BuiltInJson.Default.SubjectErased },
+        new EventRegistration(typeof(StreamDeleted), "deedbox.stream_deleted", null, []) { Json = BuiltInJson.Default.StreamDeleted },
+    ];
 
     public IEnumerable<StreamRegistration> Streams => _byName.Values;
 
@@ -156,6 +195,8 @@ internal sealed partial class EventRegistry
         ValidateName(e.Name, "Event type");
         if (_byEvent.TryGetValue(e.ClrType, out var sameType))
         {
+            if (sameType.IsBuiltIn)
+                throw new DeedboxException(Errors.BuiltInEvent, $"{e.ClrType.Name} is a built-in Deedbox event; every stream can hold it without registering it.");
             throw new DeedboxException(Errors.DuplicateEvent,
                 $"Event {e.ClrType.Name} is registered twice, as '{sameType.Name}' and '{e.Name}'. One CLR type maps to one stored name; keep old names readable with an alias.");
         }
@@ -198,6 +239,7 @@ internal sealed partial class EventRegistry
 
         _byEvent[e.ClrType] = e;
         e.Json = json.TypeInfo(e.ClrType);
+        e.PersonalFields = PersonalFields.Map(e.ClrType, e.Properties, json.Options);
     }
 
     public static void ValidateName(string name, string what)
@@ -227,3 +269,8 @@ internal static class Naming
         return tick < 0 ? name : name[..tick];
     }
 }
+
+[JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
+[JsonSerializable(typeof(SubjectErased))]
+[JsonSerializable(typeof(StreamDeleted))]
+internal sealed partial class BuiltInJson : JsonSerializerContext;

@@ -12,7 +12,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 6. Inline projections (EF and ADO flavours), OnAppending hook, metadata context, causation/correlation, TraceParent capture, tenancy scoping.
 - [x] 7. Async runner: checkpoints, projections, subscriptions, type filtering, LISTEN/NOTIFY and backoff, multi-instance locking, poison handling, in-place rebuilds, health checks, jobs table.
 - [x] 8. Torture suite v2: projector kills, competing instances, sparse filters, idle query budget; every Anthology regression test.
-- [ ] 9. Personal data: [DataSubject] / [PersonalData], contract-customization encryption, key hierarchy, Database / Environment / Azure Key Vault key modes, subject_streams, erasure job, SubjectErased, stream deletion, startup safety rules, key provider compliance suite. HUMAN GATE 2: security review of crypto, key handling and erasure.
+- [x] 9. Personal data: [DataSubject] / [PersonalData], contract-customization encryption, key hierarchy, Database / Environment / Azure Key Vault key modes, subject_streams, erasure job, SubjectErased, stream deletion, startup safety rules, key provider compliance suite. HUMAN GATE 2: security review of crypto, key handling and erasure.
 - [ ] 10. Operations: remaining CLI commands, IEventStoreAdmin, metrics, traces, DBX error codes with docs URLs.
 - [ ] 11. Benchmarks: the matrix, nightly job, published results.
 - [ ] 12. Deedbox.QueueBox package against the confirmed QueueBox contract.
@@ -84,6 +84,20 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 8: Torture v2 is real chaos: it kills runner sessions (pg_terminate_backend, or KILL by application name), restarts runner hosts, runs three competing instances, fails 3% of handler first attempts, and uses a 3% sparse event type. Each projection must apply every event exactly once, enforced by a primary key on the event ID. The subscription must deliver every event at least once.
 - Step 8: Idle query budget: 30 statements per minute per consumer, plus 30 for the jobs loop, with default polling. The local measurement is 48 statements in 30 s for 4 consumers, against a budget of 75. This settles the budget open item; the throughput threshold stays open until step 11.
 - Step 8: Anthology regressions: new named tests cover a transaction that starts first but appends last, a projection class rename, one NOTIFY per append, and a duplicate mapping. Existing tests that already pin the other lessons carry a Regression trait.
+- Step 9: Every encrypted blob is AES-256-GCM with a random 12-byte nonce and a 16-byte tag. Its associated data names what it is: subject key (tenant, key ID), field (key ID), stored state (tenant, stream), master wrap (master key version). A blob copied to another row does not verify.
+- Step 9: Key hierarchy as the SDD describes. A tenant key is created in its own committed transaction and cached for the life of the process. Subject keys are cached for one operation only. Appends share-lock the subject key row, so an erasure waits for open appends and their data becomes unreadable with the rest.
+- Step 9: A field is stored as {"$enc": "v1:<key ID>:<nonce>:<ciphertext>"}. Key IDs are 32 lower-case hex characters, so SQL Server's case-insensitive key_id collation cannot confuse two IDs. Migration 0003 adds a unique (tenant_id, key_id) index.
+- Step 9: [PersonalData] is read from public top-level properties with reflection. Registration generics carry the trimming annotation. Nested types are not encrypted. EventsNestedIn is marked RequiresUnreferencedCode.
+- Step 9: The stored state of a stream type that has any [PersonalData] event is sealed with the tenant key. The SDD does not say this, but without it state is plain personal data in the database, and the environment and Key Vault modes could not protect database-only leaks.
+- Step 9: Erasing a subject deletes the key and clears the stored state of every stream that holds their data, in one transaction. Nothing reads their data after the call returns; loads rebuild state from redacted events. The queued job then appends SubjectErased and stores the rebuilt state, one stream per transaction. Removing each subject-stream pair first makes a rerun a no-op.
+- Step 9: Jobs are idempotent. A job's own rejection (a DeedboxException or JobRejected) fails it at once; any other exception, such as a killed session, is retried up to 10 times. The erasure torture test found that a killed session failed an erasure job for good.
+- Step 9: `DeleteStream(streamId)` is on IEventStore. A deleted stream fails Load and Append with DBX028. Deleting a missing or already-deleted stream does nothing. Deleted events leave gaps in global positions; the runner never assumed there were none.
+- Step 9: Built-in events SubjectErased and StreamDeleted are stored as deedbox.subject_erased and deedbox.stream_deleted. They use a fixed JSON contract (web defaults) whatever the app's JSON settings. Apps cannot append them (DBX031).
+- Step 9: Key mode API: `.Keys(k => k.StoreInDatabase() / FromEnvironment(var) / FromKeyRing(ring) / Use(provider))` plus `.RedactWith(placeholder)`. The database master key is master_keys row (empty tenant, version 0). Re-wrapping to another mode deletes it. Start-up logs a warning in database mode. Re-wrap is internal until step 10 adds `deedbox keys rewrap`.
+- Step 9: IMasterKeyProvider has three members: KeyVersion, WrapAsync, UnwrapAsync. KeyVersion carries the provider prefix (env:, database:, azure:), so a row names the mode that wrapped it.
+- Step 9: Azure Key Vault uses RSA-OAEP-256 by default. A CryptographyClient overload covers Managed HSM (A256KW) and custom clients. Keys wrapped by another key version need the version-client factory.
+- Step 9: `[PersonalData(Subject = nameof(AuthorId))]` does not compile on a positional record parameter; use `Subject = "AuthorId"`. The docs step shows this.
+- Step 9: The lockfile marks personal fields as pd(subject). Removing a marker breaks at any version change.
 
 ## Gate reports
 
@@ -124,3 +138,50 @@ Every decision under "Decisions" for steps 1-4. The ones with the most weight:
 - Exact sibling-package version pins with shared internals.
 - Migration 0001 stays editable until 0.1.0 ships.
 - The added `streams.state_at` column.
+
+### HUMAN GATE 2: security review of crypto, key handling and erasure
+
+Status: waiting for review. Step 10 starts after sign-off.
+
+#### What to review
+
+| Area | Code |
+| --- | --- |
+| AES-GCM, associated data, blob formats | `src/Deedbox/PersonalData/Crypto.cs` |
+| Master key modes (key ring, database) | `src/Deedbox/PersonalData/MasterKeys.cs` |
+| Azure Key Vault | `src/Deedbox.Keys.AzureKeyVault/AzureKeyVaultMasterKey.cs` |
+| Tenant keys, subject keys, re-wrap | `src/Deedbox/PersonalData/KeyRing.cs` |
+| Field encryption, reveal, redaction | `src/Deedbox/PersonalData/Fields.cs`, `EventDecoding.cs` |
+| Erasure, stream deletion | `src/Deedbox/PersonalData/SubjectErasure.cs`, `EventStore.EraseFromStream`, `EventStore.DeleteStream`, `Runner/Jobs.cs` |
+| Key SQL (share locks, state clearing) | `ReadSubjectKey`, `DeleteSubjectKey` in both providers |
+| Start-up safety rules | `PersonalFields.Map`, `EventRegistry` (DBX025-027), `KeyRing.Load` (DBX029) |
+
+#### Guarantees and the tests that enforce them
+
+- Personal fields and the stored state of their streams are never stored in plain text (`PersonalDataTests.Personal_fields_and_state_are_stored_encrypted_and_read_back`).
+- After `EraseSubjectAsync` returns, no load reads the subject's data; after the job, every stream they touched holds one SubjectErased per subject and rebuilt state (`Erasing_a_subject_...`, `ErasureTortureTests`, with killed runners and concurrent appends).
+- An altered ciphertext, or a master key that cannot unwrap, fails loudly (DBX030, DBX029). A deleted subject key is the only thing that reads as erased (`An_altered_ciphertext_...`, `A_wrong_master_key_...`).
+- Erasure is scoped to the tenant (`Erasure_is_scoped_to_the_tenant`).
+- Every key mode passes `KeyProviderCompliance.VerifyAsync`: database, key ring, and Azure with a local RSA key. A provider that does not verify fails it.
+- Start-up fails without a key mode (DBX025), for a non-nullable personal property (DBX026), and for a missing subject (DBX027).
+
+#### Known limits, stated plainly
+
+1. Backups taken before an erasure keep the wrapped subject key, and in database mode the master key, until they age out.
+2. Projections and subscriptions receive decrypted data. The app scrubs its own tables when it handles SubjectErased.
+3. Subject IDs, stream IDs and metadata are plain text by design; the docs require pseudonymous IDs.
+4. Only top-level properties are encrypted.
+5. An event written about a subject after erasure gets a new key and stays readable. Erasure is a point in time.
+6. ErasedSubjects on an envelope is best effort when an upcaster renamed the field.
+7. There is no API yet to shred a whole tenant, although the per-tenant key supports it; it would delete the tenant's master_keys rows. Step 10 (admin API) can add it if you want it in 0.1.0.
+
+#### Decisions to confirm
+
+- Sealing personal streams' stored state with the tenant key (not in the SDD).
+- Clearing stored state as part of the key deletion.
+- The job retry policy: rejections fail, anything else retries up to 10 times.
+
+#### Items still open from gate 1 and step 6
+
+- A caller transaction that appends to two streams can deadlock with a concurrent append; the database aborts one. Nothing is lost. Document it, or change the design?
+- `app.UseDeedboxMetadata(...)` needs ASP.NET Core; the core has the scoped `DeedboxContext` instead. Add an ASP.NET Core package, or document the middleware one-liner?

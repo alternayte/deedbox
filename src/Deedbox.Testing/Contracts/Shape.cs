@@ -12,6 +12,9 @@ namespace Deedbox.Testing.Contracts;
 /// </summary>
 internal sealed record Shape(string Kind, bool Nullable, IReadOnlyList<(string Name, Shape Shape)> Members, Shape? Element)
 {
+    /// <summary>The JSON name of the subject whose key encrypts this member, when it is [PersonalData].</summary>
+    public string? PersonalSubject { get; init; }
+
     public const string Object = "object";
     public const string Array = "array";
     public const string Map = "map";
@@ -170,6 +173,8 @@ internal sealed record Shape(string Kind, bool Nullable, IReadOnlyList<(string N
 
         if (Nullable)
             text.Append('?');
+        if (PersonalSubject is not null)
+            text.Append(" pd(").Append(Quote(PersonalSubject)).Append(')');
     }
 
     private static string Quote(string name) =>
@@ -244,7 +249,15 @@ internal sealed record Shape(string Kind, bool Nullable, IReadOnlyList<(string N
                 shape = Leaf(ReadWord());
             }
 
-            return TryTake("?") ? shape.WithNullable(true) : shape;
+            if (TryTake("?"))
+                shape = shape.WithNullable(true);
+            if (TryTake("pd("))
+            {
+                shape = shape with { PersonalSubject = ReadName() };
+                Expect(")");
+            }
+
+            return shape;
         }
 
         private string ReadName()
@@ -272,6 +285,8 @@ internal sealed record Shape(string Kind, bool Nullable, IReadOnlyList<(string N
                 var c = text[_at];
                 if (c == '(')
                     depth++;
+                else if (c == ')' && depth == 0)
+                    break;
                 else if (c == ')')
                     depth--;
                 else if (depth == 0 && (char.IsWhiteSpace(c) || c is ',' or '}' or ']' or '>' or ':' or '=' or '?'))

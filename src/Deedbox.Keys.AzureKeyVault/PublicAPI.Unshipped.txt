@@ -1,1 +1,4 @@
 #nullable enable
+Deedbox.DeedboxAzureKeyVaultExtensions
+static Deedbox.DeedboxAzureKeyVaultExtensions.UseAzureKeyVault(this Deedbox.KeysBuilder! keys, Azure.Security.KeyVault.Keys.Cryptography.CryptographyClient! client, System.Func<System.Uri!, Azure.Security.KeyVault.Keys.Cryptography.CryptographyClient!>? versionClient = null, Azure.Security.KeyVault.Keys.Cryptography.KeyWrapAlgorithm? algorithm = null) -> Deedbox.KeysBuilder!
+static Deedbox.DeedboxAzureKeyVaultExtensions.UseAzureKeyVault(this Deedbox.KeysBuilder! keys, System.Uri! keyId, Azure.Core.TokenCredential! credential) -> Deedbox.KeysBuilder!

@@ -10,6 +10,7 @@
     <ProjectReference Include="../../src/Deedbox.EntityFrameworkCore/Deedbox.EntityFrameworkCore.csproj" />
     <ProjectReference Include="../../src/Deedbox.Testing/Deedbox.Testing.csproj" />
     <ProjectReference Include="../../src/Deedbox.Cli/Deedbox.Cli.csproj" />
+    <ProjectReference Include="../../src/Deedbox.Keys.AzureKeyVault/Deedbox.Keys.AzureKeyVault.csproj" />
   </ItemGroup>
 
   <ItemGroup>

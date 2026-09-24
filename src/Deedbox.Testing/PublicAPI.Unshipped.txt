@@ -12,5 +12,9 @@ Deedbox.Testing.DeciderScenario<TState>.When(System.Func<TState, System.Collecti
 Deedbox.Testing.EventContractException
 Deedbox.Testing.EventContractException.EventContractException(string! message) -> void
 Deedbox.Testing.EventContracts
+Deedbox.Testing.KeyProviderCompliance
+Deedbox.Testing.KeyProviderComplianceException
+Deedbox.Testing.KeyProviderComplianceException.KeyProviderComplianceException(string! message) -> void
 static Deedbox.Testing.Decider.Given<TState>(params object![]! events) -> Deedbox.Testing.DeciderScenario<TState>!
 static Deedbox.Testing.EventContracts.Verify(System.Action<Deedbox.DeedboxBuilder!>! configure, string! lockfile = "events.lock", string! callerFile = "") -> void
+static Deedbox.Testing.KeyProviderCompliance.VerifyAsync(Deedbox.IMasterKeyProvider! provider, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!

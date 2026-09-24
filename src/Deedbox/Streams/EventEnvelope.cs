@@ -5,8 +5,9 @@ public sealed class EventEnvelope
 {
     internal EventEnvelope(
         Guid eventId, string tenantId, string streamId, string streamType, long version, long globalPosition,
-        string eventType, int eventVersion, object @event, EventMetadata metadata, DateTimeOffset occurredAt)
+        string eventType, int eventVersion, object @event, EventMetadata metadata, DateTimeOffset occurredAt, IReadOnlyList<string>? erasedSubjects = null)
     {
+        ErasedSubjects = erasedSubjects ?? [];
         Metadata = metadata;
         EventId = eventId;
         TenantId = tenantId;
@@ -52,6 +53,12 @@ public sealed class EventEnvelope
 
     /// <summary>The event's metadata: correlation, causation, actor, trace context and headers.</summary>
     public EventMetadata Metadata { get; }
+
+    /// <summary>
+    /// Subjects whose personal data in this event was erased, so those properties read as null or the placeholder.
+    /// Empty for most events.
+    /// </summary>
+    public IReadOnlyList<string> ErasedSubjects { get; }
 
     /// <summary>When the event was appended.</summary>
     public DateTimeOffset OccurredAt { get; }

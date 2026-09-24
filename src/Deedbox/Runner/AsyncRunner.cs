@@ -190,7 +190,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
                 return Outcome.Progress;
             }
 
-            await consumer.Process(Decode(stored), connection, transaction, services, ct);
+            await consumer.Process(await Decode(connection, transaction, stored, ct), connection, transaction, services, ct);
 
             var last = stored[^1].GlobalPosition;
 
@@ -267,7 +267,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
             var stored = await Provider.ReadEventsAfter(connection, transaction, position, Options.BatchSize, consumer.PayloadTypes, ct);
             if (stored.Count == 0)
                 break;
-            await consumer.Process(Decode(stored), connection, transaction, services, ct);
+            await consumer.Process(await Decode(connection, transaction, stored, ct), connection, transaction, services, ct);
             position = stored[^1].GlobalPosition;
         }
 
@@ -275,36 +275,27 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
             row with { Position = Math.Max(position, head), Status = CheckpointStatus.Running, Mode = consumer.Mode, Error = null }, ct);
     }
 
-    private List<EventEnvelope> Decode(List<StoredEvent> stored)
+    private async Task<List<EventEnvelope>> Decode(DbConnection connection, DbTransaction transaction, List<StoredEvent> stored, CancellationToken ct)
     {
-        var envelopes = new List<EventEnvelope>();
-        foreach (var e in stored)
+        List<DecodedEvent> decoded;
+        try
         {
-            if (e.Payload is null)
-                continue;
-
-            object decoded;
-            try
-            {
-                decoded = runtime.Registry.Decode(e.EventType, e.EventVersion, e.Payload);
-            }
-            catch (Exception ex)
-            {
-                var placeholder = Envelope(e, ex);
-                throw new HandlerFailure(placeholder, e.GlobalPosition, ex);
-            }
-
-            envelopes.Add(Envelope(e, decoded));
+            decoded = await EventDecoding.Decode(runtime, connection, transaction, stored, ct);
+        }
+        catch (DecodeFailure failure)
+        {
+            // An event that cannot be decoded is poison like a failing handler: retried, then the consumer stalls on it.
+            throw new HandlerFailure(Envelope(failure.Stored, failure.InnerException!, []), failure.Stored.GlobalPosition, failure.InnerException!);
         }
 
-        return envelopes;
+        return decoded.Select(d => Envelope(d.Stored, d.Event, d.ErasedSubjects)).ToList();
     }
 
-    private EventEnvelope Envelope(StoredEvent e, object decoded)
+    private EventEnvelope Envelope(StoredEvent e, object decoded, IReadOnlyList<string> erasedSubjects)
     {
         var registration = runtime.Registry.FindStoredName(e.EventType);
         return new EventEnvelope(e.EventId, e.TenantId, e.StreamId, e.StreamType, e.Version, e.GlobalPosition,
-            registration?.Name ?? e.EventType, registration?.Version ?? e.EventVersion, decoded, EventMetadata.FromJson(e.Metadata ?? "{}"), e.OccurredAt);
+            registration?.Name ?? e.EventType, registration?.Version ?? e.EventVersion, decoded, EventMetadata.FromJson(e.Metadata ?? "{}"), e.OccurredAt, erasedSubjects);
     }
 
     private async Task OnFailure(HandlerFailure failure, CancellationToken ct)

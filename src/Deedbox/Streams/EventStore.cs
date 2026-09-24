@@ -97,19 +97,75 @@ internal sealed class EventStore(
         }
     }
 
+    public async Task DeleteStream(string streamId, CancellationToken ct = default)
+    {
+        ValidateStreamId(streamId);
+        var tenantId = TenantId;
+
+        await using var lease = await transactions.BeginWrite(Provider, ct);
+        var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: false, ct);
+        if (row is null || row.DeletedAt is not null)
+        {
+            await lease.Complete(ct);
+            return;
+        }
+
+        var stream = RegisteredStream(row.StreamType);
+        var tombstone = row.Version + 1;
+        var written = await Write(lease, tenantId, stream, streamId, ExpectedVersion.Exact(row.Version), row, known: null, [new StreamDeleted()], ct,
+            beforeCounter: () => Provider.DeleteStreamData(lease.Connection, lease.WriteTransaction, tenantId, streamId, tombstone, ct),
+            skipSnapshot: true);
+        await Commit(lease, written!, ct);
+    }
+
+    /// <summary>
+    /// One stream's part of an erasure: rebuild its state from the now-redacted events, append SubjectErased, and store
+    /// the new state, in one transaction. Removing the subject pair first makes a repeated run a no-op.
+    /// </summary>
+    internal async Task EraseFromStream(string streamId, string subjectId, CancellationToken ct)
+    {
+        var tenantId = TenantId;
+        await using var lease = await transactions.BeginWrite(Provider, ct);
+        if (await Provider.DeleteSubjectStream(lease.Connection, lease.WriteTransaction, tenantId, subjectId, streamId, ct) == 0)
+        {
+            await lease.Complete(ct);
+            return;
+        }
+
+        var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: false, ct);
+        var stream = row is null ? null : runtime.Registry.FindStream(row.StreamType);
+        if (row is null || row.DeletedAt is not null || stream is null)
+        {
+            await lease.Complete(ct);
+            return;
+        }
+
+        var unsnapshotted = row with { State = null };
+        var state = await Replay(lease.Connection, lease.Transaction, tenantId, stream, streamId, unsnapshotted, ct);
+        var written = await Write(lease, tenantId, stream, streamId, ExpectedVersion.Exact(row.Version), unsnapshotted, state, [new SubjectErased(subjectId)], ct);
+        await Commit(lease, written!, ct);
+    }
+
+    private StreamRegistration RegisteredStream(string streamType) =>
+        runtime.Registry.FindStream(streamType) ?? throw new DeedboxException(Errors.UnregisteredState,
+            $"Stream type '{streamType}' is not registered, so Deedbox cannot run its projections. Register it before deleting its streams.");
+
     /// <summary>
     /// Writes one append after the stream row was read with a lock. Returns null when a new stream lost a
     /// creation race and <paramref name="expected"/> is Any, so the caller reads again.
     /// </summary>
     private async Task<Written?> Write(
         Lease lease, string tenantId, StreamRegistration stream, string streamId, ExpectedVersion expected, StreamRow? row,
-        object? known, List<object> events, CancellationToken ct)
+        object? known, List<object> events, CancellationToken ct, Func<Task>? beforeCounter = null, bool skipSnapshot = false)
     {
         var connection = lease.Connection;
         var transaction = lease.WriteTransaction;
 
         if (row is not null)
+        {
             CheckStreamType(row, stream, streamId);
+            CheckNotDeleted(row, streamId);
+        }
 
         var current = row?.Version ?? 0;
         if (!expected.Matches(current))
@@ -117,7 +173,7 @@ internal sealed class EventStore(
 
         var newVersion = current + events.Count;
         var snapshotUsable = row is not null && SnapshotUsable(row, stream);
-        var snapshotDue = stream.Snapshots.IsDue(current, newVersion) || (stream.Snapshots.Enabled && !snapshotUsable);
+        var snapshotDue = !skipSnapshot && (stream.Snapshots.IsDue(current, newVersion) || (stream.Snapshots.Enabled && !snapshotUsable));
 
         object? newState = null;
         Snapshot? snapshot = null;
@@ -126,7 +182,7 @@ internal sealed class EventStore(
             var state = known ?? (row is null ? stream.Initial() : await Replay(connection, transaction, tenantId, stream, streamId, row, ct));
             newState = stream.Fold(state, events);
             if (snapshotDue)
-                snapshot = new Snapshot(DeedboxJson.Serialize(newState, stream.StateJson), stream.StateVersion, newVersion);
+                snapshot = new Snapshot(await SealState(tenantId, streamId, stream, newState, ct), stream.StateVersion, newVersion);
         }
 
         if (row is null)
@@ -148,13 +204,29 @@ internal sealed class EventStore(
         var metadataJson = eventMetadata.ToJson();
         var rows = new List<NewEvent>(events.Count);
         var registrations = new List<EventRegistration>(events.Count);
+        SubjectKeys? keys = null;
+        var subjects = new SortedSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < events.Count; i++)
         {
             var registration = runtime.Registry.ForEvent(events[i].GetType());
             registrations.Add(registration);
-            rows.Add(new NewEvent(Uuid7.New(), current + i + 1, registration.Name, registration.Version,
-                DeedboxJson.Serialize(events[i], registration.Json), metadataJson));
+            string payload;
+            if (registration.PersonalFields.Count > 0)
+            {
+                keys ??= new SubjectKeys(runtime.RequireKeys(), Provider, connection, transaction, tenantId);
+                (payload, var eventSubjects) = await FieldCipher.Protect(events[i], registration, keys, ct);
+                subjects.UnionWith(eventSubjects);
+            }
+            else
+            {
+                payload = DeedboxJson.Serialize(events[i], registration.Json);
+            }
+
+            rows.Add(new NewEvent(Uuid7.New(), current + i + 1, registration.Name, registration.Version, payload, metadataJson));
         }
+
+        if (subjects.Count > 0)
+            await Provider.RecordSubjectStreams(connection, transaction, tenantId, streamId, [.. subjects], ct);
 
         await using (var work = new TransactionWork(connection, transaction, services, lease.Participants, ct))
         {
@@ -163,6 +235,9 @@ internal sealed class EventStore(
             await lease.BeforeCounter(ct);
             await work.RunBeforeCounter();
         }
+
+        if (beforeCounter is not null)
+            await beforeCounter();
 
         var newTypes = registrations
             .Select(r => new EventTypeRow(stream.Name, r.Name, r.Version))
@@ -264,12 +339,13 @@ internal sealed class EventStore(
             return new Loaded(stream.Initial(), 0, null);
 
         CheckStreamType(row, stream, streamId);
+        CheckNotDeleted(row, streamId);
         var state = await Replay(connection, transaction, tenantId, stream, streamId, row, ct);
 
         // A missing or outdated snapshot is rebuilt lazily. A write rebuilds it anyway, so only a plain load saves it here.
         if (!forUpdate && stream.Snapshots.Enabled && !SnapshotUsable(row, stream))
         {
-            var snapshot = new Snapshot(DeedboxJson.Serialize(state, stream.StateJson), stream.StateVersion, row.Version);
+            var snapshot = new Snapshot(await SealState(tenantId, streamId, stream, state, ct), stream.StateVersion, row.Version);
             await Provider.SaveSnapshot(connection, transaction, tenantId, streamId, snapshot, ct);
         }
 
@@ -279,26 +355,24 @@ internal sealed class EventStore(
     /// <summary>The state at the row's version: the snapshot plus the events after it, or every event.</summary>
     private async Task<object> Replay(DbConnection connection, DbTransaction? transaction, string tenantId, StreamRegistration stream, string streamId, StreamRow row, CancellationToken ct)
     {
-        object state;
-        long after;
-        if (SnapshotUsable(row, stream))
+        object state = stream.Initial();
+        long after = 0;
+        if (SnapshotUsable(row, stream) && await OpenState(tenantId, streamId, row.State!, ct) is { } json)
         {
-            state = DeedboxJson.Deserialize(row.State!, stream.StateJson);
+            state = DeedboxJson.Deserialize(json, stream.StateJson);
             after = row.StateAt;
-        }
-        else
-        {
-            state = stream.Initial();
-            after = 0;
         }
 
         if (after >= row.Version)
             return state;
 
-        await foreach (var stored in Provider.ReadStreamEvents(connection, transaction, tenantId, streamId, after, row.Version, ct))
-        {
-            state = stream.Evolve(state, runtime.Registry.Decode(stored.EventType, stored.EventVersion, stored.Payload!));
-        }
+        // Buffered first: the reader must close before personal-data keys are read on the same connection.
+        var stored = new List<StoredEvent>();
+        await foreach (var e in Provider.ReadStreamEvents(connection, transaction, tenantId, streamId, after, row.Version, ct))
+            stored.Add(e);
+
+        foreach (var decoded in await EventDecoding.Decode(runtime, connection, transaction, stored, ct))
+            state = stream.Evolve(state, decoded.Event);
 
         return state;
     }
@@ -307,6 +381,45 @@ internal sealed class EventStore(
     {
         var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: false, withState: false, ct);
         return row?.Version ?? 0;
+    }
+
+    /// <summary>The state as stored JSON: sealed with the tenant key when the stream type carries personal data.</summary>
+    private async Task<string> SealState(string tenantId, string streamId, StreamRegistration stream, object state, CancellationToken ct)
+    {
+        var json = DeedboxJson.Serialize(state, stream.StateJson);
+        if (!stream.HasPersonalData)
+            return json;
+
+        var (version, key) = await runtime.RequireKeys().Current(tenantId, ct);
+        return new System.Text.Json.Nodes.JsonObject { [Crypto.StateMarker] = Crypto.SealState(key, version, tenantId, streamId, json) }.ToJsonString();
+    }
+
+    /// <summary>The stored state's JSON, or null when it is sealed with a tenant key that was deleted; the state is then rebuilt from events.</summary>
+    private async Task<string?> OpenState(string tenantId, string streamId, string stored, CancellationToken ct)
+    {
+        if (!stored.Contains("\"$state\"", StringComparison.Ordinal) || System.Text.Json.Nodes.JsonNode.Parse(stored)?[Crypto.StateMarker]?.GetValue<string>() is not { } marker)
+            return stored;
+
+        var key = await runtime.RequireKeys().Find(tenantId, Crypto.StateKeyVersion(marker), ct);
+        if (key is null)
+            return null;
+        try
+        {
+            return Crypto.OpenState(key, tenantId, streamId, marker);
+        }
+        catch (System.Security.Cryptography.CryptographicException ex)
+        {
+            throw new DeedboxException(Errors.KeyMaterialCorrupt, $"The stored state of stream '{streamId}' does not verify. It was altered or copied from another stream.", ex);
+        }
+    }
+
+    private static void CheckNotDeleted(StreamRow row, string streamId)
+    {
+        if (row.DeletedAt is not null)
+        {
+            throw new DeedboxException(Errors.StreamDeleted,
+                $"Stream '{streamId}' was deleted at {row.DeletedAt:O}. Its ID is not reused; use another stream ID.");
+        }
     }
 
     private static bool SnapshotUsable(StreamRow row, StreamRegistration stream) =>
@@ -328,6 +441,12 @@ internal sealed class EventStore(
         {
             ArgumentNullException.ThrowIfNull(e, nameof(events));
             var registration = runtime.Registry.ForEvent(e.GetType());
+            if (registration.Stream is null)
+            {
+                throw new DeedboxException(Errors.BuiltInEvent,
+                    $"{e.GetType().Name} is a built-in event that Deedbox appends itself. Use DeleteStream or ISubjectErasure instead.");
+            }
+
             stream ??= registration.Stream;
             if (registration.Stream != stream)
             {

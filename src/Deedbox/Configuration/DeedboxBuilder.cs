@@ -15,6 +15,7 @@ public sealed class DeedboxBuilder
     private readonly List<ProjectionRegistration> _projections = [];
     private readonly List<SubscriptionRegistration> _subscriptions = [];
     private readonly RunnerOptions _runner = new();
+    private readonly KeysBuilder _keys = new();
     private readonly List<Action<IServiceCollection>> _services = [];
     private Action<JsonSerializerOptions>? _configureJson;
     private Func<string, DeedboxProvider>? _provider;
@@ -134,6 +135,18 @@ public sealed class DeedboxBuilder
         return this;
     }
 
+    /// <summary>
+    /// Chooses where the master key for personal data lives, such as <c>keys =&gt; keys.StoreInDatabase()</c>. Required
+    /// when any registered event has [PersonalData]; start-up fails without it.
+    /// </summary>
+    /// <param name="configure">Chooses the key mode.</param>
+    public DeedboxBuilder Keys(Action<KeysBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(_keys);
+        return this;
+    }
+
     /// <summary>Changes the background runner's settings.</summary>
     /// <param name="configure">Changes the settings.</param>
     public DeedboxBuilder Runner(Action<RunnerOptions> configure)
@@ -199,7 +212,7 @@ public sealed class DeedboxBuilder
     internal (EventRegistry Registry, DeedboxJson Json) BuildRegistry()
     {
         var json = new DeedboxJson(_jsonContexts, _configureJson);
-        return (new EventRegistry(_streams, json), json);
+        return (new EventRegistry(_streams, json, keysConfigured: _keys.Factory is not null), json);
     }
 
     internal DeedboxRuntime Build()
@@ -209,8 +222,10 @@ public sealed class DeedboxBuilder
 
         var (registry, json) = BuildRegistry();
         ValidateProjections();
-        var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries, _projections, _subscriptions, _runner);
-        return new DeedboxRuntime(options, _provider(_schema), registry, json);
+        var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries, _projections, _subscriptions, _runner, _keys.Placeholder);
+        var provider = _provider(_schema);
+        var keys = _keys.Factory is { } factory ? new KeyRing(provider, factory(provider)) : null;
+        return new DeedboxRuntime(options, provider, registry, json) { Keys = keys };
     }
 }
 
@@ -220,7 +235,8 @@ internal sealed record DeedboxOptions(
     int ExecuteRetries,
     IReadOnlyList<ProjectionRegistration> Projections,
     IReadOnlyList<SubscriptionRegistration> Subscriptions,
-    RunnerOptions Runner);
+    RunnerOptions Runner,
+    string? RedactedPlaceholder);
 
 /// <summary>Everything a store needs that lives for the life of the app.</summary>
 internal sealed class DeedboxRuntime(DeedboxOptions options, DeedboxProvider provider, EventRegistry registry, DeedboxJson json) : IAsyncDisposable
@@ -230,6 +246,12 @@ internal sealed class DeedboxRuntime(DeedboxOptions options, DeedboxProvider pro
     public EventRegistry Registry { get; } = registry;
     public DeedboxJson Json { get; } = json;
     public TimeProvider Clock { get; init; } = TimeProvider.System;
+
+    /// <summary>The key hierarchy, or null when no key mode is configured.</summary>
+    public KeyRing? Keys { get; init; }
+
+    public KeyRing RequireKeys() => Keys ?? throw new DeedboxException(Errors.NoKeyMode,
+        "Stored events hold encrypted personal data, but no key mode is configured. Add .Keys(keys => ...) with the mode that encrypted them.");
 
     /// <summary>Event types known to be committed in event_types, so appends skip recording them.</summary>
     public System.Collections.Concurrent.ConcurrentDictionary<EventTypeRow, bool> KnownEventTypes { get; } = new();

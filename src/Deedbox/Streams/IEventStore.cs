@@ -36,6 +36,15 @@ public interface IEventStore
         where TState : IState<TState>;
 
     /// <summary>
+    /// Deletes a stream for good, in one transaction: appends a <see cref="StreamDeleted"/> tombstone, deletes every
+    /// earlier event and the stored state, and marks the stream deleted so its ID is never reused. Projections see the
+    /// tombstone; they do not see deleted events they had not processed yet. Deleting a missing or deleted stream does nothing.
+    /// </summary>
+    /// <param name="streamId">The stream ID.</param>
+    /// <param name="ct">Cancels the deletion.</param>
+    Task DeleteStream(string streamId, CancellationToken ct = default);
+
+    /// <summary>
     /// A store that runs every operation in <paramref name="transaction"/>, for Dapper and plain ADO.NET.
     /// Deedbox never commits or rolls back that transaction; the caller does.
     /// </summary>

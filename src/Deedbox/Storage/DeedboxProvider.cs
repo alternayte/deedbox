@@ -122,6 +122,47 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// </summary>
     public abstract Task Listen(Action wake, CancellationToken ct);
 
+    // ---- Personal data ----
+
+    /// <summary>Every master_keys row: tenant intermediate keys, and the database-mode master key at version 0 of the empty tenant.</summary>
+    public abstract Task<List<MasterKeyRow>> ReadMasterKeys(DbConnection connection, DbTransaction? transaction, CancellationToken ct);
+
+    /// <summary>Adds a master_keys row unless one with the same key exists. Returns false when it existed.</summary>
+    public abstract Task<bool> InsertMasterKey(DbConnection connection, DbTransaction? transaction, MasterKeyRow row, CancellationToken ct);
+
+    public abstract Task UpdateMasterKey(DbConnection connection, DbTransaction transaction, MasterKeyRow row, CancellationToken ct);
+
+    public abstract Task DeleteMasterKey(DbConnection connection, DbTransaction transaction, string tenantId, int keyVersion, CancellationToken ct);
+
+    /// <summary>A subject's key, locked until the transaction ends so an erasure cannot delete it mid-append.</summary>
+    public abstract Task<SubjectKeyRow?> ReadSubjectKey(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, CancellationToken ct);
+
+    /// <summary>Adds a subject key unless the subject already has one.</summary>
+    public abstract Task InsertSubjectKey(DbConnection connection, DbTransaction transaction, SubjectKeyRow row, CancellationToken ct);
+
+    /// <summary>The wrapped keys for these key IDs; IDs with no row (erased subjects) are absent.</summary>
+    public abstract Task<Dictionary<string, byte[]>> ReadSubjectKeysById(DbConnection connection, DbTransaction? transaction, string tenantId, IReadOnlyList<string> keyIds, CancellationToken ct);
+
+    /// <summary>
+    /// Deletes a subject's key and clears the stored state of every stream that holds their data, so nothing reads
+    /// their data after this commits: loads rebuild state from the now-redacted events.
+    /// </summary>
+    public abstract Task<int> DeleteSubjectKey(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, CancellationToken ct);
+
+    /// <summary>Records which streams hold each subject's data; existing pairs are left alone.</summary>
+    public abstract Task RecordSubjectStreams(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, IReadOnlyList<string> subjectIds, CancellationToken ct);
+
+    public abstract Task<List<string>> ReadSubjectStreams(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct);
+
+    /// <summary>Removes one pair, returning 0 when another runner already removed it.</summary>
+    public abstract Task<int> DeleteSubjectStream(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, string streamId, CancellationToken ct);
+
+    /// <summary>
+    /// Deletes a stream's events below <paramref name="keepFromVersion"/>, its subject pairs and its stored state, and
+    /// marks the stream row deleted.
+    /// </summary>
+    public abstract Task DeleteStreamData(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, long keepFromVersion, CancellationToken ct);
+
     /// <summary>Releases resources the provider created, such as a data source it built from a connection string.</summary>
     public virtual ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
@@ -195,3 +236,7 @@ internal static class JobStatus
     public const string Done = "done";
     public const string Failed = "failed";
 }
+
+internal sealed record MasterKeyRow(string TenantId, int KeyVersion, byte[] WrappedKey, string WrappedBy);
+
+internal sealed record SubjectKeyRow(string TenantId, string SubjectId, string KeyId, byte[] WrappedKey);

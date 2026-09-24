@@ -12,6 +12,8 @@ public record ItemAddedWithoutQty(string Sku);
 
 public record ItemAddedQtyText(string Sku, string Qty);
 
+public record PlainInvited(string ManuscriptId, string ReviewerId, string ReviewerName, string? ReviewerEmail);
+
 public enum Colour
 {
     Red,
@@ -126,6 +128,19 @@ public sealed class EventContractsTests : IDisposable
             .Events<CheckedOut>()), _path, onCi: false);
 
         Assert.Contains("cart.item_added v2 { code: int32, qty: int32, sku: string }", File.ReadAllText(_path), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_lockfile_marks_personal_data_and_removing_a_marker_breaks()
+    {
+        Action<DeedboxBuilder> personal = b => b.Keys(k => k.StoreInDatabase()).Stream<Deedbox.Tests.PersonalData.Manuscript>(s => s.Event<Deedbox.Tests.PersonalData.ReviewerInvited>("m.invited"));
+        Create(personal);
+
+        Assert.Contains("m.invited v1 { manuscriptId: string, reviewerEmail: string? pd(reviewerId), reviewerId: string, reviewerName: string pd(reviewerId) }",
+            File.ReadAllText(_path), StringComparison.Ordinal);
+        var error = Assert.Throws<EventContractException>(() => EventContracts.Verify(
+            b => b.Stream<Deedbox.Tests.PersonalData.Manuscript>(s => s.Event<PlainInvited>(version: 2, up => up.Name("m.invited").From(1, _ => { }))), _path, onCi: false));
+        Assert.Contains("'reviewerName' is no longer [PersonalData]", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

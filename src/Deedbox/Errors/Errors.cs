@@ -27,4 +27,11 @@ internal static class Errors
     public const string InvalidTenant = "DBX022";
     public const string ResetNotImplemented = "DBX023";
     public const string InlineBatchProjection = "DBX024";
+    public const string NoKeyMode = "DBX025";
+    public const string InvalidPersonalData = "DBX026";
+    public const string MissingSubject = "DBX027";
+    public const string StreamDeleted = "DBX028";
+    public const string MasterKeyUnusable = "DBX029";
+    public const string KeyMaterialCorrupt = "DBX030";
+    public const string BuiltInEvent = "DBX031";
 }

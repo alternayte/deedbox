@@ -13,11 +13,24 @@ internal sealed record Lockfile(IReadOnlyList<LockedStream> Streams)
             .OrderBy(s => s.Name, StringComparer.Ordinal)
             .Select(s => new LockedStream(s.Name, s.StateType.Name, s.Events
                 .OrderBy(e => e.Name, StringComparer.Ordinal)
-                .Select(e => new LockedEvent(e.Name, e.Version, Shape.Of(e.ClrType, json.Options), [.. e.Aliases.Order(StringComparer.Ordinal)]))
+                .Select(e => new LockedEvent(e.Name, e.Version, WithPersonalData(Shape.Of(e.ClrType, json.Options), e), [.. e.Aliases.Order(StringComparer.Ordinal)]))
                 .ToList()))
             .ToList());
 
     public IEnumerable<LockedEvent> Events => Streams.SelectMany(s => s.Events);
+
+    private static Shape WithPersonalData(Shape shape, EventRegistration registration)
+    {
+        if (registration.PersonalFields.Count == 0)
+            return shape;
+        var subjects = registration.PersonalFields.ToDictionary(f => f.JsonName, f => f.SubjectJsonName, StringComparer.Ordinal);
+        return shape with
+        {
+            Members = shape.Members
+                .Select(m => subjects.TryGetValue(m.Name, out var subject) ? (m.Name, m.Shape with { PersonalSubject = subject }) : m)
+                .ToList(),
+        };
+    }
 
     public override string ToString()
     {
@@ -109,6 +122,15 @@ internal static class Compatibility
 
             if (!byName.TryGetValue(old.Name, out var now))
                 continue;
+
+            // Personal-data markers must survive any version change, not only a same-version edit.
+            foreach (var (member, _) in old.Shape.Members.Where(m => m.Shape.PersonalSubject is not null))
+            {
+                var shapeNow = now.Shape.Members.FirstOrDefault(m => m.Name == member).Shape;
+                if (shapeNow is not null && shapeNow.PersonalSubject is null)
+                    breaks.Add($"'{old.Name}': '{member}' is no longer [PersonalData]. New events would store it in plain text, and erasure would miss it.");
+            }
+
             if (now.Version < old.Version)
             {
                 breaks.Add($"'{old.Name}' went from v{old.Version} back to v{now.Version}. Event versions only go up.");
@@ -119,8 +141,10 @@ internal static class Compatibility
                 Compare(old.Shape, now.Shape, "", problems);
                 foreach (var problem in problems)
                 {
-                    breaks.Add($"'{old.Name}' v{old.Version}: {problem} Stored events no longer read correctly. " +
-                        $"Register it as version {old.Version + 1} with an upcaster from version {old.Version}.");
+                    breaks.Add(problem.Contains("[PersonalData]", StringComparison.Ordinal) || problem.Contains("subject", StringComparison.Ordinal)
+                        ? $"'{old.Name}' v{old.Version}: {problem}"
+                        : $"'{old.Name}' v{old.Version}: {problem} Stored events no longer read correctly. " +
+                          $"Register it as version {old.Version + 1} with an upcaster from version {old.Version}.");
                 }
             }
         }
@@ -139,6 +163,9 @@ internal static class Compatibility
 
         if (old.Nullable && !now.Nullable)
             problems.Add($"{at} is no longer nullable, but stored events may hold null.");
+
+        if (old.PersonalSubject is not null && now.PersonalSubject is not null && old.PersonalSubject != now.PersonalSubject)
+            problems.Add($"{at} changed its subject from '{old.PersonalSubject}' to '{now.PersonalSubject}'; erasing the old subject would miss new events.");
 
         switch (old.Kind)
         {
