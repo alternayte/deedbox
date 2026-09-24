@@ -1,0 +1,69 @@
+---
+title: Add Deedbox to an existing EF Core app
+description: Event-source one aggregate of an EF Core app, with its read model in the same transaction.
+sidebar:
+  order: 2
+---
+
+import { Steps } from '@astrojs/starlight/components';
+import CartEvents from '../../../snippets/cart-events.md';
+import CartState from '../../../snippets/cart-state.md';
+import ProjectionEf from '../../../snippets/projection-ef.md';
+import RegisterFull from '../../../snippets/register-full.md';
+import TransactionEfcore from '../../../snippets/transaction-efcore.md';
+import SchemaEfMigration from '../../../snippets/schema-ef-migration.md';
+
+In this tutorial, you move one aggregate of an existing EF Core app to events. Your other tables stay in EF Core. A read model table, updated by an inline projection, commits in the same transaction as the events. It takes under an hour.
+
+The example app has a `ShopDb` DbContext. You event-source its cart and keep a `CartSummaries` table for queries.
+
+<Steps>
+
+1. Add the packages.
+
+   ```sh
+   dotnet add package Deedbox.Postgres --prerelease
+   dotnet add package Deedbox.EntityFrameworkCore --prerelease
+   ```
+
+   Use `Deedbox.SqlServer` for SQL Server. The rest of this tutorial is the same.
+
+2. Write the events and the state, as in [your first stream](/tutorials/first-stream/).
+
+   <CartEvents />
+   <CartState />
+
+3. Write an inline projection. It updates your EF Core entity in the append's transaction. You do not call `SaveChanges`; Deedbox does, just before it commits the events.
+
+   <ProjectionEf />
+
+4. Register Deedbox. `Run.Inline` means the projection runs in the append's transaction.
+
+   <RegisterFull />
+
+5. Create the Deedbox tables with an EF Core migration. The tables stay out of your EF model.
+
+   ```sh
+   dotnet ef migrations add AddDeedbox
+   ```
+
+   Replace the generated `Up` method with the Deedbox script:
+
+   <SchemaEfMigration />
+
+6. Append through your DbContext. `UseDbContext` joins the context's transaction, or opens one and commits it. Pass every context on the same connection that must commit with the events.
+
+   <TransactionEfcore />
+
+</Steps>
+
+## What changed
+
+- The cart's history is in `deedbox.events`, and its state in `deedbox.streams`.
+- `CartSummaries` is still an EF Core table. It changes only through the projection, in the same transaction as the events.
+- Every other table and handler in your app is unchanged.
+
+## Next
+
+- [Rebuild a projection](/how-to/rebuild-a-projection/) when you change its logic.
+- [Use Dapper or plain ADO.NET](/how-to/use-dapper/) instead of EF Core.

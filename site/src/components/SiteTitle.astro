@@ -1,0 +1,24 @@
+---
+// The site title, followed by a list of documentation versions. Each release branch deploys to its own alias;
+// src/versions.json lists them.
+import Default from '@astrojs/starlight/components/SiteTitle.astro';
+import versions from '../versions.json';
+
+const current = import.meta.env.PUBLIC_DOCS_VERSION ?? 'latest';
+---
+
+<div class="title-row">
+  <Default {...Astro.props}><slot /></Default>
+  {versions.length > 1 && (
+    <select aria-label="Documentation version" onchange="window.location.href = this.value">
+      {versions.map((v) => <option value={v.url} selected={v.label === current}>{v.label}</option>)}
+    </select>
+  )}
+  {versions.length <= 1 && <span class="version">{current}</span>}
+</div>
+
+<style>
+  .title-row { display: flex; align-items: center; gap: 0.75rem; }
+  .version { font-size: var(--sl-text-xs); color: var(--sl-color-gray-3); }
+  select { font-size: var(--sl-text-xs); background: transparent; color: inherit; border: 1px solid var(--sl-color-gray-5); border-radius: 0.25rem; }
+</style>

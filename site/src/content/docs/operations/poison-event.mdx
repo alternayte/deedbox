@@ -1,0 +1,33 @@
+---
+title: Poison event
+description: Handle an event that a handler cannot process.
+sidebar:
+  order: 2
+---
+
+import AdminApi from '../../../snippets/admin-api.md';
+
+This runbook helps you handle a poison event: an event that makes a handler throw every time.
+
+## What Deedbox has done
+
+1. It retried the event, with growing delays, `HandlerRetries` times.
+2. It stopped the consumer, set it to `stalled`, and recorded the event. Other consumers keep running.
+3. No event after it was applied, and no event was skipped.
+
+## Steps
+
+1. Run `deedbox status`. It shows the event ID, event type, stream, version and exception.
+2. Read the stream and the exception. Decide whether the handler or the event is wrong.
+3. If the handler is wrong, fix it and deploy. At start-up, a poison stall gets one more round of retries, and the consumer moves on once the event succeeds.
+4. If the event can never be handled, skip it:
+
+   ```sh
+   deedbox skip cart_totals --event 01a0d1cd-e1f2-73f6-9d0b-bd9eec9e61c9 --wait
+   ```
+
+   The job checks that this is the event the consumer stalled on, moves the checkpoint one event past it, and records the event and the stall in the jobs table.
+
+The same operations are on the admin API:
+
+<AdminApi />

@@ -1,0 +1,40 @@
+---
+title: Long transaction holding the counter lock
+description: Find and end a transaction that makes every append wait.
+sidebar:
+  order: 5
+---
+
+This runbook helps you when every append waits.
+
+Appends take turns on one counter row, from the counter update to the commit. A transaction you own, through `UseTransaction` or `UseDbContext`, holds the counter from its append until you commit. If it stays open, every other append waits.
+
+## Symptoms
+
+- `deedbox.counter.duration` and `deedbox.append.duration` rise together.
+- Appends time out, while the database is otherwise idle.
+
+## Steps
+
+1. Find the transaction that holds the lock.
+
+   Postgres:
+
+   ```sql
+   SELECT pid, now() - xact_start AS open_for, state, query
+   FROM pg_stat_activity
+   WHERE pid IN (SELECT pid FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relname = 'position' AND l.granted);
+   ```
+
+   SQL Server:
+
+   ```sql
+   SELECT s.session_id, t.transaction_begin_time, s.program_name
+   FROM sys.dm_tran_locks l
+   JOIN sys.dm_exec_sessions s ON s.session_id = l.request_session_id
+   JOIN sys.dm_tran_active_transactions t ON t.transaction_id = s.transaction_id
+   WHERE l.resource_associated_entity_id = OBJECT_ID('deedbox.position') AND l.request_status = 'GRANT';
+   ```
+
+2. End it from its app if you can. Otherwise, end the session: `pg_terminate_backend(pid)` or `KILL <session_id>`. Its append rolls back; no position is lost.
+3. Fix the code: commit soon after an append, and keep slow work, such as HTTP calls, outside the transaction.

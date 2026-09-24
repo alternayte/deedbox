@@ -1,0 +1,59 @@
+---
+title: API reference
+description: Every public type, by package.
+sidebar:
+  order: 1
+---
+
+This page lists every public type. Each member has XML docs, so your editor shows the details.
+
+## Deedbox
+
+| Type | What it does |
+| --- | --- |
+| `AddDeedbox(Action<DeedboxBuilder>)` | Registers Deedbox. Configuration errors throw here. |
+| `DeedboxBuilder` | `Schema`, `ApplySchemaOnStartup`, `Stream<T>`, `Projection<T>`, `Subscription<T>`, `OnAppending<T>`, `Keys`, `Runner`, `ConfigureJson`, `UseJsonContext`, `ExecuteRetries`. |
+| `StreamBuilder<TState>` | `Event<T>`, `Events<T1..T6>`, `EventsNestedIn`, `StateVersion`, `Snapshots`. |
+| `EventBuilder<TEvent>` | `Name`, `Alias`, `From` (JSON upcaster), `Upcast<TOld, TNew>`. |
+| `IState<TSelf>` | `Initial` and `Evolve`: what a state type implements. |
+| `IEventStore` | `Load`, `Append`, `Execute`, `DeleteStream`, `UseTransaction`, `WithMetadata`. Scoped. |
+| `ExpectedVersion` | `Any`, `NoStream`, `Exact(n)`. |
+| `LoadResult<T>`, `AppendResult`, `ExecuteResult<T>` | What the store returns. |
+| `EventEnvelope` | A stored event with its IDs, positions, metadata and erased subjects. |
+| `EventMetadata` | Correlation, causation, actor, trace context and string headers. |
+| `DeedboxContext` | The scope's tenant and metadata. Scoped. |
+| `StreamId` | `From(Guid)` and `Deterministic(namespace, parts)`. |
+| `SnapshotPolicy` | `EveryAppend`, `Every(n)`, `Never`. |
+| `Projection`, `ProjectionContext` | An ADO.NET or Dapper projection and what its handlers see. |
+| `BatchProjection` | An async projection that receives whole batches. |
+| `WriteContext` | Where a reset or a batch writes. |
+| `Run` | `Inline` or `Async`. |
+| `Subscription`, `SubscriptionContext` | A side-effect handler, delivered at least once. |
+| `IAppendingHook`, `AppendingContext`, `PendingEvent` | Code that runs inside every append's transaction. |
+| `RunnerOptions` | Background runner settings. |
+| `DataSubjectAttribute`, `PersonalDataAttribute` | Mark personal data. |
+| `KeysBuilder`, `IMasterKeyProvider` | Choose where the master key lives. |
+| `ISubjectErasure` | Erase a data subject in the scope's tenant. |
+| `SubjectErased`, `StreamDeleted` | Built-in events every handler can handle. |
+| `IEventStoreAdmin` | Status, jobs, rebuild, skip, erase, snapshots, key re-wrap, tenant shred. |
+| `StoreStatus`, `ConsumerStatus`, `JobInfo` | What the admin API returns. |
+| `AddDeedboxHealthChecks()` | The health check. |
+| `DeedboxException`, `ConcurrencyException` | Errors, each with a DBX code. |
+
+## Providers
+
+| Package | Types |
+| --- | --- |
+| `Deedbox.Postgres` | `UsePostgres(connectionString)`, `UsePostgres(NpgsqlDataSource)`, `PostgresSchema.Script`. |
+| `Deedbox.SqlServer` | `UseSqlServer(connectionString)`, `SqlServerSchema.Script`. |
+
+## Other packages
+
+| Package | Types |
+| --- | --- |
+| `Deedbox.EntityFrameworkCore` | `UseDbContext(context, others)`, `Projection<TDbContext>`, `ProjectionContext<TDbContext>`, `WriteContext<TDbContext>`. |
+| `Deedbox.Testing` | `Decider.Given`, `DeciderScenario`, `DeciderOutcome`, `EventContracts.Verify`, `KeyProviderCompliance.VerifyAsync`. |
+| `Deedbox.Keys.AzureKeyVault` | `UseAzureKeyVault(keyId, credential)`, `UseAzureKeyVault(CryptographyClient)`. |
+| `Deedbox.QueueBox` | `UseQueueBox`, `QueueBoxBuilder`, `QueueBoxColumns`. |
+| `Deedbox.Cli` | The `deedbox` tool. See [CLI commands](/reference/cli/). |
+| `Deedbox.Templates` | `dotnet new deedbox`. |

@@ -1,0 +1,85 @@
+---
+title: Your first stream
+description: Store a shopping cart as events in about 10 minutes.
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+import CartEvents from '../../../snippets/cart-events.md';
+import CartState from '../../../snippets/cart-state.md';
+import CartDecider from '../../../snippets/cart-decider.md';
+import RegisterPostgres from '../../../snippets/register-postgres.md';
+import RegisterSqlServer from '../../../snippets/register-sqlserver.md';
+import WriteExecute from '../../../snippets/write-execute.md';
+import WriteExplicit from '../../../snippets/write-explicit.md';
+
+In this tutorial, you store a shopping cart as a stream of events. You add items, check the cart out, and load its state back. It takes about 10 minutes.
+
+You need the .NET 10 SDK (or .NET 8) and a Postgres or SQL Server database. Docker is the fastest way to get one.
+
+<Steps>
+
+1. Create a web app and add the packages for your database.
+
+   <Tabs syncKey="db">
+   <TabItem label="Postgres">
+   ```sh
+   dotnet new web -o Shop
+   cd Shop
+   dotnet add package Deedbox.Postgres --prerelease
+   docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
+   ```
+   </TabItem>
+   <TabItem label="SQL Server">
+   ```sh
+   dotnet new web -o Shop
+   cd Shop
+   dotnet add package Deedbox.SqlServer --prerelease
+   docker run -d -p 1433:1433 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='yourStrong(!)Password' mcr.microsoft.com/mssql/server:2022-latest
+   ```
+   </TabItem>
+   </Tabs>
+
+2. Write the events. An event is a plain record that states what happened.
+
+   <CartEvents />
+
+3. Write the state. `Initial` is the state of a new cart. `Evolve` applies one event.
+
+   <CartState />
+
+4. Write the decisions. A decision is a pure function: it takes the current state and returns new events. It never writes anything.
+
+   <CartDecider />
+
+5. Register the stream in `Program.cs`. `ApplySchemaOnStartup` creates the Deedbox tables when the app starts.
+
+   <Tabs syncKey="db">
+   <TabItem label="Postgres"><RegisterPostgres /></TabItem>
+   <TabItem label="SQL Server"><RegisterSqlServer /></TabItem>
+   </Tabs>
+
+   Deedbox names the stream type `cart` and the events `cart.item_added` and `cart.checked_out`. These names are stored with every event, so a class rename later does not break stored events.
+
+6. Append events. Get `IEventStore` from dependency injection. `Execute` loads the cart, runs your decision, and appends the new events in one transaction.
+
+   <WriteExecute />
+
+7. Or do each part yourself. `Load` returns the state and the version. `Append` writes only if the stream is still at that version.
+
+   <WriteExplicit />
+
+</Steps>
+
+## What you have now
+
+- A `deedbox` schema with a `streams` table and an `events` table.
+- One stream, `cart-1`, with its events in order, and its current state stored next to it.
+- No mediator, no base class and no changes to the rest of your app.
+
+## Next
+
+- [Add a projection](/how-to/add-a-projection/) to build a read model.
+- [Add Deedbox to an existing EF Core app](/tutorials/existing-ef-core-app/).
+- Read [streams and state](/concepts/streams-and-state/) to see what Deedbox stores.

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://raw.githubusercontent.com/SimonCropp/MarkdownSnippets/main/schema.json",
+  "Convention": "InPlaceOverwrite",
+  "OmitSnippetLinks": true,
+  "LinkFormat": "None",
+  "ExcludeSnippetDirectories": ["node_modules", "bin", "obj", "dist"],
+  "ExcludeMarkdownDirectories": ["node_modules", "dist", "content"]
+}

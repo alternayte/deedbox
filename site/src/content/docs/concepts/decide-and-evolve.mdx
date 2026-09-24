@@ -1,0 +1,34 @@
+---
+title: Decide and evolve
+description: Why decisions are pure functions, and how Execute uses that.
+sidebar:
+  order: 2
+---
+
+import CartDecider from '../../../snippets/cart-decider.md';
+import WriteExecute from '../../../snippets/write-execute.md';
+import WriteExplicit from '../../../snippets/write-explicit.md';
+import WriteConflict from '../../../snippets/write-conflict.md';
+
+This page explains the two functions every stream needs, and how Deedbox runs them.
+
+- **Evolve** applies one event to a state. It is part of the state type, and it never fails.
+- **Decide** takes the current state and a command, and returns new events. It reads nothing and writes nothing.
+
+<CartDecider />
+
+## Execute locks, decides and appends
+
+<WriteExecute />
+
+`Execute` locks the stream, loads its state, runs your decision, and appends the events, in one transaction. Because the stream stays locked from load to commit, two writers of one stream take turns instead of conflicting. When two writers create the same new stream at once, the loser runs its decision again; `ExecuteRetries` sets how often (3 by default).
+
+## The explicit form works with any error style
+
+<WriteExplicit />
+
+`Append` checks the expected version and writes only if it matches. Deedbox has no `Result` type and no opinion on errors: your decision can return a result, throw, or return no events.
+
+<WriteConflict />
+
+`ExpectedVersion` is `NoStream`, `Any` or `Exact(n)`. `Exact(0)` is the same as `NoStream`.

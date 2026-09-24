@@ -2,6 +2,10 @@
   <Folder Name="/bench/">
     <Project Path="bench/Deedbox.Benchmarks/Deedbox.Benchmarks.csproj" />
   </Folder>
+  <Folder Name="/site/" />
+  <Folder Name="/site/snippets/">
+    <Project Path="site/snippets/Deedbox.Snippets/Deedbox.Snippets.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Deedbox.Cli/Deedbox.Cli.csproj" />
     <Project Path="src/Deedbox.EntityFrameworkCore/Deedbox.EntityFrameworkCore.csproj" />

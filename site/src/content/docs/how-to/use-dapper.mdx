@@ -1,0 +1,25 @@
+---
+title: Use Dapper or plain ADO.NET
+description: Append events in your own connection and transaction.
+---
+
+import TransactionDapper from '../../../snippets/transaction-dapper.md';
+import ProjectionAdo from '../../../snippets/projection-ado.md';
+
+This guide shows you how to append events in a transaction you own, with Dapper or plain ADO.NET.
+
+## Pass your transaction
+
+<TransactionDapper />
+
+`UseTransaction` returns a store that runs every operation in your transaction. Deedbox never commits or rolls it back. Inline projections and appending hooks run in it too.
+
+The position counter stays locked from your append until your commit. Commit soon after the append; other appends wait meanwhile.
+
+## Write a projection with the same connection
+
+<ProjectionAdo />
+
+## Append to one stream per transaction
+
+A transaction that appends to two streams holds the counter from its first append while it waits for the second stream. A concurrent append can hold that stream and wait for the counter. The database then aborts one transaction as a deadlock. Nothing is lost or reordered, but that transaction fails. Append to one stream per transaction, or retry the transaction when it fails.

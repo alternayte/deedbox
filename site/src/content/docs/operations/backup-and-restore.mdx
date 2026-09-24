@@ -1,0 +1,24 @@
+---
+title: Backup and restore
+description: What to back up, and what erasure means for backups.
+sidebar:
+  order: 4
+---
+
+This runbook explains what to back up and what a restore does to erasures.
+
+## Back up
+
+- The database: the Deedbox schema and your read-model tables, in one backup, so projections and their checkpoints match.
+- The master key, outside the database, unless you use database mode. Without it, a restored database has unreadable personal data.
+
+## Erasure and backups
+
+An erasure deletes a subject key from the live database. A backup taken before the erasure still holds that key, so personal data in that backup is readable to anyone with the backup and the master key.
+
+- Keep backups only as long as your privacy duties allow. When the oldest backup from before an erasure ages out, the subject is gone everywhere.
+- After you restore an older backup, run every erasure that happened after the backup again. Keep a record of erasures outside the database, for example from the `deedbox.jobs` rows or your own audit log.
+
+## Database mode
+
+In database mode, the master key sits in the same backup as the data. A copy of the backup exposes all personal data in it. Move to a key ring or Key Vault before production.

@@ -1,0 +1,49 @@
+---
+title: Add a projection
+description: Build a read model from events, inline or in the background.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import ProjectionEf from '../../../snippets/projection-ef.md';
+import ProjectionAdo from '../../../snippets/projection-ado.md';
+import RegisterFull from '../../../snippets/register-full.md';
+import BatchProjection from '../../../snippets/batch-projection.md';
+
+This guide shows you how to build a read model from events with a projection.
+
+## Write the projection
+
+Register one handler per event type in the constructor with `On<T>`. Deedbox skips a projection when an append holds none of its event types.
+
+<Tabs syncKey="access">
+<TabItem label="EF Core"><ProjectionEf /></TabItem>
+<TabItem label="Dapper or ADO.NET"><ProjectionAdo /></TabItem>
+</Tabs>
+
+Override `ResetAsync` to delete what the projection wrote. A [rebuild](/how-to/rebuild-a-projection/) needs it.
+
+## Register it with a name and a run mode
+
+<RegisterFull />
+
+- The name, such as `cart_summary`, keys the projection's checkpoint. Renaming the class keeps its progress. Renaming the projection starts it again from the first event.
+- `Run.Inline` applies the projection in the append's transaction. The read model is never behind, and a failing handler fails the append.
+- `Run.Async` applies the projection in the background runner. The checkpoint commits in the same transaction as the projection's writes, so each event applies exactly once.
+
+A projection has one run mode. Registering one class twice fails at start-up, because two registrations apply each event twice.
+
+## Handle large async workloads in batches
+
+A batch projection receives each batch of its events in one call. It runs async only.
+
+<BatchProjection />
+
+## Know what a handler sees
+
+| Property | Inline | Async |
+| --- | --- | --- |
+| `EventId`, `StreamId`, `Version`, `Metadata` | yes | yes |
+| `GlobalPosition` | null | yes |
+| `Services` | the append's scope | a scope per batch |
+
+Handle the built-in events `StreamDeleted` and `SubjectErased` to remove deleted and erased data from your read model.

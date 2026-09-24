@@ -1,0 +1,29 @@
+---
+title: CLI commands
+description: The deedbox tool.
+sidebar:
+  order: 5
+---
+
+This page lists every `deedbox` command.
+
+```sh
+dotnet tool install -g Deedbox.Cli --prerelease
+```
+
+Every command that reaches the database takes `--provider postgres|sqlserver`, `--connection` (or the `DEEDBOX_CONNECTION` variable) and `--schema` (default `deedbox`).
+
+| Command | Does | Runs where |
+| --- | --- | --- |
+| `deedbox schema script --from <n>` | Prints the migration SQL after version n. | CLI |
+| `deedbox schema apply` | Applies pending migrations under a lock. | CLI |
+| `deedbox status [--json]` | Checkpoints, lag, stalled consumers with their poison event, recent jobs. | CLI |
+| `deedbox keys rewrap --from <key> --to <key>` | Re-wraps tenant keys. A key is `database`, `env:<VARIABLE>` or `azure:<key URL>`. | CLI |
+| `deedbox tenant shred <tenant> --yes` | Crypto-shreds a tenant. | CLI |
+| `deedbox lockfile diff <old> <new>` | Shows event-contract changes; exits 1 on a break. | CLI |
+| `deedbox rebuild <projection> [--wait]` | Queues a rebuild. | App |
+| `deedbox skip <consumer> --event <id> [--wait]` | Queues an audited skip of a poison event. | App |
+| `deedbox erase <subject> [--tenant t] [--wait]` | Deletes the subject's key now; queues the rest. | CLI, then app |
+| `deedbox snapshots rebuild <streamType> [--wait]` | Queues a rebuild of stored state. | App |
+
+"App" means a running app instance with the runner on takes the queued job. `--wait` follows the job and exits 1 if it fails.

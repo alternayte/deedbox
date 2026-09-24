@@ -10,3 +10,6 @@ TestResults/
 .vs/
 .idea/
 .DS_Store
+site/node_modules/
+site/dist/
+site/.astro/

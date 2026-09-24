@@ -1,0 +1,33 @@
+---
+title: Erasure and the key hierarchy
+description: How crypto-shredding erases personal data from streams you keep.
+sidebar:
+  order: 5
+---
+
+This page explains how Deedbox encrypts personal data, and what erasure does.
+
+The keys form a chain:
+
+1. The **master key** lives in the database, in a key ring from configuration, or in Azure Key Vault.
+2. It wraps one **tenant key** per tenant, which each process unwraps once.
+3. Each tenant key wraps the **subject keys** in the `subject_keys` table.
+4. Each subject key encrypts that subject's **personal-data fields** in event payloads.
+
+- Each `[PersonalData]` field is encrypted with AES-256-GCM under its subject's key.
+- Each subject key is wrapped by its tenant's key. Each tenant key is wrapped by the master key.
+- Reads and rebuilds use only local AES. They never call a key service.
+- Erasing a subject deletes their key. Every copy of their data, in every stream, becomes unreadable at once.
+- Shredding a tenant destroys the tenant key and all its subject keys.
+
+## What is safe to rely on
+
+- A missing subject key is the only thing that reads as erased. A key that does not verify, or a master key that cannot unwrap a tenant key, stops Deedbox with an error. A misconfiguration never looks like an erasure.
+- Subject keys are cached for one operation only, so an erasure on one instance applies on every instance at once.
+- The stored state of a stream with personal data is encrypted with the tenant key, and cleared when a subject in it is erased.
+
+## What it does not cover
+
+- Backups taken before an erasure keep the subject key until they age out.
+- Your projections and subscriptions receive decrypted data. Scrub it when they handle `SubjectErased`.
+- Metadata, stream IDs and subject IDs are plain text.

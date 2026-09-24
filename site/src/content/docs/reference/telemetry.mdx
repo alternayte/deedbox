@@ -1,0 +1,44 @@
+---
+title: Metric and trace names
+description: What Deedbox emits for OpenTelemetry.
+sidebar:
+  order: 4
+---
+
+import Telemetry from '../../../snippets/telemetry.md';
+
+This page lists every span and instrument. Both the ActivitySource and the Meter are named `Deedbox`.
+
+<Telemetry />
+
+## Spans
+
+| Span | Tags |
+| --- | --- |
+| `deedbox.append`, `deedbox.execute`, `deedbox.load` | `deedbox.stream_type`, `deedbox.stream_id`, `deedbox.events` |
+| `deedbox.delete_stream`, `deedbox.erase_stream` | `deedbox.stream_id` |
+| `deedbox.batch` | `deedbox.consumer`, `deedbox.from_position`, `deedbox.to_position` |
+| `deedbox.handle <consumer>` | `deedbox.consumer`, `deedbox.event_type`, `deedbox.global_position`. Its parent is the append that wrote the event. |
+| `deedbox.job` | `deedbox.job.kind`, `deedbox.job.id` |
+
+## Instruments
+
+| Instrument | Unit | Tags |
+| --- | --- | --- |
+| `deedbox.append.duration` | ms | `deedbox.stream_type` |
+| `deedbox.events.appended` | events | `deedbox.stream_type` |
+| `deedbox.append.conflicts` | conflicts | `deedbox.stream_type` |
+| `deedbox.execute.retries` | retries | `deedbox.stream_type` |
+| `deedbox.counter.duration` | ms | none. Counter wait plus hold time. |
+| `deedbox.consumer.lag` | positions | `deedbox.consumer`, `deedbox.schema` |
+| `deedbox.consumer.lag.seconds` | s | `deedbox.consumer`, `deedbox.schema` |
+| `deedbox.consumer.status` | 0 running, 1 rebuilding, 2 stalled | `deedbox.consumer`, `deedbox.schema` |
+| `deedbox.consumer.batch.duration` | ms | `deedbox.consumer` |
+| `deedbox.consumer.failures`, `deedbox.consumer.stalls` | count | `deedbox.consumer` |
+| `deedbox.jobs` | jobs | `deedbox.job.kind`, `deedbox.job.status` |
+| `deedbox.erasure.streams` | streams | none |
+| `deedbox.personal_data.decrypts`, `deedbox.personal_data.redactions` | fields | none |
+
+## Logs
+
+Log events have stable IDs: 1 to 3 at start-up, 20 to 25 in the runner, 30 to 33 for jobs. Every start-up error is a `DeedboxException` with a [DBX code](/reference/errors/).

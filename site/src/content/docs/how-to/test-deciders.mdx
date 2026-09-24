@@ -1,0 +1,31 @@
+---
+title: Test deciders and event contracts
+description: Test decisions with Given/When/Then, and pin event contracts with a lockfile.
+---
+
+import DeciderTests from '../../../snippets/decider-tests.md';
+import LockfileTest from '../../../snippets/lockfile-test.md';
+
+This guide shows you how to test your decisions without a database, and how to stop a change to an event from breaking stored events.
+
+```sh
+dotnet add package Deedbox.Testing --prerelease
+```
+
+## Test decisions
+
+<DeciderTests />
+
+`Given` folds past events through your state's `Evolve`. `When` runs the decision. `Then` compares the events by type and by their JSON, so records that hold collections compare by content. The helpers throw `DeciderAssertionException`, so they work with any test framework.
+
+## Pin event contracts
+
+<LockfileTest />
+
+The first run writes `events.lock` next to the test file and fails once; commit the file. From then on:
+
+- A new event, alias, version or nullable property updates the file, and the test passes. Commit the change.
+- A removed name, a changed type, a removed property, a removed `[PersonalData]` marker, or a new non-nullable property without a new version fails the test with the fix.
+- Under CI (`CI=true`), any difference fails, so a stale lockfile cannot pass.
+
+Compare two lockfiles in a pull request with `deedbox lockfile diff main.lock events.lock`.

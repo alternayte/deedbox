@@ -1,0 +1,5 @@
+# Deedbox event contracts. EventContracts.Verify writes this file; commit it.
+
+stream cart (Cart)
+  cart.checked_out v1 { at: date-time }
+  cart.item_added v1 { qty: int32, sku: string }

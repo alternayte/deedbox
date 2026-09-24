@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Deedbox contributors",
+  "classifications": ["Web", "Event sourcing"],
+  "identity": "Deedbox.Templates.App",
+  "name": "Deedbox app",
+  "description": "A web app with one event-sourced stream, an inline projection, schema setup, and decider and lockfile tests.",
+  "shortName": "deedbox",
+  "sourceName": "MyApp",
+  "preferNameDirectory": true,
+  "tags": { "language": "C#", "type": "solution" },
+  "symbols": {
+    "database": {
+      "type": "parameter",
+      "datatype": "choice",
+      "defaultValue": "postgres",
+      "description": "The database.",
+      "choices": [
+        { "choice": "postgres", "description": "Postgres" },
+        { "choice": "sqlserver", "description": "SQL Server" }
+      ]
+    },
+    "postgres": { "type": "computed", "value": "(database == \"postgres\")" },
+    "sqlserver": { "type": "computed", "value": "(database == \"sqlserver\")" }
+  }
+}

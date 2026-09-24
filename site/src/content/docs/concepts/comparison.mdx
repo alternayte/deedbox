@@ -1,0 +1,25 @@
+---
+title: Comparison with other libraries
+description: How Deedbox differs from Marten, Polecat and Eventuous.
+sidebar:
+  order: 6
+---
+
+This page compares Deedbox with other .NET event stores, to help you choose. Each library is good at what it sets out to do; the differences are in scope.
+
+| | Deedbox | Marten | Polecat | Eventuous |
+| --- | --- | --- | --- | --- |
+| Databases | Postgres, SQL Server | Postgres | SQL Server | Postgres, SQL Server, KurrentDB |
+| Scope | Event store only | Document database and event store | Document database and event store | Event store with its own command-service model |
+| Your data access | EF Core, Dapper or ADO.NET, in your transaction | Marten sessions | Polecat sessions | Eventuous services |
+| Async ordering | One serialized counter; readers never skip | A high-water mark; by design it can skip a gap it judges dead | The same daemon as Marten | See its docs |
+
+Deedbox also encrypts personal data per subject and erases it by deleting the key, and every Deedbox package is MIT-licensed. Check the other projects' docs for their own approach to personal data and for their licence terms; some JasperFx monitoring add-ons need a commercial licence for production use.
+
+## When not to use Deedbox
+
+- You want a document database too. Use Marten or Polecat.
+- You need tens of thousands of appends per second to one store. Deedbox serializes appends; see [the benchmarks](/operations/benchmarks/).
+- You want KurrentDB (EventStoreDB). Use Eventuous or the KurrentDB client.
+
+Sources: the [Marten async daemon docs](https://martendb.io/events/projections/async-daemon.html), [Marten 9.25.0 release notes](https://github.com/JasperFx/marten/releases/tag/V9.25.0), [Polecat announcement](https://jeremydmiller.com/2026/03/22/announcing-polecat-event-sourcing-with-sql-server/), and [Eventuous](https://github.com/Eventuous/eventuous).

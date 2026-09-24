@@ -1,0 +1,41 @@
+---
+title: Apply the schema
+description: Create and upgrade the Deedbox tables at start-up, with the CLI, with EF Core migrations, or with DbUp.
+---
+
+import SchemaEfMigration from '../../../snippets/schema-ef-migration.md';
+
+This guide shows you the ways to create and upgrade the Deedbox tables. Deedbox never changes the schema unless you ask it to. Without a current schema, start-up fails with the exact fix ([DBX001](/reference/errors/dbx001/)).
+
+## At start-up
+
+Call `ApplySchemaOnStartup()` in `AddDeedbox`. Pods take a database lock, so concurrent pods apply each migration once.
+
+## With the CLI
+
+```sh
+dotnet tool install -g Deedbox.Cli --prerelease
+deedbox schema apply --provider postgres --connection "$DEEDBOX_CONNECTION"
+```
+
+Or print the SQL for a DBA:
+
+```sh
+deedbox schema script --provider sqlserver --from 0 > deedbox.sql
+```
+
+`--from` is the version the database has now. The scripts are idempotent, and each records itself in `schema_version`.
+
+## In an EF Core migration
+
+<SchemaEfMigration />
+
+The tables stay out of your EF Core model. For an upgrade, add a new migration with `Script(fromVersion: n)`.
+
+## With DbUp or Flyway
+
+Save the output of `deedbox schema script` as a numbered script in your migrations folder. For SQL Server, the script separates batches with `GO`.
+
+## Use another schema name
+
+`.Schema("es")` puts the tables in `es` instead of `deedbox`. Names are lower-case letters, digits and underscores, at most 50 characters.

@@ -1,0 +1,34 @@
+---
+title: Wire QueueBox
+description: Publish events to brokers and webhooks through QueueBox.
+---
+
+import QueueBox from '../../../snippets/queuebox.md';
+
+This guide shows you how to send events to other systems with [QueueBox](https://github.com/alternayte/queuebox). Deedbox writes a QueueBox outbox row in the append's transaction, so a message exists exactly when its event commits. QueueBox delivers it, with retries, at least once.
+
+1. Run QueueBox against the same database, and let it create its `outbox` table.
+2. Add the package:
+
+   ```sh
+   dotnet add package Deedbox.QueueBox --prerelease
+   ```
+
+3. Choose the events to publish:
+
+   <QueueBox />
+
+## What each row holds
+
+| Column | Value |
+| --- | --- |
+| `id` | The event ID. A destination deduplicates on `X-Message-Id`. |
+| `topic` | The topic you chose. |
+| `key` | The stream ID, so one stream's messages keep their order. |
+| `payload` | The event's JSON, or the payload you shaped. |
+| `headers` | `X-Correlation-Id`, `traceparent`, and the event's type, stream and version. |
+| `aggregate_type` | The stream type. |
+
+An event with `[PersonalData]` needs a payload you shape; start-up fails otherwise ([DBX032](/reference/errors/dbx032/)).
+
+If QueueBox runs with a custom table or column mapping, match it with `UseTable` and `UseColumns`.

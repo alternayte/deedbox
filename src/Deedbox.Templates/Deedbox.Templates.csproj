@@ -1,15 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Description>dotnet new templates for Deedbox.</Description>
+    <Description>dotnet new templates for Deedbox: `dotnet new deedbox` makes a web app with one stream, an inline projection, schema setup, and decider and lockfile tests.</Description>
     <PackageType>Template</PackageType>
     <TargetFrameworks>net8.0</TargetFrameworks>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <IncludeContentInPack>true</IncludeContentInPack>
     <ContentTargetFolders>content</ContentTargetFolders>
     <NoDefaultExcludes>true</NoDefaultExcludes>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
     <IsAotCompatible>false</IsAotCompatible>
     <EnablePackageValidation>false</EnablePackageValidation>
-    <!-- Template content lands with the docs step; nothing to pack until then. -->
-    <IsPackable>false</IsPackable>
+    <IncludeSymbols>false</IncludeSymbols>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="content/**/*" Exclude="content/**/bin/**;content/**/obj/**" />
+  </ItemGroup>
 </Project>

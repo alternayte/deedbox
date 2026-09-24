@@ -1,0 +1,36 @@
+---
+title: Change an event's shape
+description: Add, remove or change fields of an event with upcasters.
+---
+
+import EvolutionRecords from '../../../snippets/evolution-records.md';
+import UpcastJson from '../../../snippets/upcast-json.md';
+import UpcastTyped from '../../../snippets/upcast-typed.md';
+
+This guide shows you how to change an event's fields and keep old events readable.
+
+An event's shape version is stored with it, in `event_version`. The name does not change. When you change the shape, raise the version and add an upcaster for each step from the old versions.
+
+## Edit the JSON for small changes
+
+<UpcastJson />
+
+`From(1, ...)` receives the stored JSON of version 1 and changes it into version 2. It runs after decryption and before deserialization.
+
+## Convert a kept record for a real reshape
+
+<EvolutionRecords />
+<UpcastTyped />
+
+Steps run in order: version 1 goes through the JSON step to version 2, then the typed step converts version 2 to the current record. A typed step is always the last one.
+
+## What needs a new version
+
+| Change | New version needed |
+| --- | --- |
+| Add a nullable property | No |
+| Add a property that cannot be null | Yes, with a default in the upcaster |
+| Remove or rename a property | Yes |
+| Change a property's type | Yes |
+
+Start-up fails when a version has no upcaster for some step ([DBX018](/reference/errors/dbx018/)). The [lockfile](/how-to/test-deciders/#pin-event-contracts) fails a test when a shape changes without a new version.

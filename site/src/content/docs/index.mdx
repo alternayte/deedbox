@@ -1,0 +1,40 @@
+---
+title: Deedbox
+description: Event-source part of your app. Postgres or SQL Server. EF Core, Dapper, or neither.
+template: splash
+hero:
+  tagline: Event-source part of your app. Postgres or SQL Server. EF Core, Dapper, or neither.
+  actions:
+    - text: Write your first stream
+      link: /tutorials/first-stream/
+      icon: right-arrow
+    - text: Add Deedbox to an EF Core app
+      link: /tutorials/existing-ef-core-app/
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import CartEvents from '../../snippets/cart-events.md';
+import CartState from '../../snippets/cart-state.md';
+import WriteExecute from '../../snippets/write-execute.md';
+
+Deedbox is an MIT-licensed .NET library. It stores the events of one area of your app, such as orders or manuscripts, in your existing Postgres or SQL Server database. The rest of your app stays as it is.
+
+<CartEvents />
+<CartState />
+<WriteExecute />
+
+<CardGrid>
+  <Card title="Your app stays yours" icon="setting">
+    Deedbox tables live in their own schema. Appends share your connection and transaction. There is no mediator, no document database and no base class for your events.
+  </Card>
+  <Card title="Correct under load" icon="approve-check">
+    No event is ever skipped. Global order is commit order. A torture suite checks this on both databases, with killed sessions and competing instances.
+  </Card>
+  <Card title="Erasure built in" icon="warning">
+    Mark personal data with an attribute. Erasing a person makes their data unreadable everywhere, even inside long-lived shared streams.
+  </Card>
+  <Card title="Operable" icon="list-format">
+    A CLI, an admin API, metrics, traces and health checks that stay healthy during a rebuild.
+  </Card>
+</CardGrid>

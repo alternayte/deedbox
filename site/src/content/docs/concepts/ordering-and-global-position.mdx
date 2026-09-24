@@ -1,0 +1,32 @@
+---
+title: Ordering and global position
+description: How Deedbox orders events across streams, and why no event is ever skipped.
+sidebar:
+  order: 4
+---
+
+This page explains the global position, and the design choice that makes it safe to read.
+
+## Every event has a global position
+
+Positions order every event of the store. They are gapless and follow commit order: an event at position 11 commits after the event at position 10. So when a reader sees position 11, position 10 is already committed. A reader that asks for "everything after my checkpoint" never misses an event that commits later.
+
+Compare positions; never do arithmetic on them. Deleting a stream removes its events and leaves gaps.
+
+## One counter serializes appends
+
+Deedbox takes positions from a single counter row. Each append updates the counter as its last statement and commits right after. The row stays locked in between, so the next append waits. A rolled-back append also rolls back the counter, so no position is ever lost.
+
+In one append, in this order:
+
+1. Lock and update the stream row.
+2. Run inline projections and appending hooks.
+3. Update the position counter.
+4. Insert the events at the new positions.
+5. Commit, which releases the counter.
+
+The cost is that appends take turns for that short window. See [the benchmarks](/operations/benchmarks/) for the ceiling. A transaction you own keeps the counter locked until you commit, so commit soon after an append.
+
+## Why not a sequence or a row version
+
+A sequence or row version hands out numbers before commit. Two transactions can then commit out of order, and a reader can pass a number that commits later. Other stores guess when such a gap is safe to skip, and several have shipped bugs that skipped events. Deedbox never skips; the counter makes that guess unnecessary. A torture suite checks it on both databases with rollbacks, long transactions and competing readers.

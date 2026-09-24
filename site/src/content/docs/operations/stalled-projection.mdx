@@ -1,0 +1,21 @@
+---
+title: Stalled projection
+description: Find out why a projection or subscription stopped, and start it again.
+sidebar:
+  order: 1
+---
+
+This runbook helps you get a stalled projection or subscription moving again.
+
+## Symptoms
+
+- The health check is unhealthy and names the consumer.
+- `deedbox.consumer.status` is 2, or `deedbox.consumer.lag` grows.
+- Log event 23 says "stalled on stream ...".
+
+## Steps
+
+1. Run `deedbox status`. Find the consumer and its reason.
+2. If the reason is `poison`, follow the [poison event runbook](/operations/poison-event/).
+3. If the reason is `mode_changed`, the projection's run mode changed between deploys. Its old checkpoint belongs to the other mode. Rebuild it: `deedbox rebuild <projection> --wait`.
+4. If the consumer is `running` but the health check says it "has not moved", no instance is running its batches. Check that at least one instance has the runner on and can reach the database. Look for log event 21.

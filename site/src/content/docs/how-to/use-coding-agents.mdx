@@ -1,0 +1,21 @@
+---
+title: Use Deedbox with coding agents
+description: Give Claude Code, Cursor and other agents the Deedbox docs and rules.
+---
+
+This guide shows you how to give a coding agent what it needs to write correct Deedbox code.
+
+## Point the agent at llms.txt
+
+The site publishes the docs as plain Markdown for language models:
+
+- [`/llms.txt`](/llms.txt): an index of every page.
+- [`/llms-full.txt`](/llms-full.txt): every page in one file.
+- [`/llms-small.txt`](/llms-small.txt): a shorter version for small context windows.
+
+## Install the agent skill
+
+The repository ships a skill with the rules an agent must follow, such as "decisions are pure" and "never append built-in events".
+
+- Claude Code: copy [`skills/deedbox`](https://github.com/alternayte/deedbox/tree/main/skills/deedbox) to `.claude/skills/deedbox` in your repository.
+- Cursor: copy `skills/deedbox/SKILL.md` to `.cursor/rules/deedbox.mdc`.

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+<!--#if (postgres) -->
+    <PackageReference Include="Deedbox.Postgres" Version="0.1.0-alpha" />
+<!--#else -->
+    <PackageReference Include="Deedbox.SqlServer" Version="0.1.0-alpha" />
+<!--#endif -->
+  </ItemGroup>
+</Project>

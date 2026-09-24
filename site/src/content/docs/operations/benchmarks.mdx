@@ -1,0 +1,14 @@
+---
+title: Benchmarks
+description: Append throughput and latency on both databases.
+sidebar:
+  order: 6
+---
+
+import Results from '../../../snippets/benchmarks.md';
+
+This page shows how fast appends are, and where the ceiling is. The nightly workflow runs the benchmarks, and fails when a cell's throughput drops more than 30% below the baseline.
+
+Run them yourself with `just bench`.
+
+<Results />

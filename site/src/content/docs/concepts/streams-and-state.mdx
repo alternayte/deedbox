@@ -1,0 +1,46 @@
+---
+title: Streams and state
+description: What Deedbox stores for each stream, and how it names things.
+sidebar:
+  order: 1
+---
+
+import CartState from '../../../snippets/cart-state.md';
+import RegisterNames from '../../../snippets/register-names.md';
+import RegisterSnapshots from '../../../snippets/register-snapshots.md';
+import StreamIds from '../../../snippets/stream-ids.md';
+
+This page explains what a stream is, what Deedbox stores for it, and how names stay stable.
+
+## A stream is one aggregate's history
+
+A stream holds the events of one thing, such as one cart. Its identity is (tenant, stream ID). Its events have versions 1, 2, 3 and so on, with no gaps. The stream's state is what you get when you apply every event, in order, to the initial state.
+
+<CartState />
+
+## Names are stored, not derived at read time
+
+| Thing | Convention | Override |
+| --- | --- | --- |
+| Stream type | `Cart` becomes `cart` | `.Stream<Cart>("shopping_cart", ...)` |
+| Event type | `cart.item_added` | `.Event<ItemAdded>(name: "...")` |
+| Old names | none | `.Alias("...")` |
+| Shape version | 1 | `.Event<T>(version: 2, ...)` |
+
+<RegisterNames />
+
+One CLR type maps to one stored name. Registering it twice fails at start-up. At start-up, Deedbox also checks that every stored event name maps to a registered event.
+
+## Stream IDs are strings
+
+<StreamIds />
+
+A stream ID has 1 to 200 characters and no leading or trailing white space. IDs compare case-sensitively on both databases.
+
+## State is stored next to the events
+
+By default, every append also stores the new state, so a load reads one row. The stored state carries a state version. When you change the state record, raise the state version: each stream's state is then rebuilt from its events on its next load.
+
+<RegisterSnapshots />
+
+For a stream type with personal data, the stored state is encrypted with the tenant's key.

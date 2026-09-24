@@ -1,0 +1,52 @@
+---
+title: Run on Kubernetes
+description: Health probes, several replicas, schema changes and keys on Kubernetes.
+---
+
+import HealthChecks from '../../../snippets/health-checks.md';
+import RegisterRunner from '../../../snippets/register-runner.md';
+
+This guide shows you how to run Deedbox with several replicas on Kubernetes.
+
+## Use the health check for liveness
+
+<HealthChecks />
+
+The check is unhealthy only when a projection or subscription is stalled, or when events wait and its checkpoint has not moved for `StallAfter` (10 minutes by default). A projection that is behind but moving, or rebuilding, is healthy. Kubernetes therefore does not restart a pod in the middle of a rebuild.
+
+```yaml
+livenessProbe:
+  httpGet: { path: /health, port: 8080 }
+  periodSeconds: 30
+  failureThreshold: 4
+```
+
+## Run several replicas
+
+Replicas need no extra setup. Each batch of a projection runs while its replica holds the projection's checkpoint row, so the projections spread across replicas and each runs on one replica at a time.
+
+To keep background work off your web pods, turn the runner off there and run a worker deployment with it on:
+
+<RegisterRunner />
+
+Set `r.Enabled = false` in the web pods.
+
+## Change the schema
+
+Choose one:
+
+- `ApplySchemaOnStartup()`: every pod applies pending migrations under a database lock, so concurrent pods apply them once.
+- A Kubernetes Job before the rollout: `deedbox schema apply --provider postgres --connection "$DEEDBOX_CONNECTION"`.
+
+Without either, a pod fails at start-up with the exact fix ([DBX001](/reference/errors/dbx001/)). A newer schema than the build is fine, so old pods keep running during a rolling deploy.
+
+## Keep the master key in a Secret
+
+```yaml
+env:
+  - name: DEEDBOX_MASTER_KEY
+    valueFrom:
+      secretKeyRef: { name: deedbox, key: master-key }
+```
+
+Back the Secret up outside the cluster. Losing every copy of the master key loses all personal data.
