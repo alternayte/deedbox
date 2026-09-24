@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 
@@ -26,19 +27,44 @@ internal sealed class StreamRegistration(string name, Type stateType, Func<objec
 internal sealed class EventRegistration(Type clrType, string name, StreamRegistration stream)
 {
     public Type ClrType { get; } = clrType;
-    public string Name { get; } = name;
-    public int Version { get; } = 1;
+    public string Name { get; set; } = name;
+    public int Version { get; set; } = 1;
     public StreamRegistration Stream { get; } = stream;
+    public List<string> Aliases { get; } = [];
+
+    /// <summary>Upcast steps keyed by the version each one starts from.</summary>
+    public SortedDictionary<int, UpcastStep> Steps { get; } = [];
+
     public JsonTypeInfo Json { get; set; } = null!;
+
+    public void AddStep(UpcastStep step)
+    {
+        if (!Steps.TryAdd(step.From, step))
+        {
+            throw new DeedboxException(Errors.MissingUpcaster,
+                $"Event {ClrType.Name} has two upcasters from version {step.From}. Keep one step per version.");
+        }
+    }
 }
 
-/// <summary>Maps CLR types to stored names and back. Built once; duplicates fail at start-up.</summary>
+internal abstract record UpcastStep(int From);
+
+/// <summary>Changes the stored JSON of version <see cref="UpcastStep.From"/> into the next version's JSON.</summary>
+internal sealed record JsonUpcast(int From, Action<JsonObject> Apply) : UpcastStep(From);
+
+/// <summary>Reads the last old version as its own record type and converts it to the current event type.</summary>
+internal sealed record TypedUpcast(int From, Type OldType, Func<object, object> Convert) : UpcastStep(From)
+{
+    public JsonTypeInfo OldJson { get; set; } = null!;
+}
+
+/// <summary>Maps CLR types to stored names and back. Built once; every mistake fails at start-up.</summary>
 internal sealed partial class EventRegistry
 {
     private readonly Dictionary<Type, StreamRegistration> _byState = [];
     private readonly Dictionary<string, StreamRegistration> _byName = new(StringComparer.Ordinal);
     private readonly Dictionary<Type, EventRegistration> _byEvent = [];
-    private readonly Dictionary<string, EventRegistration> _byEventName = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, EventRegistration> _byStoredName = new(StringComparer.Ordinal);
 
     public EventRegistry(IEnumerable<StreamRegistration> streams, DeedboxJson json)
     {
@@ -61,25 +87,11 @@ internal sealed partial class EventRegistry
             stream.StateJson = json.TypeInfo(stream.StateType);
 
             foreach (var e in stream.Events)
-            {
-                ValidateName(e.Name, "Event type");
-                if (_byEvent.TryGetValue(e.ClrType, out var sameType))
-                {
-                    throw new DeedboxException(Errors.DuplicateEvent,
-                        $"Event {e.ClrType.Name} is registered twice, as '{sameType.Name}' and '{e.Name}'. One CLR type maps to one stored name; keep old names readable with an alias.");
-                }
-
-                if (!_byEventName.TryAdd(e.Name, e))
-                {
-                    throw new DeedboxException(Errors.DuplicateEvent,
-                        $"Event type name '{e.Name}' is registered for both {_byEventName[e.Name].ClrType.Name} and {e.ClrType.Name}. Give one of them another name with Event<T>(name: ...).");
-                }
-
-                _byEvent[e.ClrType] = e;
-                e.Json = json.TypeInfo(e.ClrType);
-            }
+                AddEvent(e, json);
         }
     }
+
+    public IEnumerable<StreamRegistration> Streams => _byName.Values;
 
     public StreamRegistration ForState(Type stateType) =>
         _byState.TryGetValue(stateType, out var stream)
@@ -93,11 +105,94 @@ internal sealed partial class EventRegistry
             : throw new DeedboxException(Errors.UnregisteredEvent,
                 $"Event {eventType.Name} is not registered. Add it to its stream with .Events<{eventType.Name}>() or .Event<{eventType.Name}>().");
 
+    /// <summary>The registration for a stored name, which is either the current name or an alias.</summary>
+    public EventRegistration? FindStoredName(string eventType) => _byStoredName.GetValueOrDefault(eventType);
+
     public EventRegistration ForStoredName(string eventType) =>
-        _byEventName.TryGetValue(eventType, out var e)
-            ? e
-            : throw new DeedboxException(Errors.UnknownStoredEvent,
-                $"Stored event type '{eventType}' has no registered CLR type. If you renamed the event class, register the old name as an alias.");
+        FindStoredName(eventType) ?? throw new DeedboxException(Errors.UnmappedStoredEvent,
+            $"Stored event type '{eventType}' has no registered CLR type. If you renamed the event class, add .Alias(\"{eventType}\") to it.");
+
+    /// <summary>Turns a stored event into its current CLR type, running upcasters for older versions.</summary>
+    public object Decode(string eventType, int eventVersion, string payload)
+    {
+        var registration = ForStoredName(eventType);
+        if (eventVersion == registration.Version)
+            return DeedboxJson.Deserialize(payload, registration.Json);
+
+        if (eventVersion > registration.Version)
+            throw VersionAhead(eventType, eventVersion, registration);
+
+        JsonObject? json = null;
+        for (var version = eventVersion; version < registration.Version; version++)
+        {
+            switch (registration.Steps[version])
+            {
+                case JsonUpcast step:
+                    json ??= JsonNode.Parse(payload)?.AsObject() ?? throw new JsonException($"Stored JSON for '{eventType}' is not an object.");
+                    step.Apply(json);
+                    break;
+                case TypedUpcast step:
+                    var old = json is null ? DeedboxJson.Deserialize(payload, step.OldJson) : json.Deserialize(step.OldJson)!;
+                    return step.Convert(old);
+            }
+        }
+
+        return json!.Deserialize(registration.Json) ?? throw new JsonException($"Upcast JSON for '{eventType}' is null.");
+    }
+
+    public static DeedboxException VersionAhead(string eventType, int storedVersion, EventRegistration registration) =>
+        new(Errors.StoredVersionAhead,
+            $"Stored events '{eventType}' have version {storedVersion}, but this build registers {registration.ClrType.Name} at version {registration.Version}. " +
+            "A newer build wrote them; deploy that build or a later one.");
+
+    private void AddEvent(EventRegistration e, DeedboxJson json)
+    {
+        ValidateName(e.Name, "Event type");
+        if (_byEvent.TryGetValue(e.ClrType, out var sameType))
+        {
+            throw new DeedboxException(Errors.DuplicateEvent,
+                $"Event {e.ClrType.Name} is registered twice, as '{sameType.Name}' and '{e.Name}'. One CLR type maps to one stored name; keep old names readable with an alias.");
+        }
+
+        foreach (var name in e.Aliases.Prepend(e.Name))
+        {
+            ValidateName(name, "Event type");
+            if (!_byStoredName.TryAdd(name, e))
+            {
+                throw new DeedboxException(Errors.DuplicateEvent,
+                    $"Event type name '{name}' is registered for both {_byStoredName[name].ClrType.Name} and {e.ClrType.Name}. Each current name and alias maps to one event.");
+            }
+        }
+
+        for (var version = 1; version < e.Version; version++)
+        {
+            if (!e.Steps.TryGetValue(version, out var step))
+            {
+                throw new DeedboxException(Errors.MissingUpcaster,
+                    $"Event {e.ClrType.Name} is at version {e.Version} but has no upcaster from version {version}. Add up.From({version}, json => ...) to its registration.");
+            }
+
+            if (step is TypedUpcast typed)
+            {
+                if (version != e.Version - 1)
+                {
+                    throw new DeedboxException(Errors.MissingUpcaster,
+                        $"Event {e.ClrType.Name} has a typed upcaster from version {version}; a typed upcaster must be the last step, from version {e.Version - 1}.");
+                }
+
+                typed.OldJson = json.TypeInfo(typed.OldType);
+            }
+        }
+
+        if (e.Steps.Keys.FirstOrDefault(v => v >= e.Version) is var extra and not 0)
+        {
+            throw new DeedboxException(Errors.MissingUpcaster,
+                $"Event {e.ClrType.Name} has an upcaster from version {extra}, but the event is only at version {e.Version}.");
+        }
+
+        _byEvent[e.ClrType] = e;
+        e.Json = json.TypeInfo(e.ClrType);
+    }
 
     private static void ValidateName(string name, string what)
     {

@@ -1,3 +1,6 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
+
 namespace Deedbox;
 
 /// <summary>Registers one stream type's events and settings inside <c>Stream&lt;TState&gt;(...)</c>.</summary>
@@ -12,14 +15,58 @@ public sealed class StreamBuilder<TState> where TState : IState<TState>
     }
 
     /// <summary>
-    /// Registers one event type. The stored name defaults to <c>{streamType}.{snake_case(TEvent)}</c>,
-    /// such as <c>cart.item_added</c>.
+    /// Registers one event type under <c>{streamType}.{snake_case(TEvent)}</c>, such as <c>cart.item_added</c>.
     /// </summary>
-    /// <param name="name">A stored name that overrides the convention.</param>
     /// <typeparam name="TEvent">The event type.</typeparam>
-    public StreamBuilder<TState> Event<TEvent>(string? name = null) where TEvent : notnull
+    public StreamBuilder<TState> Event<TEvent>() where TEvent : notnull => Event<TEvent>(_ => { });
+
+    /// <summary>Registers one event type under an explicit stored name.</summary>
+    /// <param name="name">The stored event type name, such as <c>cart.line_added</c>.</param>
+    /// <typeparam name="TEvent">The event type.</typeparam>
+    public StreamBuilder<TState> Event<TEvent>(string name) where TEvent : notnull
     {
-        _stream.Events.Add(new EventRegistration(typeof(TEvent), name ?? Naming.EventType(_stream.Name, typeof(TEvent)), _stream));
+        ArgumentNullException.ThrowIfNull(name);
+        return Event<TEvent>(e => e.Name(name));
+    }
+
+    /// <summary>Registers one event type and sets its name, aliases or upcasters.</summary>
+    /// <param name="configure">Sets the event's name, aliases and upcasters.</param>
+    /// <typeparam name="TEvent">The event type.</typeparam>
+    public StreamBuilder<TState> Event<TEvent>(Action<EventBuilder<TEvent>> configure) where TEvent : notnull =>
+        Event(1, configure);
+
+    /// <summary>
+    /// Registers one event type whose shape is at <paramref name="version"/>. Older stored versions need an
+    /// upcaster for every step, such as <c>up =&gt; up.From(1, json =&gt; json["qty"] ??= 1)</c>.
+    /// </summary>
+    /// <param name="version">The current shape version, at least 1.</param>
+    /// <param name="configure">Sets the event's upcasters, name and aliases.</param>
+    /// <typeparam name="TEvent">The event type.</typeparam>
+    public StreamBuilder<TState> Event<TEvent>(int version, Action<EventBuilder<TEvent>> configure) where TEvent : notnull
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(version, 1);
+        ArgumentNullException.ThrowIfNull(configure);
+        var registration = new EventRegistration(typeof(TEvent), Naming.EventType(_stream.Name, typeof(TEvent)), _stream) { Version = version };
+        configure(new EventBuilder<TEvent>(registration));
+        _stream.Events.Add(registration);
+        return this;
+    }
+
+    /// <summary>
+    /// Registers every public class or struct nested in <paramref name="container"/>, such as a static
+    /// <c>CartEvents</c> class that holds the stream's event records, with conventional names.
+    /// </summary>
+    /// <param name="container">The type the events are nested in, such as <c>typeof(CartEvents)</c>.</param>
+    public StreamBuilder<TState> EventsNestedIn([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicNestedTypes)] Type container)
+    {
+        ArgumentNullException.ThrowIfNull(container);
+        foreach (var type in container.GetNestedTypes(BindingFlags.Public).OrderBy(t => t.Name, StringComparer.Ordinal))
+        {
+            if (type.IsAbstract || type.IsInterface || type.IsEnum || type.ContainsGenericParameters)
+                continue;
+            _stream.Events.Add(new EventRegistration(type, Naming.EventType(_stream.Name, type), _stream));
+        }
+
         return this;
     }
 

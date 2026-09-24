@@ -8,7 +8,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 2. Schema: embedded migration scripts for both providers, schema manager with locks, schema_version startup check, CLI "schema script" and "schema apply".
 - [x] 3. Write path: string stream IDs, position counter (option A), streams and events tables, Append / Load / Execute with expected versions, conflict retry, snapshots with state_version, transaction modes (neither, Dapper, EF Core with several DbContexts in one transaction).
 - [x] 4. Torture suite v1: concurrent appends with rollbacks and long transactions; assert gapless commit-ordered positions and per-stream order. HUMAN GATE 1: API shape review and torture suite v1 results.
-- [ ] 5. Registry and evolution: naming convention, aliases, event_types table, startup name check, JSON upcasters and typed upcasters, lockfile in Deedbox.Testing, Given/When/Then helpers.
+- [x] 5. Registry and evolution: naming convention, aliases, event_types table, startup name check, JSON upcasters and typed upcasters, lockfile in Deedbox.Testing, Given/When/Then helpers.
 - [ ] 6. Inline projections (EF and ADO flavours), OnAppending hook, metadata context, causation/correlation, TraceParent capture, tenancy scoping.
 - [ ] 7. Async runner: checkpoints, projections, subscriptions, type filtering, LISTEN/NOTIFY and backoff, multi-instance locking, poison handling, in-place rebuilds, health checks, jobs table.
 - [ ] 8. Torture suite v2: projector kills, competing instances, sparse filters, idle query budget; every Anthology regression test.
@@ -51,12 +51,21 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 3: IEventStore is registered as scoped, for the tenant and metadata context in step 6.
 - Step 4: The torture suite also runs on SQL Server with READ_COMMITTED_SNAPSHOT on (a second database, deedbox_rcsi), because Azure SQL enables it by default and readers then skip locked rows instead of waiting.
 - Step 4: Torture tests carry the trait Category=Torture. DEEDBOX_TORTURE_SCALE multiplies the work; DEEDBOX_TORTURE_SEED replays a run's operation choices.
+- Step 5: `EventsNestedIn(typeof(CartEvents))` takes a Type. C# does not allow a static class as a type argument, so the SDD's `EventsNestedIn<CartEvents>()` cannot compile.
+- Step 5: Event registration overloads are `Event<T>()`, `Event<T>(name)`, `Event<T>(e => ...)` and `Event<T>(version, up => ...)`. The builder has Name, Alias, From (JSON step) and Upcast<TOld, TNew> (typed step). This matches the SDD snippets.
+- Step 5: Every version from 1 to the current one needs exactly one upcast step. A typed step must be the last one, because its output is the current CLR type.
+- Step 5: Appends write new (stream type, event type, version) rows to event_types in the append transaction, before the counter. A process cache skips known rows. The cache fills from the start-up read and from commits Deedbox makes itself, never from a caller's transaction, which may still roll back. On SQL Server the event_types key uses IGNORE_DUP_KEY, so concurrent first writers both succeed.
+- Step 5: The start-up check fails on stored names with no mapping, on events registered under another stream type, and on stored versions newer than the build. It lists every problem in one message. A newer stored version fails because this build cannot read it.
+- Step 5: The lockfile uses its own shape walker over System.Text.Json contracts instead of JsonSchemaExporter. It prints the SDD's format (int32, date-time) and needs no System.Text.Json 9 package on net8.0.
+- Step 5: Lockfile rules: removing a name or alias breaks, a lower version breaks, and at the same version, removing a property, changing its type, making it non-nullable or adding a non-nullable property breaks. New events, aliases, versions and nullable properties rewrite the file locally. Under CI (CI=true), any difference fails. The lockfile path is relative to the calling test file.
+- Step 5: Given/When/Then compares events by type and JSON, so records that hold collections compare by content.
+- Step 5: Envelopes carry the current event name and version, after upcasting, not the stored alias or old version.
 
 ## Gate reports
 
 ### HUMAN GATE 1: API shape and torture suite v1
 
-Status: waiting for review. Step 5 starts after sign-off.
+Status: approved on 2026-09-24. Every item above stands as written.
 
 #### Public API to confirm
 

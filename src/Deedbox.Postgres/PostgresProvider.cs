@@ -160,6 +160,25 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public override async Task RecordEventTypes(DbConnection connection, DbTransaction transaction, IReadOnlyList<EventTypeRow> types, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.RecordEventTypes);
+        Add(command, "stream_types", types.Select(t => t.StreamType).ToArray());
+        Add(command, "event_types", types.Select(t => t.EventType).ToArray());
+        Add(command, "event_versions", types.Select(t => t.EventVersion).ToArray());
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<List<EventTypeRow>> ReadEventTypes(DbConnection connection, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.ReadEventTypes);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<EventTypeRow>();
+        while (await reader.ReadAsync(ct))
+            rows.Add(new EventTypeRow(reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+        return rows;
+    }
+
     public override async ValueTask DisposeAsync()
     {
         if (_ownsDataSource)
@@ -226,6 +245,15 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             WHERE tenant_id = @tenant AND stream_id = @stream AND version > @after AND version <= @to
             ORDER BY version
             """;
+
+        public readonly string RecordEventTypes = $"""
+            INSERT INTO {s}.event_types (stream_type, event_type, event_version)
+            SELECT * FROM unnest(@stream_types, @event_types, @event_versions)
+            ON CONFLICT DO NOTHING
+            """;
+
+        public readonly string ReadEventTypes =
+            $"SELECT stream_type, event_type, event_version FROM {s}.event_types ORDER BY stream_type, event_type, event_version";
 
         public readonly string SaveSnapshot = $"""
             UPDATE {s}.streams SET state = @state, state_version = @state_version, state_at = @state_at

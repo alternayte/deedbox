@@ -153,6 +153,26 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public override async Task RecordEventTypes(DbConnection connection, DbTransaction transaction, IReadOnlyList<EventTypeRow> types, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.RecordEventTypes);
+        ((SqlCommand)command).Parameters.Add(new SqlParameter("types", SqlDbType.NVarChar, -1)
+        {
+            Value = JsonSerializer.Serialize(types.Select(t => new[] { t.StreamType, t.EventType, t.EventVersion.ToString(System.Globalization.CultureInfo.InvariantCulture) }).ToArray(), SqlServerJson.Default.StringArrayArray),
+        });
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<List<EventTypeRow>> ReadEventTypes(DbConnection connection, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.ReadEventTypes);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<EventTypeRow>();
+        while (await reader.ReadAsync(ct))
+            rows.Add(new EventTypeRow(reader.GetString(0), reader.GetString(1), reader.GetInt32(2)));
+        return rows;
+    }
+
     /// <summary>The events as one JSON array for OPENJSON, so an append of any size is one parameter.</summary>
     private static string EventsJson(IReadOnlyList<NewEvent> events)
     {
@@ -254,9 +274,22 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             ORDER BY version
             """;
 
+        // The primary key ignores duplicates, so concurrent first appends of one event type both succeed.
+        public readonly string RecordEventTypes = $"""
+            INSERT INTO [{s}].[event_types] (stream_type, event_type, event_version)
+            SELECT JSON_VALUE(t.value, '$[0]'), JSON_VALUE(t.value, '$[1]'), CAST(JSON_VALUE(t.value, '$[2]') AS int)
+            FROM OPENJSON(@types) AS t
+            """;
+
+        public readonly string ReadEventTypes =
+            $"SELECT stream_type, event_type, event_version FROM [{s}].[event_types] ORDER BY stream_type, event_type, event_version";
+
         public readonly string SaveSnapshot = $"""
             UPDATE [{s}].[streams] SET state = @state, state_version = @state_version, state_at = @state_at
             WHERE {Key} AND version = @state_at
             """;
     }
 }
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(string[][]))]
+internal sealed partial class SqlServerJson : System.Text.Json.Serialization.JsonSerializerContext;

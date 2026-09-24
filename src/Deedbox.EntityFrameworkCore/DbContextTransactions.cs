@@ -72,6 +72,8 @@ internal sealed class DbContextTransactions(DbContext primary, IReadOnlyList<DbC
                 await other.SaveChangesAsync(ct);
         }
 
+        public override bool Commits => owned is not null;
+
         public override Task Complete(CancellationToken ct) => owned?.CommitAsync(ct) ?? Task.CompletedTask;
 
         public override async ValueTask DisposeAsync()

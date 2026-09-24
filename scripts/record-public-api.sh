@@ -5,7 +5,7 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 out="$(dotnet build Deedbox.slnx --no-incremental 2>&1 || true)"
-grep -E "error RS0016: Symbol '" <<< "$out" \
+{ grep -E "error RS0016: Symbol '" <<< "$out" || true; } \
   | sed -E "s/.*RS0016: Symbol '(.*)' is not part of the declared public API.*\[(.*\.csproj).*/\2|\1/" \
   | sort -u \
   | while IFS='|' read -r project symbol; do

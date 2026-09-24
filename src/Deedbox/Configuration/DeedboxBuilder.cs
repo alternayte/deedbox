@@ -105,13 +105,19 @@ public sealed class DeedboxBuilder
         _provider = factory;
     }
 
+    /// <summary>The registry and JSON options alone, without a provider, for tools such as the lockfile.</summary>
+    internal (EventRegistry Registry, DeedboxJson Json) BuildRegistry()
+    {
+        var json = new DeedboxJson(_jsonContexts, _configureJson);
+        return (new EventRegistry(_streams, json), json);
+    }
+
     internal DeedboxRuntime Build()
     {
         if (_provider is null)
             throw new DeedboxException(Errors.NoProvider, "No database provider is configured. Call UsePostgres(...) or UseSqlServer(...) in AddDeedbox.");
 
-        var json = new DeedboxJson(_jsonContexts, _configureJson);
-        var registry = new EventRegistry(_streams, json);
+        var (registry, json) = BuildRegistry();
         var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries);
         return new DeedboxRuntime(options, _provider(_schema), registry, json);
     }
@@ -127,6 +133,9 @@ internal sealed class DeedboxRuntime(DeedboxOptions options, DeedboxProvider pro
     public EventRegistry Registry { get; } = registry;
     public DeedboxJson Json { get; } = json;
     public TimeProvider Clock { get; init; } = TimeProvider.System;
+
+    /// <summary>Event types known to be committed in event_types, so appends skip recording them.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<EventTypeRow, bool> KnownEventTypes { get; } = new();
 
     public ValueTask DisposeAsync() => Provider.DisposeAsync();
 }

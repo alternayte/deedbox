@@ -18,4 +18,8 @@ internal static class Errors
     public const string ProviderAlreadySet = "DBX013";
     public const string Conflict = "DBX014";
     public const string InvalidName = "DBX015";
+    public const string UnmappedStoredEvent = "DBX016";
+    public const string StoredVersionAhead = "DBX017";
+    public const string MissingUpcaster = "DBX018";
+    public const string StoredStreamTypeMismatch = "DBX019";
 }

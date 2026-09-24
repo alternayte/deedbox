@@ -63,7 +63,7 @@ CREATE TABLE [{{schema}}].[event_types] (
     event_type    nvarchar(200) COLLATE Latin1_General_100_BIN2 NOT NULL,
     event_version int            NOT NULL,
     first_seen    datetimeoffset NOT NULL CONSTRAINT event_types_first_seen DEFAULT TODATETIMEOFFSET(SYSUTCDATETIME(), 0),
-    CONSTRAINT event_types_pk PRIMARY KEY (stream_type, event_type, event_version)
+    CONSTRAINT event_types_pk PRIMARY KEY (stream_type, event_type, event_version) WITH (IGNORE_DUP_KEY = ON)
 );
 GO
 

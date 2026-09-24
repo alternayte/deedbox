@@ -46,7 +46,7 @@ internal sealed class EventStore(DeedboxRuntime runtime, TransactionSource trans
             if (written is null)
                 continue; // Lost a stream-creation race under ExpectedVersion.Any; the row now exists.
 
-            await lease.Complete(ct);
+            await Commit(lease, written, ct);
             return new AppendResult(written.Version, written.Envelopes);
         }
     }
@@ -73,7 +73,7 @@ internal sealed class EventStore(DeedboxRuntime runtime, TransactionSource trans
             try
             {
                 var written = (await Write(lease, stream, streamId, ExpectedVersion.Exact(loaded.Version), loaded.Row, loaded.State, events, ct))!;
-                await lease.Complete(ct);
+                await Commit(lease, written, ct);
                 return new ExecuteResult<TState>((TState)written.State!, written.Version, written.Envelopes);
             }
             catch (ConcurrencyException) when (attempt < runtime.Options.ExecuteRetries)
@@ -140,6 +140,14 @@ internal sealed class EventStore(DeedboxRuntime runtime, TransactionSource trans
                 DeedboxJson.Serialize(events[i], registration.Json), "{}"));
         }
 
+        var newTypes = registrations
+            .Select(r => new EventTypeRow(stream.Name, r.Name, r.Version))
+            .Distinct()
+            .Where(t => !runtime.KnownEventTypes.ContainsKey(t))
+            .ToList();
+        if (newTypes.Count > 0)
+            await Provider.RecordEventTypes(connection, transaction, newTypes, ct);
+
         await lease.BeforeCounter(ct);
         var last = await Provider.InsertEvents(connection, transaction, _tenantId, streamId, stream.Name, occurredAt, rows, ct);
 
@@ -150,7 +158,19 @@ internal sealed class EventStore(DeedboxRuntime runtime, TransactionSource trans
                 last - rows.Count + 1 + i, rows[i].EventType, rows[i].EventVersion, events[i], occurredAt);
         }
 
-        return new Written(newVersion, newState, envelopes);
+        return new Written(newVersion, newState, envelopes, newTypes);
+    }
+
+    private async Task Commit(Lease lease, Written written, CancellationToken ct)
+    {
+        await lease.Complete(ct);
+
+        // Only a commit Deedbox made proves the rows exist; in a caller's transaction they are recorded again next time.
+        if (lease.Commits)
+        {
+            foreach (var type in written.NewTypes)
+                runtime.KnownEventTypes.TryAdd(type, true);
+        }
     }
 
     private async Task<Loaded> LoadCore(DbConnection connection, DbTransaction? transaction, StreamRegistration stream, string streamId, bool forUpdate, CancellationToken ct)
@@ -193,8 +213,7 @@ internal sealed class EventStore(DeedboxRuntime runtime, TransactionSource trans
 
         await foreach (var stored in Provider.ReadStreamEvents(connection, transaction, _tenantId, streamId, after, row.Version, ct))
         {
-            var registration = runtime.Registry.ForStoredName(stored.EventType);
-            state = stream.Evolve(state, DeedboxJson.Deserialize(stored.Payload, registration.Json));
+            state = stream.Evolve(state, runtime.Registry.Decode(stored.EventType, stored.EventVersion, stored.Payload));
         }
 
         return state;
@@ -249,5 +268,5 @@ internal sealed class EventStore(DeedboxRuntime runtime, TransactionSource trans
 
     private sealed record Loaded(object State, long Version, StreamRow? Row);
 
-    private sealed record Written(long Version, object? State, EventEnvelope[] Envelopes);
+    private sealed record Written(long Version, object? State, EventEnvelope[] Envelopes, List<EventTypeRow> NewTypes);
 }

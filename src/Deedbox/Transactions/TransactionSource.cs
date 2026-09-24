@@ -19,6 +19,9 @@ internal abstract class Lease : IAsyncDisposable
 
     public abstract DbTransaction? Transaction { get; }
 
+    /// <summary>True when <see cref="Complete"/> commits, so what the operation wrote is durable once it returns.</summary>
+    public virtual bool Commits => false;
+
     public DbTransaction WriteTransaction => Transaction ?? throw new InvalidOperationException("A write needs a transaction.");
 
     /// <summary>Runs just before the position counter update, such as EF Core SaveChanges.</summary>
@@ -71,6 +74,8 @@ internal sealed class OwnedTransactions : TransactionSource
         public override DbConnection Connection => connection;
 
         public override DbTransaction? Transaction => transaction;
+
+        public override bool Commits => transaction is not null;
 
         public override Task Complete(CancellationToken ct) => transaction?.CommitAsync(ct) ?? Task.CompletedTask;
 

@@ -60,6 +60,12 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// <summary>Stores a snapshot, but only while the stream is still at <see cref="Snapshot.At"/>.</summary>
     public abstract Task SaveSnapshot(DbConnection connection, DbTransaction? transaction, string tenantId, string streamId, Snapshot snapshot, CancellationToken ct);
 
+    /// <summary>Adds (stream type, event type, event version) rows to event_types; existing rows are left alone.</summary>
+    public abstract Task RecordEventTypes(DbConnection connection, DbTransaction transaction, IReadOnlyList<EventTypeRow> types, CancellationToken ct);
+
+    /// <summary>Every (stream type, event type, event version) the store has ever held.</summary>
+    public abstract Task<List<EventTypeRow>> ReadEventTypes(DbConnection connection, CancellationToken ct);
+
     /// <summary>Releases resources the provider created, such as a data source it built from a connection string.</summary>
     public virtual ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
@@ -92,3 +98,5 @@ internal sealed record NewEvent(Guid EventId, long Version, string EventType, in
 internal sealed record StoredEvent(
     long GlobalPosition, Guid EventId, string TenantId, string StreamId, long Version, string StreamType,
     string EventType, int EventVersion, string Payload, string Metadata, DateTimeOffset OccurredAt);
+
+internal sealed record EventTypeRow(string StreamType, string EventType, int EventVersion);

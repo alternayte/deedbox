@@ -26,6 +26,11 @@ Deedbox.DeedboxBuilder.UseJsonContext(System.Text.Json.Serialization.JsonSeriali
 Deedbox.DeedboxException
 Deedbox.DeedboxException.Code.get -> string!
 Deedbox.DeedboxException.DeedboxException(string! code, string! message, System.Exception? innerException = null) -> void
+Deedbox.EventBuilder<TEvent>
+Deedbox.EventBuilder<TEvent>.Alias(string! oldName) -> Deedbox.EventBuilder<TEvent>!
+Deedbox.EventBuilder<TEvent>.From(int version, System.Action<System.Text.Json.Nodes.JsonObject!>! upcast) -> Deedbox.EventBuilder<TEvent>!
+Deedbox.EventBuilder<TEvent>.Name(string! name) -> Deedbox.EventBuilder<TEvent>!
+Deedbox.EventBuilder<TEvent>.Upcast<TOld, TNew>(System.Func<TOld, TNew>! upcast) -> Deedbox.EventBuilder<TEvent>!
 Deedbox.EventEnvelope
 Deedbox.EventEnvelope.Event.get -> object!
 Deedbox.EventEnvelope.EventId.get -> System.Guid
@@ -70,13 +75,17 @@ Deedbox.LoadResult<TState>.Version.get -> long
 Deedbox.LoadResult<TState>.Version.init -> void
 Deedbox.SnapshotPolicy
 Deedbox.StreamBuilder<TState>
-Deedbox.StreamBuilder<TState>.Event<TEvent>(string? name = null) -> Deedbox.StreamBuilder<TState>!
+Deedbox.StreamBuilder<TState>.Event<TEvent>() -> Deedbox.StreamBuilder<TState>!
+Deedbox.StreamBuilder<TState>.Event<TEvent>(int version, System.Action<Deedbox.EventBuilder<TEvent>!>! configure) -> Deedbox.StreamBuilder<TState>!
+Deedbox.StreamBuilder<TState>.Event<TEvent>(string! name) -> Deedbox.StreamBuilder<TState>!
+Deedbox.StreamBuilder<TState>.Event<TEvent>(System.Action<Deedbox.EventBuilder<TEvent>!>! configure) -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.Events<T1, T2, T3, T4, T5, T6>() -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.Events<T1, T2, T3, T4, T5>() -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.Events<T1, T2, T3, T4>() -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.Events<T1, T2, T3>() -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.Events<T1, T2>() -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.Events<T1>() -> Deedbox.StreamBuilder<TState>!
+Deedbox.StreamBuilder<TState>.EventsNestedIn(System.Type! container) -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.Snapshots(Deedbox.SnapshotPolicy! policy) -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.StateVersion(int version) -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamId
