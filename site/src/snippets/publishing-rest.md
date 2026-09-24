@@ -7,6 +7,8 @@ public static class ManuscriptEndpoints
         var api = app.MapGroup("/manuscripts");
 
         // Reads come from the projection.
+        api.MapGet("/", async (string? search, Status? status, string? after, int? limit, ManuscriptQueries q, CancellationToken ct) =>
+            Results.Ok(await q.List(search, status, after, Math.Clamp(limit ?? 20, 1, 100), ct)));
         api.MapGet("/{id}", async (string id, ManuscriptQueries q, CancellationToken ct) =>
             await q.Manuscript(id, ct) is { } m ? Results.Ok(m) : Results.NotFound());
         api.MapGet("/{id}/versions", async (string id, ManuscriptQueries q, CancellationToken ct) =>

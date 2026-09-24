@@ -1,19 +1,19 @@
 <!-- snippet: publishing-read-model -->
 ```cs
-// One row per manuscript: what an API returns first.
+// One row per manuscript. The columns serve the list; the document serves the detail page in one read.
 public class ManuscriptRow
 {
     public required string Id { get; set; }
     public required string Title { get; set; }
     public Status Status { get; set; }
-    public int Round { get; set; }
-    public int? LatestVersion { get; set; }     // the newest frozen version
-    public int? PublishedVersion { get; set; }  // the version readers see: the Version of Record, or its correction
+    public int? LatestVersion { get; set; }
+    public int? PublishedVersion { get; set; }
     public string? Doi { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+    public required string Document { get; set; }  // ManuscriptView as jsonb
 }
 
-// One row per frozen version, and one row per section of it: the version history.
+// One row per frozen version, and one per section of it: the version history.
 public class VersionRow
 {
     public required string ManuscriptId { get; set; }
@@ -34,39 +34,11 @@ public class VersionSectionRow
     public required string ContentHash { get; set; }
 }
 
-public class AuthorRow
-{
-    public required string ManuscriptId { get; set; }
-    public required string AuthorId { get; set; }
-    public string? Name { get; set; }   // null once the author is erased
-    public required string Affiliation { get; set; }
-}
-
-public class RoundRow
-{
-    public required string ManuscriptId { get; set; }
-    public int Round { get; set; }
-    public int Version { get; set; }
-    public Decision? Decision { get; set; }
-}
-
-public class UpdateRow
-{
-    public required string ManuscriptId { get; set; }
-    public required string NoticeDoi { get; set; }
-    public UpdateType Type { get; set; }
-    public int? Version { get; set; }
-    public DateTimeOffset IssuedAt { get; set; }
-}
-
 public class PublishingDb(DbContextOptions<PublishingDb> options) : DbContext(options)
 {
     public DbSet<ManuscriptRow> Manuscripts => Set<ManuscriptRow>();
     public DbSet<VersionRow> Versions => Set<VersionRow>();
     public DbSet<VersionSectionRow> VersionSections => Set<VersionSectionRow>();
-    public DbSet<AuthorRow> Authors => Set<AuthorRow>();
-    public DbSet<RoundRow> Rounds => Set<RoundRow>();
-    public DbSet<UpdateRow> Updates => Set<UpdateRow>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder conventions) =>
         conventions.Properties<Enum>().HaveConversion<string>();  // store enums as their names
@@ -74,13 +46,24 @@ public class PublishingDb(DbContextOptions<PublishingDb> options) : DbContext(op
     protected override void OnModelCreating(ModelBuilder model)
     {
         model.HasDefaultSchema("publishing");
-        model.Entity<ManuscriptRow>().ToTable("manuscripts").HasKey(m => m.Id);
+        model.HasPostgresExtension("pg_trgm");
+        var manuscripts = model.Entity<ManuscriptRow>().ToTable("manuscripts");
+        manuscripts.HasKey(m => m.Id);
+        manuscripts.Property(m => m.Document).HasColumnType("jsonb");
+        manuscripts.HasIndex(m => new { m.UpdatedAt, m.Id });                                 // keyset paging
+        manuscripts.HasIndex(m => m.Title).HasMethod("gin").HasOperators("gin_trgm_ops");  // title search
         model.Entity<VersionRow>().ToTable("versions").HasKey(v => new { v.ManuscriptId, v.Number });
         model.Entity<VersionSectionRow>().ToTable("version_sections").HasKey(s => new { s.ManuscriptId, s.Version, s.Position });
-        model.Entity<AuthorRow>().ToTable("authors").HasKey(a => new { a.ManuscriptId, a.AuthorId });
-        model.Entity<RoundRow>().ToTable("review_rounds").HasKey(r => new { r.ManuscriptId, r.Round });
-        model.Entity<UpdateRow>().ToTable("updates").HasKey(u => new { u.ManuscriptId, u.NoticeDoi });
     }
+}
+
+public static class Documents
+{
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
+
+    public static ManuscriptView Read(string json) => JsonSerializer.Deserialize<ManuscriptView>(json, Json)!;
+
+    public static string Write(ManuscriptView view) => JsonSerializer.Serialize(view, Json);
 }
 ```
 <!-- endSnippet -->

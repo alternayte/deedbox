@@ -1,0 +1,63 @@
+---
+title: Serve a read model over GraphQL
+description: Expose a projection's tables through Hot Chocolate, with DataLoaders so a list costs a fixed number of queries.
+---
+
+import Query from '../../../snippets/graphql-query.md';
+import Fields from '../../../snippets/graphql-fields.md';
+import DataLoaders from '../../../snippets/graphql-dataloaders.md';
+import Register from '../../../snippets/graphql-register.md';
+import Map from '../../../snippets/graphql-map.md';
+
+This guide shows you how to serve a read model over GraphQL with [Hot Chocolate](https://chillicream.com/docs/hotchocolate). It uses the read model of the [manuscript tutorial](/tutorials/manuscript-versions/), but the pattern fits any projection. GraphQL only reads here; commands still go through `Execute`.
+
+```sh
+dotnet add package HotChocolate.AspNetCore
+```
+
+## Give GraphQL its own database contexts
+
+GraphQL runs resolvers in parallel, and one `DbContext` cannot serve two queries at once. Register a factory with `AddDbContextFactory`, and open a context for each query, as the tutorial's `ManuscriptQueries` does. `AddDbContextFactory` also registers the context itself, so the projection works unchanged.
+
+## Write the root fields
+
+The root fields call the same query class as the REST API, so both return the same shapes.
+
+<Query />
+
+## Load related data with DataLoaders
+
+Without DataLoaders, a list of 20 manuscripts with their authors and versions costs 41 queries: one for the page, then two for each manuscript. That is the N+1 problem. A DataLoader collects the keys of all the resolvers in one request, then reads them in one query.
+
+<DataLoaders />
+
+The fields on each manuscript in a list ask the DataLoaders, so a field costs a query only when a client asks for it:
+
+<Fields />
+
+| Query | Database queries |
+| --- | --- |
+| `manuscripts { items { id title } }` | 1 |
+| `manuscripts { items { id authors { name } latest { number } } }` | 2: the page, then all the documents |
+| `manuscripts { items { id authors { name } versions { number } } }` | 3: the page, the documents, then all the versions |
+
+The number stays the same for a page of 5 or a page of 100.
+
+## Register the schema and map the endpoint
+
+<Register />
+
+<Map />
+
+Ask for a page of manuscripts and their related data:
+
+```graphql
+{
+  manuscripts(search: "frozen", limit: 20) {
+    items { id title status authors { name } latest { number stage } versions { number stage } }
+    next
+  }
+}
+```
+
+Hot Chocolate writes enum values in capitals with underscores, such as `SUBMITTED_UNDER_REVIEW`. Pass `next` as `after` to get the next page.

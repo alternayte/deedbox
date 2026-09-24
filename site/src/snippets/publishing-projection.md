@@ -7,20 +7,18 @@ public sealed class ManuscriptProjection : Projection<PublishingDb>
     {
         On<ManuscriptStarted>((e, ctx) =>
         {
-            ctx.Db.Manuscripts.Add(new ManuscriptRow { Id = ctx.StreamId, Title = e.Title, UpdatedAt = ctx.OccurredAt });
+            var document = new ManuscriptView(ctx.StreamId, e.Title, Status.Draft, null, [], null, null, [], []);
+            ctx.Db.Manuscripts.Add(new ManuscriptRow { Id = ctx.StreamId, Title = e.Title, UpdatedAt = ctx.OccurredAt, Document = Documents.Write(document) });
             return Task.CompletedTask;
         });
 
-        On<AuthorAdded>((e, ctx) =>
-        {
-            ctx.Db.Authors.Add(new AuthorRow { ManuscriptId = ctx.StreamId, AuthorId = e.AuthorId, Name = e.Name, Affiliation = e.Affiliation });
-            return Task.CompletedTask;
-        });
+        On<AuthorAdded>((e, ctx) => Change(ctx, m => m with { Authors = [.. m.Authors, new AuthorView(e.AuthorId, e.Name, e.Affiliation)] }));
 
         On<VersionFrozen>(async (e, ctx) =>
         {
-            var manuscript = await Row(ctx);
-            manuscript.LatestVersion = e.Number;
+            var sections = e.Sections.Select(s => new SectionView(s.SectionId, s.Heading, $"/content/{s.ContentHash}")).ToList();
+            await Change(ctx, m => m with { Latest = new VersionView(e.Number, e.Stage, e.BasedOn, e.Reason, ctx.OccurredAt, sections) });
+
             ctx.Db.Versions.Add(new VersionRow
             {
                 ManuscriptId = ctx.StreamId, Number = e.Number, Stage = e.Stage, BasedOn = e.BasedOn, Reason = e.Reason, FrozenAt = ctx.OccurredAt,
@@ -31,42 +29,32 @@ public sealed class ManuscriptProjection : Projection<PublishingDb>
             }));
         });
 
-        On<ReviewRoundOpened>(async (e, ctx) =>
+        On<ReviewRoundOpened>((e, ctx) => Change(ctx, m => m with
         {
-            var manuscript = await Row(ctx);
-            (manuscript.Status, manuscript.Round) = (Status.UnderReview, e.Round);
-            ctx.Db.Rounds.Add(new RoundRow { ManuscriptId = ctx.StreamId, Round = e.Round, Version = e.Version });
-        });
+            Status = Status.UnderReview,
+            Rounds = [.. m.Rounds, new RoundView(e.Round, e.Version, null)],
+        }));
 
-        On<DecisionMade>(async (e, ctx) =>
+        On<DecisionMade>((e, ctx) => Change(ctx, m => m with
         {
-            var manuscript = await Row(ctx);
-            manuscript.Status = e.Decision switch { Decision.Accept => Status.Accepted, Decision.Reject => Status.Rejected, _ => Status.InRevision };
-            (await ctx.Db.Rounds.FindAsync([ctx.StreamId, e.Round], ctx.CancellationToken))!.Decision = e.Decision;
-        });
+            Status = e.Decision switch { Decision.Accept => Status.Accepted, Decision.Reject => Status.Rejected, _ => Status.InRevision },
+            Rounds = [.. m.Rounds.Select(r => r.Round == e.Round ? r with { Decision = e.Decision } : r)],
+        }));
 
-        On<Published>(async (e, ctx) =>
-        {
-            var manuscript = await Row(ctx);
-            (manuscript.Status, manuscript.Doi, manuscript.PublishedVersion) = (Status.Published, e.Doi, e.Version);
-        });
+        On<Published>((e, ctx) => Change(ctx, m => m with { Status = Status.Published, Doi = e.Doi, Published = m.Latest }));
 
-        On<UpdateIssued>(async (e, ctx) =>
+        On<UpdateIssued>((e, ctx) => Change(ctx, m => m with
         {
-            var manuscript = await Row(ctx);
-            if (e.Type is UpdateType.Correction)
-                manuscript.PublishedVersion = e.Version;
-            if (e.Type is UpdateType.Retraction)
-                manuscript.Status = Status.Retracted;
-            ctx.Db.Updates.Add(new UpdateRow { ManuscriptId = ctx.StreamId, NoticeDoi = e.NoticeDoi, Type = e.Type, Version = e.Version, IssuedAt = ctx.OccurredAt });
-        });
+            Status = e.Type is UpdateType.Retraction ? Status.Retracted : m.Status,
+            Published = e.Type is UpdateType.Correction ? m.Latest : m.Published,  // the corrected version is the newest one
+            Updates = [.. m.Updates, new UpdateView(e.Type, e.NoticeDoi, e.Version, ctx.OccurredAt)],
+        }));
 
         // Erasure deletes the author's key; the read model drops the name too.
-        On<SubjectErased>(async (e, ctx) =>
+        On<SubjectErased>((e, ctx) => Change(ctx, m => m with
         {
-            if (await ctx.Db.Authors.FindAsync([ctx.StreamId, e.SubjectId], ctx.CancellationToken) is { } author)
-                author.Name = null;
-        });
+            Authors = [.. m.Authors.Select(a => a.AuthorId == e.SubjectId ? a with { Name = null } : a)],
+        }));
     }
 
     // A rebuild calls this, then replays every event.
@@ -75,17 +63,17 @@ public sealed class ManuscriptProjection : Projection<PublishingDb>
         var (db, ct) = (context.Db, context.CancellationToken);
         await db.VersionSections.ExecuteDeleteAsync(ct);
         await db.Versions.ExecuteDeleteAsync(ct);
-        await db.Authors.ExecuteDeleteAsync(ct);
-        await db.Rounds.ExecuteDeleteAsync(ct);
-        await db.Updates.ExecuteDeleteAsync(ct);
         await db.Manuscripts.ExecuteDeleteAsync(ct);
     }
 
-    private static async Task<ManuscriptRow> Row(ProjectionContext<PublishingDb> ctx)
+    // Changes the document, then copies the fields that the list filters and sorts on into their columns.
+    private static async Task Change(ProjectionContext<PublishingDb> ctx, Func<ManuscriptView, ManuscriptView> change)
     {
-        var manuscript = (await ctx.Db.Manuscripts.FindAsync([ctx.StreamId], ctx.CancellationToken))!;
-        manuscript.UpdatedAt = ctx.OccurredAt;
-        return manuscript;
+        var row = (await ctx.Db.Manuscripts.FindAsync([ctx.StreamId], ctx.CancellationToken))!;
+        var document = change(Documents.Read(row.Document));
+        row.Document = Documents.Write(document);
+        (row.Status, row.Doi, row.LatestVersion, row.PublishedVersion, row.UpdatedAt) =
+            (document.Status, document.Doi, document.Latest?.Number, document.Published?.Number, ctx.OccurredAt);
     }
 }
 ```

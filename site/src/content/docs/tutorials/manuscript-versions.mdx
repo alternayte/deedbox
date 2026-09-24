@@ -1,6 +1,6 @@
 ---
 title: Version a manuscript
-description: Model submission, review rounds, acceptance, publication and corrections, and serve every version through REST and GraphQL.
+description: Model submission, review rounds, acceptance, publication and corrections, and serve the latest version and the full history over REST.
 sidebar:
   order: 3
 ---
@@ -16,11 +16,10 @@ import Projection from '../../../snippets/publishing-projection.md';
 import Views from '../../../snippets/publishing-views.md';
 import Queries from '../../../snippets/publishing-queries.md';
 import Rest from '../../../snippets/publishing-rest.md';
-import GraphQL from '../../../snippets/publishing-graphql.md';
 import Register from '../../../snippets/publishing-register.md';
 import Map from '../../../snippets/publishing-map.md';
 
-In this tutorial, you build the editorial core of a journal. A manuscript goes through review rounds, acceptance, publication and a correction. Each version that a reviewer or a reader sees stays frozen, and an API serves the latest version and the full history.
+In this tutorial, you build the editorial core of a journal. A manuscript goes through review rounds, acceptance, publication and a correction. Each version that a reviewer or a reader sees stays frozen. A REST API lists manuscripts, and serves the latest version and the full history.
 
 Do [your first stream](/tutorials/first-stream/) first. You need a Postgres database and these packages:
 
@@ -28,7 +27,6 @@ Do [your first stream](/tutorials/first-stream/) first. You need a Postgres data
 dotnet add package Deedbox.Postgres --prerelease
 dotnet add package Deedbox.EntityFrameworkCore --prerelease
 dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL
-dotnet add package HotChocolate.AspNetCore   # only for the GraphQL step
 ```
 
 ## Three kinds of version
@@ -79,70 +77,66 @@ The names come from scholarly publishing standards:
 
    <DeciderTests />
 
-5. Write the read model. The API reads these tables, never the events.
+5. Write the views, which are the shapes the API returns, and the read model, which holds them.
+
+   <Views />
 
    <ReadModel />
 
    | Table | Holds | Serves |
    | --- | --- | --- |
-   | `manuscripts` | Status, DOI, and the numbers of the latest and the published version | Lists and the top of a detail page |
+   | `manuscripts` | The title, status, DOI and version numbers as columns, and the whole `ManuscriptView` as a `jsonb` document | The list, from the columns; the detail page, from the document |
    | `versions` and `version_sections` | Every frozen version and its sections | The history, one version, and changes between two |
-   | `authors`, `review_rounds`, `updates` | The related records | The rest of a detail page |
+
+   The document is a read model built for one query: the detail page reads one row by its key. Writes are rare, so the projection can rewrite the document on every event. The history stays in its own tables, because a manuscript can have many versions.
 
 6. Write the projection. It runs inline, in the append's transaction, so a read right after a command sees the command's effect.
 
    <Projection />
 
-   The projection handles `SubjectErased`. When an author is erased, Deedbox deletes their key and appends `SubjectErased` to their manuscripts, and the projection clears their name.
+   Inline suits editorial screens: an author who submits sees the new version at once, and manuscripts get few writes. Register a second projection with `Run.Async` for work that may lag, such as a search index or the public site. See [add a projection](/how-to/add-a-projection/).
 
-7. Write the views and one query class. REST and GraphQL both call it, so both return the same shapes.
+   Each handler changes the document, and `Change` copies the fields that the list filters and sorts on into their columns. The projection also handles `SubjectErased`: when an author is erased, Deedbox deletes their key and appends `SubjectErased`, and the projection clears their name.
 
-   <Views />
+7. Write the queries. Every read goes through this class.
 
    <Queries />
 
-   `Latest` is the newest version, for authors and editors. `Published` is the version readers see: the Version of Record, or its latest correction. `Changes` compares two versions section by section, from the content hashes, so no event stores a diff.
+   | Query | Database work |
+   | --- | --- |
+   | `List` | One query on the `manuscripts` columns. Keyset paging stays correct while manuscripts change, unlike page numbers. The title search is case-insensitive, and a trigram index keeps it fast. |
+   | `Manuscript` | One read of the document by its key |
+   | `Versions`, `Version`, `Changes` | One query each. `Changes` compares the content hashes of two versions, so no event stores a diff. |
 
 8. Serve the queries over REST, and send commands through the stream.
 
    <Rest />
 
-9. Optionally, serve the same queries over GraphQL with Hot Chocolate.
-
-   <GraphQL />
-
-10. Register everything in `Program.cs`, and map the endpoints.
+9. Register everything in `Program.cs`, and map the endpoints.
 
     <Register />
 
     <Map />
 
-    Create the read model tables with an EF Core migration, or with `EnsureCreated()` while you try this out.
+    Create the read model tables with an EF Core migration, or with `EnsureCreated()` while you try this out. The model adds the `pg_trgm` extension for the title index.
 
 </Steps>
 
 ## Try it
 
 ```sh
+curl "localhost:5000/manuscripts?search=frozen&limit=20"                     # the list; follow "next" for the next page
 curl -X POST localhost:5000/manuscripts/m-1/submit                           # version 1, round 1
 curl -X POST "localhost:5000/manuscripts/m-1/decision?decision=MajorRevision"
-curl localhost:5000/manuscripts/m-1                                          # latest and published versions
+curl localhost:5000/manuscripts/m-1                                          # latest and published versions, in one read
 curl localhost:5000/manuscripts/m-1/versions                                 # the history
 curl localhost:5000/manuscripts/m-1/versions/2                               # one frozen version
 curl "localhost:5000/manuscripts/m-1/versions/2/changes?from=1"              # what the revision changed
 ```
 
-The same with GraphQL:
-
-```graphql
-{
-  manuscript(id: "m-1") { status latest { number stage } published { number stage sections { heading contentUrl } } }
-  versions(id: "m-1") { number stage basedOn reason frozenAt }
-  changes(id: "m-1", from: 1, to: 2) { sectionId change }
-}
-```
-
 A command that breaks a rule, such as submitting a published article, returns 409 Conflict with the decider's message.
+
+To serve the same read model over GraphQL, see [serve a read model over GraphQL](/how-to/serve-graphql/).
 
 ## Next steps
 
