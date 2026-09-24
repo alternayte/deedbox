@@ -168,7 +168,9 @@ internal static partial class FieldCipher
         {
             try
             {
-                return JsonNode.Parse(Crypto.DecryptField(key, marker));
+                var revealed = JsonNode.Parse(Crypto.DecryptField(key, marker));
+                DeedboxDiagnostics.Decrypts.Add(1);
+                return revealed;
             }
             catch (System.Security.Cryptography.CryptographicException ex)
             {
@@ -177,6 +179,7 @@ internal static partial class FieldCipher
             }
         }
 
+        DeedboxDiagnostics.Redactions.Add(1);
         var field = registration?.PersonalFields.FirstOrDefault(f => f.JsonName == topLevelName);
         if (field is not null && root[field.SubjectJsonName]?.GetValue<string>() is { } subject)
             erased.Add(subject);

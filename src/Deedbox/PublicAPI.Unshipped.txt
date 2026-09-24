@@ -27,6 +27,25 @@ Deedbox.ConcurrencyException
 Deedbox.ConcurrencyException.Actual.get -> long
 Deedbox.ConcurrencyException.Expected.get -> Deedbox.ExpectedVersion
 Deedbox.ConcurrencyException.StreamId.get -> string!
+Deedbox.ConsumerStatus
+Deedbox.ConsumerStatus.<Clone>$() -> Deedbox.ConsumerStatus!
+Deedbox.ConsumerStatus.ConsumerStatus(string! Name, string! Mode, string! Status, long Position, long Lag, System.DateTimeOffset UpdatedAt, string? Error) -> void
+Deedbox.ConsumerStatus.Deconstruct(out string! Name, out string! Mode, out string! Status, out long Position, out long Lag, out System.DateTimeOffset UpdatedAt, out string? Error) -> void
+Deedbox.ConsumerStatus.Equals(Deedbox.ConsumerStatus? other) -> bool
+Deedbox.ConsumerStatus.Error.get -> string?
+Deedbox.ConsumerStatus.Error.init -> void
+Deedbox.ConsumerStatus.Lag.get -> long
+Deedbox.ConsumerStatus.Lag.init -> void
+Deedbox.ConsumerStatus.Mode.get -> string!
+Deedbox.ConsumerStatus.Mode.init -> void
+Deedbox.ConsumerStatus.Name.get -> string!
+Deedbox.ConsumerStatus.Name.init -> void
+Deedbox.ConsumerStatus.Position.get -> long
+Deedbox.ConsumerStatus.Position.init -> void
+Deedbox.ConsumerStatus.Status.get -> string!
+Deedbox.ConsumerStatus.Status.init -> void
+Deedbox.ConsumerStatus.UpdatedAt.get -> System.DateTimeOffset
+Deedbox.ConsumerStatus.UpdatedAt.init -> void
 Deedbox.DataSubjectAttribute
 Deedbox.DataSubjectAttribute.DataSubjectAttribute() -> void
 Deedbox.DeedboxBuilder
@@ -107,6 +126,15 @@ Deedbox.IEventStore.Execute<TState>(string! streamId, System.Func<TState, System
 Deedbox.IEventStore.Load<TState>(string! streamId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Deedbox.LoadResult<TState>>!
 Deedbox.IEventStore.UseTransaction(System.Data.Common.DbTransaction! transaction) -> Deedbox.IEventStore!
 Deedbox.IEventStore.WithMetadata(System.Func<Deedbox.EventMetadata!, Deedbox.EventMetadata!>! change) -> Deedbox.IEventStore!
+Deedbox.IEventStoreAdmin
+Deedbox.IEventStoreAdmin.EraseSubjectAsync(string! subjectId, string! tenantId = "", System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
+Deedbox.IEventStoreAdmin.GetJobAsync(System.Guid jobId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Deedbox.JobInfo?>!
+Deedbox.IEventStoreAdmin.GetStatusAsync(System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Deedbox.StoreStatus!>!
+Deedbox.IEventStoreAdmin.RebuildAsync(string! projection, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
+Deedbox.IEventStoreAdmin.RebuildSnapshotsAsync(string! streamType, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
+Deedbox.IEventStoreAdmin.RewrapKeysAsync(Deedbox.IMasterKeyProvider! target, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
+Deedbox.IEventStoreAdmin.ShredTenantAsync(string! tenantId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Deedbox.IEventStoreAdmin.SkipAsync(string! consumer, System.Guid eventId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
 Deedbox.IMasterKeyProvider
 Deedbox.IMasterKeyProvider.KeyVersion.get -> string!
 Deedbox.IMasterKeyProvider.UnwrapAsync(byte[]! wrappedKey, string! keyVersion, System.Threading.CancellationToken ct) -> System.Threading.Tasks.Task<byte[]!>!
@@ -116,6 +144,25 @@ Deedbox.IState<TSelf>.Evolve(TSelf state, object! event) -> TSelf
 Deedbox.IState<TSelf>.Initial.get -> TSelf
 Deedbox.ISubjectErasure
 Deedbox.ISubjectErasure.EraseSubjectAsync(string! subjectId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
+Deedbox.JobInfo
+Deedbox.JobInfo.<Clone>$() -> Deedbox.JobInfo!
+Deedbox.JobInfo.Args.get -> string!
+Deedbox.JobInfo.Args.init -> void
+Deedbox.JobInfo.CreatedAt.get -> System.DateTimeOffset
+Deedbox.JobInfo.CreatedAt.init -> void
+Deedbox.JobInfo.Deconstruct(out System.Guid Id, out string! Kind, out string! Args, out string! Status, out string? Progress, out System.DateTimeOffset CreatedAt, out System.DateTimeOffset? FinishedAt) -> void
+Deedbox.JobInfo.Equals(Deedbox.JobInfo? other) -> bool
+Deedbox.JobInfo.FinishedAt.get -> System.DateTimeOffset?
+Deedbox.JobInfo.FinishedAt.init -> void
+Deedbox.JobInfo.Id.get -> System.Guid
+Deedbox.JobInfo.Id.init -> void
+Deedbox.JobInfo.JobInfo(System.Guid Id, string! Kind, string! Args, string! Status, string? Progress, System.DateTimeOffset CreatedAt, System.DateTimeOffset? FinishedAt) -> void
+Deedbox.JobInfo.Kind.get -> string!
+Deedbox.JobInfo.Kind.init -> void
+Deedbox.JobInfo.Progress.get -> string?
+Deedbox.JobInfo.Progress.init -> void
+Deedbox.JobInfo.Status.get -> string!
+Deedbox.JobInfo.Status.init -> void
 Deedbox.KeysBuilder
 Deedbox.KeysBuilder.FromEnvironment(string! variable = "DEEDBOX_MASTER_KEY") -> Deedbox.KeysBuilder!
 Deedbox.KeysBuilder.FromKeyRing(string! keyRing) -> Deedbox.KeysBuilder!
@@ -180,6 +227,17 @@ Deedbox.RunnerOptions.RunnerOptions() -> void
 Deedbox.RunnerOptions.StallAfter.get -> System.TimeSpan
 Deedbox.RunnerOptions.StallAfter.set -> void
 Deedbox.SnapshotPolicy
+Deedbox.StoreStatus
+Deedbox.StoreStatus.<Clone>$() -> Deedbox.StoreStatus!
+Deedbox.StoreStatus.Consumers.get -> System.Collections.Generic.IReadOnlyList<Deedbox.ConsumerStatus!>!
+Deedbox.StoreStatus.Consumers.init -> void
+Deedbox.StoreStatus.Deconstruct(out long Head, out System.Collections.Generic.IReadOnlyList<Deedbox.ConsumerStatus!>! Consumers, out System.Collections.Generic.IReadOnlyList<Deedbox.JobInfo!>! Jobs) -> void
+Deedbox.StoreStatus.Equals(Deedbox.StoreStatus? other) -> bool
+Deedbox.StoreStatus.Head.get -> long
+Deedbox.StoreStatus.Head.init -> void
+Deedbox.StoreStatus.Jobs.get -> System.Collections.Generic.IReadOnlyList<Deedbox.JobInfo!>!
+Deedbox.StoreStatus.Jobs.init -> void
+Deedbox.StoreStatus.StoreStatus(long Head, System.Collections.Generic.IReadOnlyList<Deedbox.ConsumerStatus!>! Consumers, System.Collections.Generic.IReadOnlyList<Deedbox.JobInfo!>! Jobs) -> void
 Deedbox.StreamBuilder<TState>
 Deedbox.StreamBuilder<TState>.Event<TEvent>() -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.Event<TEvent>(int version, System.Action<Deedbox.EventBuilder<TEvent>!>! configure) -> Deedbox.StreamBuilder<TState>!
@@ -223,6 +281,9 @@ Microsoft.Extensions.DependencyInjection.DeedboxServiceCollectionExtensions
 override Deedbox.AppendResult.Equals(object? obj) -> bool
 override Deedbox.AppendResult.GetHashCode() -> int
 override Deedbox.AppendResult.ToString() -> string!
+override Deedbox.ConsumerStatus.Equals(object? obj) -> bool
+override Deedbox.ConsumerStatus.GetHashCode() -> int
+override Deedbox.ConsumerStatus.ToString() -> string!
 override Deedbox.EventMetadata.Equals(object? obj) -> bool
 override Deedbox.EventMetadata.GetHashCode() -> int
 override Deedbox.EventMetadata.ToString() -> string!
@@ -231,7 +292,13 @@ override Deedbox.ExecuteResult<TState>.GetHashCode() -> int
 override Deedbox.ExecuteResult<TState>.ToString() -> string!
 override Deedbox.ExpectedVersion.GetHashCode() -> int
 override Deedbox.ExpectedVersion.ToString() -> string!
+override Deedbox.JobInfo.Equals(object? obj) -> bool
+override Deedbox.JobInfo.GetHashCode() -> int
+override Deedbox.JobInfo.ToString() -> string!
 override Deedbox.LoadResult<TState>.GetHashCode() -> int
+override Deedbox.StoreStatus.Equals(object? obj) -> bool
+override Deedbox.StoreStatus.GetHashCode() -> int
+override Deedbox.StoreStatus.ToString() -> string!
 override Deedbox.StreamDeleted.Equals(object? obj) -> bool
 override Deedbox.StreamDeleted.GetHashCode() -> int
 override Deedbox.StreamDeleted.ToString() -> string!
@@ -240,6 +307,8 @@ override Deedbox.SubjectErased.GetHashCode() -> int
 override Deedbox.SubjectErased.ToString() -> string!
 static Deedbox.AppendResult.operator !=(Deedbox.AppendResult? left, Deedbox.AppendResult? right) -> bool
 static Deedbox.AppendResult.operator ==(Deedbox.AppendResult? left, Deedbox.AppendResult? right) -> bool
+static Deedbox.ConsumerStatus.operator !=(Deedbox.ConsumerStatus? left, Deedbox.ConsumerStatus? right) -> bool
+static Deedbox.ConsumerStatus.operator ==(Deedbox.ConsumerStatus? left, Deedbox.ConsumerStatus? right) -> bool
 static Deedbox.EventMetadata.Empty.get -> Deedbox.EventMetadata!
 static Deedbox.EventMetadata.operator !=(Deedbox.EventMetadata? left, Deedbox.EventMetadata? right) -> bool
 static Deedbox.EventMetadata.operator ==(Deedbox.EventMetadata? left, Deedbox.EventMetadata? right) -> bool
@@ -250,11 +319,15 @@ static Deedbox.ExpectedVersion.Exact(long version) -> Deedbox.ExpectedVersion
 static Deedbox.ExpectedVersion.NoStream.get -> Deedbox.ExpectedVersion
 static Deedbox.ExpectedVersion.operator !=(Deedbox.ExpectedVersion left, Deedbox.ExpectedVersion right) -> bool
 static Deedbox.ExpectedVersion.operator ==(Deedbox.ExpectedVersion left, Deedbox.ExpectedVersion right) -> bool
+static Deedbox.JobInfo.operator !=(Deedbox.JobInfo? left, Deedbox.JobInfo? right) -> bool
+static Deedbox.JobInfo.operator ==(Deedbox.JobInfo? left, Deedbox.JobInfo? right) -> bool
 static Deedbox.LoadResult<TState>.operator !=(Deedbox.LoadResult<TState> left, Deedbox.LoadResult<TState> right) -> bool
 static Deedbox.LoadResult<TState>.operator ==(Deedbox.LoadResult<TState> left, Deedbox.LoadResult<TState> right) -> bool
 static Deedbox.SnapshotPolicy.Every(int events) -> Deedbox.SnapshotPolicy!
 static Deedbox.SnapshotPolicy.EveryAppend.get -> Deedbox.SnapshotPolicy!
 static Deedbox.SnapshotPolicy.Never.get -> Deedbox.SnapshotPolicy!
+static Deedbox.StoreStatus.operator !=(Deedbox.StoreStatus? left, Deedbox.StoreStatus? right) -> bool
+static Deedbox.StoreStatus.operator ==(Deedbox.StoreStatus? left, Deedbox.StoreStatus? right) -> bool
 static Deedbox.StreamDeleted.operator !=(Deedbox.StreamDeleted? left, Deedbox.StreamDeleted? right) -> bool
 static Deedbox.StreamDeleted.operator ==(Deedbox.StreamDeleted? left, Deedbox.StreamDeleted? right) -> bool
 static Deedbox.StreamId.Deterministic(System.Guid namespaceId, params string![]! parts) -> string!

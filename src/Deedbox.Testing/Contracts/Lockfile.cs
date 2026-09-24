@@ -102,6 +102,33 @@ internal sealed record LockedEvent(string Name, int Version, Shape Shape, IReadO
 /// <summary>Finds changes that make stored events unreadable or wrong.</summary>
 internal static class Compatibility
 {
+    /// <summary>Every difference between two lockfiles, one line each: + added, - removed, ~ changed.</summary>
+    public static List<string> Diff(Lockfile old, Lockfile now)
+    {
+        var lines = new List<string>();
+        var before = old.Events.ToDictionary(e => e.Name, StringComparer.Ordinal);
+        var after = now.Events.ToDictionary(e => e.Name, StringComparer.Ordinal);
+
+        foreach (var e in now.Events.Where(e => !before.ContainsKey(e.Name)))
+            lines.Add($"+ {e.Name} v{e.Version} {e.Shape}");
+        foreach (var e in old.Events.Where(e => !after.ContainsKey(e.Name)))
+            lines.Add($"- {e.Name} v{e.Version} {e.Shape}");
+        foreach (var e in now.Events.Where(e => before.ContainsKey(e.Name)))
+        {
+            var was = before[e.Name];
+            if (was.Version != e.Version)
+                lines.Add($"~ {e.Name} v{was.Version} -> v{e.Version}");
+            if (was.Shape.ToString() != e.Shape.ToString())
+                lines.Add($"~ {e.Name} {was.Shape} -> {e.Shape}");
+            foreach (var alias in e.Aliases.Except(was.Aliases, StringComparer.Ordinal))
+                lines.Add($"+ {e.Name} alias {alias}");
+            foreach (var alias in was.Aliases.Except(e.Aliases, StringComparer.Ordinal))
+                lines.Add($"- {e.Name} alias {alias}");
+        }
+
+        return lines;
+    }
+
     public static List<string> Breaks(Lockfile locked, Lockfile current)
     {
         var breaks = new List<string>();

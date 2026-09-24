@@ -24,10 +24,13 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
         await Load(await provider.ReadMasterKeys(connection, null, ct), ct);
     }
 
-    /// <summary>The tenant's newest intermediate key, created and committed on first use.</summary>
-    public async Task<(int Version, byte[] Key)> Current(string tenantId, CancellationToken ct)
+    /// <summary>
+    /// The tenant's newest intermediate key, created and committed on first use. With <paramref name="verify"/>, the key
+    /// rows are read again first, so a tenant shredded by another instance gets a new key instead of a deleted one.
+    /// </summary>
+    public async Task<(int Version, byte[] Key)> Current(string tenantId, CancellationToken ct, bool verify = false)
     {
-        if (_tenants.TryGetValue(tenantId, out var keys))
+        if (!verify && _tenants.TryGetValue(tenantId, out var keys) && keys.Count > 0)
             return Newest(keys);
 
         await _lock.WaitAsync(ct);
@@ -35,13 +38,16 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
         {
             await using var connection = provider.CreateConnection();
             await connection.OpenAsync(ct);
-            await Load(await provider.ReadMasterKeys(connection, null, ct), ct);
-            if (_tenants.TryGetValue(tenantId, out keys))
+            var rows = await provider.ReadMasterKeys(connection, null, ct);
+            await Load(rows, ct);
+            if (_tenants.TryGetValue(tenantId, out keys) && keys.Count > 0)
                 return Newest(keys);
 
             // Created in its own committed transaction: an append that rolls back must never leave a key in memory only.
+            // A shredded tenant's versions stay as tombstones, so a new key never reuses a version another instance cached.
+            var version = rows.Where(r => r.TenantId == tenantId).Select(r => r.KeyVersion).DefaultIfEmpty(0).Max() + 1;
             var wrapped = await master.WrapAsync(Crypto.NewKey(), ct);
-            await provider.InsertMasterKey(connection, null, new MasterKeyRow(tenantId, 1, wrapped, master.KeyVersion), ct);
+            await provider.InsertMasterKey(connection, null, new MasterKeyRow(tenantId, version, wrapped, master.KeyVersion), ct);
             await Load(await provider.ReadMasterKeys(connection, null, ct), ct);
             return Newest(_tenants[tenantId]);
         }
@@ -49,6 +55,16 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
         {
             _lock.Release();
         }
+    }
+
+    /// <summary>
+    /// Crypto-shreds a tenant: its keys become tombstones and its subject keys, subject pairs and stored state are
+    /// deleted, in one transaction. Every personal field and sealed state of the tenant reads as erased.
+    /// </summary>
+    public async Task Shred(string tenantId, CancellationToken ct)
+    {
+        await Admin.ShredTenant(provider, tenantId, ct);
+        _tenants.TryRemove(tenantId, out _);
     }
 
     /// <summary>A tenant key by version, or null when the tenant's keys were deleted (the tenant was shredded).</summary>
@@ -82,7 +98,7 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
         await using var transaction = await connection.BeginTransactionAsync(ct);
         var rows = await provider.ReadMasterKeys(connection, transaction, ct);
         var count = 0;
-        foreach (var row in rows.Where(r => r.KeyVersion > 0))
+        foreach (var row in rows.Where(r => r.KeyVersion > 0 && r.WrappedBy != Shredded))
         {
             if (row.WrappedBy == target.KeyVersion)
                 continue;
@@ -103,6 +119,13 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
         foreach (var row in rows.Where(r => r.KeyVersion > 0))
         {
             var keys = _tenants.GetOrAdd(row.TenantId, _ => []);
+            if (row.WrappedBy == Shredded)
+            {
+                lock (keys)
+                    keys.Remove(row.KeyVersion);
+                continue;
+            }
+
             lock (keys)
             {
                 if (keys.ContainsKey(row.KeyVersion))
@@ -125,6 +148,8 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
                 keys.TryAdd(row.KeyVersion, key);
         }
     }
+
+    public const string Shredded = "shredded";
 
     private static (int, byte[]) Newest(SortedDictionary<int, byte[]> keys)
     {
@@ -149,7 +174,7 @@ internal sealed class SubjectKeys(KeyRing ring, DeedboxProvider provider, DbConn
         var row = await provider.ReadSubjectKey(connection, write, tenantId, subjectId, ct);
         if (row is null)
         {
-            var (version, intermediate) = await ring.Current(tenantId, ct);
+            var (version, intermediate) = await ring.Current(tenantId, ct, verify: true);
             var keyId = Crypto.NewKeyId();
             await provider.InsertSubjectKey(connection, write,
                 new SubjectKeyRow(tenantId, subjectId, keyId, Crypto.WrapSubjectKey(intermediate, version, Crypto.NewKey(), tenantId, keyId)), ct);

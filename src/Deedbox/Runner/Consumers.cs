@@ -136,8 +136,3 @@ internal sealed class SubscriptionConsumer(RegisteredSubscription subscription, 
         }
     }
 }
-
-internal static class DeedboxDiagnostics
-{
-    public static readonly ActivitySource Source = new("Deedbox");
-}

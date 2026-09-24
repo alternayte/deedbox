@@ -424,6 +424,35 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public override async Task<List<JobRow>> ReadJobs(DbConnection connection, int limit, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.ReadJobs);
+        Add(command, "limit", limit);
+        return await ReadJobRows(command, ct);
+    }
+
+    public override async Task<List<(string TenantId, string StreamId)>> ReadStreamKeys(
+        DbConnection connection, string streamType, string afterTenant, string afterStream, int limit, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.ReadStreamKeys);
+        Add(command, "stream_type", streamType);
+        Add(command, "after_tenant", afterTenant);
+        Add(command, "after_stream", afterStream);
+        Add(command, "limit", limit);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var keys = new List<(string, string)>();
+        while (await reader.ReadAsync(ct))
+            keys.Add((reader.GetString(0), reader.GetString(1)));
+        return keys;
+    }
+
+    public override async Task ShredTenant(DbConnection connection, DbTransaction transaction, string tenantId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ShredTenant);
+        Add(command, "tenant", tenantId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     private static void AddMasterKey(DbCommand command, MasterKeyRow row)
     {
         Add(command, "tenant", row.TenantId);
@@ -600,6 +629,21 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             """;
 
         public readonly string ReadJob = $"SELECT {JobColumns} FROM {s}.jobs WHERE id = @id";
+
+        public readonly string ReadJobs = $"SELECT {JobColumns} FROM {s}.jobs ORDER BY created_at DESC, id DESC LIMIT @limit";
+
+        public readonly string ReadStreamKeys = $"""
+            SELECT tenant_id, stream_id FROM {s}.streams
+            WHERE stream_type = @stream_type AND deleted_at IS NULL AND (tenant_id, stream_id) > (@after_tenant, @after_stream)
+            ORDER BY tenant_id, stream_id LIMIT @limit
+            """;
+
+        public readonly string ShredTenant = $"""
+            UPDATE {s}.master_keys SET wrapped_key = '\x'::bytea, wrapped_by = 'shredded' WHERE tenant_id = @tenant AND key_version > 0;
+            DELETE FROM {s}.subject_keys WHERE tenant_id = @tenant;
+            DELETE FROM {s}.subject_streams WHERE tenant_id = @tenant;
+            UPDATE {s}.streams SET state = NULL WHERE tenant_id = @tenant;
+            """;
 
         public readonly string ReadMasterKeys = $"SELECT tenant_id, key_version, wrapped_key, wrapped_by FROM {s}.master_keys ORDER BY tenant_id, key_version";
 

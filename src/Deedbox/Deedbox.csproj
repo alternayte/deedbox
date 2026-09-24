@@ -18,6 +18,7 @@
     <InternalsVisibleTo Include="Deedbox.EntityFrameworkCore" />
     <InternalsVisibleTo Include="Deedbox.Testing" />
     <InternalsVisibleTo Include="Deedbox.Cli" />
+    <InternalsVisibleTo Include="Deedbox.Keys.AzureKeyVault" />
     <InternalsVisibleTo Include="Deedbox.Tests" />
   </ItemGroup>
 </Project>

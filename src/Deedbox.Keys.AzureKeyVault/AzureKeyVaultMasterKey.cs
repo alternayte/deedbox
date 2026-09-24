@@ -56,7 +56,7 @@ internal sealed class AzureKeyVaultMasterKey(CryptographyClient client, Func<Uri
     public async Task<byte[]> UnwrapAsync(byte[] wrappedKey, string keyVersion, CancellationToken ct)
     {
         if (!keyVersion.StartsWith(Prefix, StringComparison.Ordinal))
-            throw new DeedboxException("DBX029", $"Key {keyVersion} was not wrapped by Azure Key Vault. Configure the key mode that wrapped it.");
+            throw new DeedboxException(Errors.MasterKeyUnusable, $"Key {keyVersion} was not wrapped by Azure Key Vault. Configure the key mode that wrapped it.");
 
         var id = keyVersion[Prefix.Length..];
         CryptographyClient unwrapper;
@@ -65,7 +65,7 @@ internal sealed class AzureKeyVaultMasterKey(CryptographyClient client, Func<Uri
         else if (versionClient is not null)
             unwrapper = versionClient(new Uri(id));
         else
-            throw new DeedboxException("DBX029", $"Key {keyVersion} was wrapped by another Key Vault key version, and no client for other versions is configured.");
+            throw new DeedboxException(Errors.MasterKeyUnusable, $"Key {keyVersion} was wrapped by another Key Vault key version, and no client for other versions is configured.");
         var result = await unwrapper.UnwrapKeyAsync(algorithm, wrappedKey, ct);
         return result.Key;
     }

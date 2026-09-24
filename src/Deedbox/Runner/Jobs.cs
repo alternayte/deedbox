@@ -12,13 +12,17 @@ internal static class Jobs
     public const string Rebuild = "rebuild";
     public const string Skip = "skip";
     public const string Erase = "erase";
+    public const string Snapshots = "snapshots";
 
-    public static async Task<Guid> Enqueue(DeedboxRuntime runtime, string kind, JsonObject args, CancellationToken ct)
+    public static Task<Guid> Enqueue(DeedboxRuntime runtime, string kind, JsonObject args, CancellationToken ct) =>
+        Enqueue(runtime.Provider, runtime.Clock, kind, args, ct);
+
+    public static async Task<Guid> Enqueue(DeedboxProvider provider, TimeProvider clock, string kind, JsonObject args, CancellationToken ct)
     {
-        var job = new JobRow(Uuid7.New(), kind, args.ToJsonString(), JobStatus.Queued, null, runtime.Clock.GetUtcNow(), null, null);
-        await using var connection = runtime.Provider.CreateConnection();
+        var job = new JobRow(Uuid7.New(), kind, args.ToJsonString(), JobStatus.Queued, null, clock.GetUtcNow(), null, null);
+        await using var connection = provider.CreateConnection();
         await connection.OpenAsync(ct);
-        await runtime.Provider.InsertJob(connection, null, job, ct);
+        await provider.InsertJob(connection, null, job, ct);
         return job.Id;
     }
 }
@@ -75,11 +79,15 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
 
             id = job.Id;
             var started = runtime.Clock.GetUtcNow();
+            using var activity = DeedboxDiagnostics.Source.StartActivity("deedbox.job");
+            activity?.SetTag("deedbox.job.kind", job.Kind);
+            activity?.SetTag("deedbox.job.id", job.Id.ToString());
             try
             {
                 var progress = await Execute(job, connection, transaction, ct);
                 await Provider.UpdateJob(connection, transaction, job with { Status = JobStatus.Done, Progress = progress.ToJsonString(), StartedAt = started, FinishedAt = runtime.Clock.GetUtcNow() }, ct);
                 await transaction.CommitAsync(ct);
+                Finished(job.Kind, JobStatus.Done);
                 LogJobDone(job.Kind, job.Id);
                 runner.Wake();
                 return true;
@@ -88,18 +96,24 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
             {
                 // Jobs are idempotent, so anything but a rejection, such as a lost connection or a killed session, is
                 // treated like a crash: the job stays queued and runs again.
+                Finished(job.Kind, "interrupted");
                 LogJobInterrupted(ex, job.Kind, job.Id);
                 return false;
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
                 await TryRollback(transaction);
+                Finished(job.Kind, JobStatus.Failed);
+                activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
                 LogJobFailed(ex, job.Kind, job.Id);
                 await MarkFailed(job, started, ex, ct);
                 return true;
             }
         }
     }
+
+    private static void Finished(string kind, string status) =>
+        DeedboxDiagnostics.JobsFinished.Add(1, DeedboxDiagnostics.Tag("deedbox.job.kind", kind), DeedboxDiagnostics.Tag("deedbox.job.status", status));
 
     private bool Retry(Guid id)
     {
@@ -138,6 +152,7 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
             Jobs.Rebuild => Rebuild(args["projection"]!.GetValue<string>(), connection, transaction, ct),
             Jobs.Skip => Skip(args["projection"]!.GetValue<string>(), Guid.Parse(args["eventId"]!.GetValue<string>()), connection, transaction, ct),
             Jobs.Erase => Erase(args["tenantId"]!.GetValue<string>(), args["subjectId"]!.GetValue<string>(), ct),
+            Jobs.Snapshots => RebuildSnapshots(args["streamType"]!.GetValue<string>(), ct),
             _ => throw new JobRejected($"Unknown job kind '{job.Kind}'."),
         };
     }
@@ -191,9 +206,44 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
             scope.ServiceProvider.GetRequiredService<DeedboxContext>().TenantId = tenantId;
             var store = (EventStore)scope.ServiceProvider.GetRequiredService<IEventStore>();
             await store.EraseFromStream(stream, subjectId, ct);
+            DeedboxDiagnostics.ErasedStreams.Add(1);
         }
 
         return new JsonObject { ["tenantId"] = tenantId, ["subjectId"] = subjectId, ["streams"] = streams.Count };
+    }
+
+    /// <summary>
+    /// Rebuilds the stored state of every stream of a type from its events, one stream per transaction, in key order.
+    /// A rerun after a crash repeats streams already done, which is harmless.
+    /// </summary>
+    private async Task<JsonObject> RebuildSnapshots(string streamType, CancellationToken ct)
+    {
+        if (runtime.Registry.FindStream(streamType) is null)
+            throw new JobRejected($"Stream type '{streamType}' is not registered in this app.");
+
+        var (tenant, stream, count) = ("", "", 0);
+        while (true)
+        {
+            List<(string TenantId, string StreamId)> page;
+            await using (var connection = Provider.CreateConnection())
+            {
+                await connection.OpenAsync(ct);
+                page = await Provider.ReadStreamKeys(connection, streamType, tenant, stream, 100, ct);
+            }
+
+            if (page.Count == 0)
+                return new JsonObject { ["streamType"] = streamType, ["streams"] = count };
+
+            foreach (var (tenantId, streamId) in page)
+            {
+                await using var scope = services.CreateAsyncScope();
+                scope.ServiceProvider.GetRequiredService<DeedboxContext>().TenantId = tenantId;
+                await ((EventStore)scope.ServiceProvider.GetRequiredService<IEventStore>()).RebuildSnapshot(streamId, ct);
+                count++;
+            }
+
+            (tenant, stream) = page[^1];
+        }
     }
 
     /// <summary>Moves a stalled consumer past the one event it stalled on. The job row records what was skipped.</summary>

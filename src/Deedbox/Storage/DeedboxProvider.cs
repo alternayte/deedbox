@@ -163,6 +163,20 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// </summary>
     public abstract Task DeleteStreamData(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, long keepFromVersion, CancellationToken ct);
 
+    // ---- Operations ----
+
+    /// <summary>The most recent jobs, newest first.</summary>
+    public abstract Task<List<JobRow>> ReadJobs(DbConnection connection, int limit, CancellationToken ct);
+
+    /// <summary>A page of (tenant, stream) keys of one stream type, after the given key, in key order.</summary>
+    public abstract Task<List<(string TenantId, string StreamId)>> ReadStreamKeys(DbConnection connection, string streamType, string afterTenant, string afterStream, int limit, CancellationToken ct);
+
+    /// <summary>
+    /// Crypto-shreds a tenant: its key rows become tombstones (no key material; versions kept so they are never
+    /// reused), and its subject keys, subject pairs and stored state are deleted.
+    /// </summary>
+    public abstract Task ShredTenant(DbConnection connection, DbTransaction transaction, string tenantId, CancellationToken ct);
+
     /// <summary>Releases resources the provider created, such as a data source it built from a connection string.</summary>
     public virtual ValueTask DisposeAsync() => ValueTask.CompletedTask;
 

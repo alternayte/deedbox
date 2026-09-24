@@ -13,7 +13,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - [x] 7. Async runner: checkpoints, projections, subscriptions, type filtering, LISTEN/NOTIFY and backoff, multi-instance locking, poison handling, in-place rebuilds, health checks, jobs table.
 - [x] 8. Torture suite v2: projector kills, competing instances, sparse filters, idle query budget; every Anthology regression test.
 - [x] 9. Personal data: [DataSubject] / [PersonalData], contract-customization encryption, key hierarchy, Database / Environment / Azure Key Vault key modes, subject_streams, erasure job, SubjectErased, stream deletion, startup safety rules, key provider compliance suite. HUMAN GATE 2: security review of crypto, key handling and erasure.
-- [ ] 10. Operations: remaining CLI commands, IEventStoreAdmin, metrics, traces, DBX error codes with docs URLs.
+- [x] 10. Operations: remaining CLI commands, IEventStoreAdmin, metrics, traces, DBX error codes with docs URLs.
 - [ ] 11. Benchmarks: the matrix, nightly job, published results.
 - [ ] 12. Deedbox.QueueBox package against the confirmed QueueBox contract.
 - [ ] 13. Docs: Starlight site, MarkdownSnippets, Vale, error catalogue, README, dotnet new template, llms.txt, agent skill, Cloudflare deploy.
@@ -98,6 +98,13 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 9: Azure Key Vault uses RSA-OAEP-256 by default. A CryptographyClient overload covers Managed HSM (A256KW) and custom clients. Keys wrapped by another key version need the version-client factory.
 - Step 9: `[PersonalData(Subject = nameof(AuthorId))]` does not compile on a positional record parameter; use `Subject = "AuthorId"`. The docs step shows this.
 - Step 9: The lockfile marks personal fields as pd(subject). Removing a marker breaks at any version change.
+- Step 10: Tenant shredding (added at gate 2): `IEventStoreAdmin.ShredTenantAsync` and `deedbox tenant shred <tenant> --yes`. The tenant's key rows become tombstones: no key material, but the versions stay so none is reused. Its subject keys, subject pairs and stored state are deleted. Before an instance creates a subject key, it re-reads the tenant's key rows, so a tenant key still cached on that instance is never used for new data.
+- Step 10: The CLI runs database-only operations itself: status, keys rewrap, tenant shred, and the key deletion that starts an erasure. It queues jobs for the app's runner for work that needs the app's registrations: rebuild, skip, erase, snapshots rebuild. `--wait` follows a job to the end.
+- Step 10: `deedbox keys rewrap --from <m> --to <m>` takes database, env:<VARIABLE> or azure:<key URL>; Azure uses DefaultAzureCredential. The CLI therefore references Deedbox.Keys.AzureKeyVault and Azure.Identity, beyond the SDD's "Core, both providers".
+- Step 10: `deedbox lockfile diff <old> <new>` compares two lockfile files, such as main's and the branch's. The CLI cannot load the app's registrations. It exits 1 when a change breaks stored events.
+- Step 10: IEventStoreAdmin covers status, job lookup, rebuild, skip, erase (with an explicit tenant), snapshot rebuild, key re-wrap and tenant shred. Status lists every checkpoint row, whether or not this app registers it.
+- Step 10: Metrics are on the Meter "Deedbox". Append: duration, events, conflicts, Execute retries, counter duration. Consumers: lag, lag in seconds, status (gauges), batch duration, failures, stalls. Also jobs, erased streams, decrypts and redactions. Spans on the ActivitySource "Deedbox": append, execute, load, delete_stream, batch, handle, job, erase_stream. The lag gauge reads the head only after a full batch, so an idle runner sends no extra statements.
+- Step 10: `Errors.Titles` is the error catalogue: one title per DBX code. A test fails if a code has no title; the docs step builds one page per entry.
 
 ## Gate reports
 
@@ -141,7 +148,7 @@ Every decision under "Decisions" for steps 1-4. The ones with the most weight:
 
 ### HUMAN GATE 2: security review of crypto, key handling and erasure
 
-Status: waiting for review. Step 10 starts after sign-off.
+Status: approved on 2026-09-24, with one addition: tenant shredding goes into step 10. The two open items got no answer, so the options that add no code apply: the docs describe the multi-stream deadlock, and the docs show a middleware one-liner that sets `DeedboxContext`.
 
 #### What to review
 

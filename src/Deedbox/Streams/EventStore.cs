@@ -35,6 +35,7 @@ internal sealed class EventStore(
         var stream = runtime.Registry.ForState(typeof(TState));
 
         var tenantId = TenantId;
+        using var activity = StartActivity("deedbox.load", stream.Name, streamId);
         await using var lease = await transactions.BeginRead(Provider, ct);
         var loaded = await LoadCore(lease.Connection, lease.Transaction, tenantId, stream, streamId, forUpdate: false, ct);
         return new LoadResult<TState>((TState)loaded.State, loaded.Version);
@@ -50,17 +51,29 @@ internal sealed class EventStore(
 
         var stream = StreamOf(list, null);
         var tenantId = TenantId;
+        using var activity = StartActivity("deedbox.append", stream.Name, streamId);
+        activity?.SetTag("deedbox.events", list.Count);
+        var started = Stopwatch.GetTimestamp();
 
-        await using var lease = await transactions.BeginWrite(Provider, ct);
-        while (true)
+        try
         {
-            var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: stream.Snapshots.Enabled, ct);
-            var written = await Write(lease, tenantId, stream, streamId, expected, row, known: null, list, ct);
-            if (written is null)
-                continue; // Lost a stream-creation race under ExpectedVersion.Any; the row now exists.
+            await using var lease = await transactions.BeginWrite(Provider, ct);
+            while (true)
+            {
+                var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: stream.Snapshots.Enabled, ct);
+                var written = await Write(lease, tenantId, stream, streamId, expected, row, known: null, list, ct);
+                if (written is null)
+                    continue; // Lost a stream-creation race under ExpectedVersion.Any; the row now exists.
 
-            await Commit(lease, written, ct);
-            return new AppendResult(written.Version, written.Envelopes);
+                await Commit(lease, written, ct);
+                Appended(stream, written, started);
+                return new AppendResult(written.Version, written.Envelopes);
+            }
+        }
+        catch (ConcurrencyException)
+        {
+            DeedboxDiagnostics.Conflicts.Add(1, DeedboxDiagnostics.Tag("deedbox.stream_type", stream.Name));
+            throw;
         }
     }
 
@@ -71,6 +84,8 @@ internal sealed class EventStore(
         ArgumentNullException.ThrowIfNull(decide);
         var stream = runtime.Registry.ForState(typeof(TState));
         var tenantId = TenantId;
+        using var activity = StartActivity("deedbox.execute", stream.Name, streamId);
+        var started = Stopwatch.GetTimestamp();
 
         await using var lease = await transactions.BeginWrite(Provider, ct);
         for (var attempt = 0; ; attempt++)
@@ -88,11 +103,17 @@ internal sealed class EventStore(
             {
                 var written = (await Write(lease, tenantId, stream, streamId, ExpectedVersion.Exact(loaded.Version), loaded.Row, loaded.State, events, ct))!;
                 await Commit(lease, written, ct);
+                Appended(stream, written, started);
                 return new ExecuteResult<TState>((TState)written.State!, written.Version, written.Envelopes);
             }
-            catch (ConcurrencyException) when (attempt < runtime.Options.ExecuteRetries)
+            catch (ConcurrencyException)
             {
+                DeedboxDiagnostics.Conflicts.Add(1, DeedboxDiagnostics.Tag("deedbox.stream_type", stream.Name));
+                if (attempt >= runtime.Options.ExecuteRetries)
+                    throw;
+
                 // Only stream creation can race here: an existing row is locked from load to commit.
+                DeedboxDiagnostics.ExecuteRetries.Add(1, DeedboxDiagnostics.Tag("deedbox.stream_type", stream.Name));
             }
         }
     }
@@ -101,6 +122,7 @@ internal sealed class EventStore(
     {
         ValidateStreamId(streamId);
         var tenantId = TenantId;
+        using var activity = StartActivity("deedbox.delete_stream", null, streamId);
 
         await using var lease = await transactions.BeginWrite(Provider, ct);
         var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: false, ct);
@@ -125,6 +147,7 @@ internal sealed class EventStore(
     internal async Task EraseFromStream(string streamId, string subjectId, CancellationToken ct)
     {
         var tenantId = TenantId;
+        using var activity = StartActivity("deedbox.erase_stream", null, streamId);
         await using var lease = await transactions.BeginWrite(Provider, ct);
         if (await Provider.DeleteSubjectStream(lease.Connection, lease.WriteTransaction, tenantId, subjectId, streamId, ct) == 0)
         {
@@ -144,6 +167,38 @@ internal sealed class EventStore(
         var state = await Replay(lease.Connection, lease.Transaction, tenantId, stream, streamId, unsnapshotted, ct);
         var written = await Write(lease, tenantId, stream, streamId, ExpectedVersion.Exact(row.Version), unsnapshotted, state, [new SubjectErased(subjectId)], ct);
         await Commit(lease, written!, ct);
+    }
+
+    /// <summary>Replaces a stream's stored state with one rebuilt from all of its events.</summary>
+    internal async Task RebuildSnapshot(string streamId, CancellationToken ct)
+    {
+        var tenantId = TenantId;
+        await using var lease = await transactions.BeginWrite(Provider, ct);
+        var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: false, ct);
+        var stream = row is null ? null : runtime.Registry.FindStream(row.StreamType);
+        if (row is not null && row.DeletedAt is null && stream is { Snapshots.Enabled: true })
+        {
+            var state = await Replay(lease.Connection, lease.Transaction, tenantId, stream, streamId, row with { State = null }, ct);
+            var snapshot = new Snapshot(await SealState(tenantId, streamId, stream, state, ct), stream.StateVersion, row.Version);
+            await Provider.SaveSnapshot(lease.Connection, lease.Transaction, tenantId, streamId, snapshot, ct);
+        }
+
+        await lease.Complete(ct);
+    }
+
+    private static Activity? StartActivity(string name, string? streamType, string streamId)
+    {
+        var activity = DeedboxDiagnostics.Source.StartActivity(name);
+        activity?.SetTag("deedbox.stream_type", streamType);
+        activity?.SetTag("deedbox.stream_id", streamId);
+        return activity;
+    }
+
+    private static void Appended(StreamRegistration stream, Written written, long started)
+    {
+        var tag = DeedboxDiagnostics.Tag("deedbox.stream_type", stream.Name);
+        DeedboxDiagnostics.EventsAppended.Add(written.Envelopes.Length, tag);
+        DeedboxDiagnostics.AppendDuration.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds, tag);
     }
 
     private StreamRegistration RegisteredStream(string streamType) =>
@@ -247,6 +302,7 @@ internal sealed class EventStore(
         if (newTypes.Count > 0)
             await Provider.RecordEventTypes(connection, transaction, newTypes, ct);
 
+        var counterStarted = Stopwatch.GetTimestamp();
         var last = await Provider.InsertEvents(connection, transaction, tenantId, streamId, stream.Name, occurredAt, rows, ct);
 
         var envelopes = new EventEnvelope[rows.Count];
@@ -256,12 +312,13 @@ internal sealed class EventStore(
                 last - rows.Count + 1 + i, rows[i].EventType, rows[i].EventVersion, events[i], eventMetadata, occurredAt);
         }
 
-        return new Written(newVersion, newState, envelopes, newTypes);
+        return new Written(newVersion, newState, envelopes, newTypes, counterStarted);
     }
 
     private async Task Commit(Lease lease, Written written, CancellationToken ct)
     {
         await lease.Complete(ct);
+        DeedboxDiagnostics.CounterDuration.Record(Stopwatch.GetElapsedTime(written.CounterStarted).TotalMilliseconds);
 
         // Only a commit Deedbox made proves the rows exist; in a caller's transaction they are recorded again next time.
         if (lease.Commits)
@@ -471,5 +528,5 @@ internal sealed class EventStore(
 
     private sealed record Loaded(object State, long Version, StreamRow? Row);
 
-    private sealed record Written(long Version, object? State, EventEnvelope[] Envelopes, List<EventTypeRow> NewTypes);
+    private sealed record Written(long Version, object? State, EventEnvelope[] Envelopes, List<EventTypeRow> NewTypes, long CounterStarted);
 }

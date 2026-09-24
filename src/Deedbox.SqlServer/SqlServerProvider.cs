@@ -406,6 +406,35 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public override async Task<List<JobRow>> ReadJobs(DbConnection connection, int limit, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.ReadJobs);
+        Add(command, "limit", limit);
+        return await ReadJobRows(command, ct);
+    }
+
+    public override async Task<List<(string TenantId, string StreamId)>> ReadStreamKeys(
+        DbConnection connection, string streamType, string afterTenant, string afterStream, int limit, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.ReadStreamKeys);
+        AddText(command, "stream_type", streamType, 200);
+        AddText(command, "after_tenant", afterTenant, 100);
+        AddText(command, "after_stream", afterStream, 200);
+        Add(command, "limit", limit);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var keys = new List<(string, string)>();
+        while (await reader.ReadAsync(ct))
+            keys.Add((reader.GetString(0), reader.GetString(1)));
+        return keys;
+    }
+
+    public override async Task ShredTenant(DbConnection connection, DbTransaction transaction, string tenantId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ShredTenant);
+        AddText(command, "tenant", tenantId, 100);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     private static void AddMasterKey(DbCommand command, MasterKeyRow row)
     {
         AddText(command, "tenant", row.TenantId, 100);
@@ -633,6 +662,22 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             """;
 
         public readonly string ReadJob = $"SELECT {JobColumns} FROM [{s}].[jobs] WHERE id = @id";
+
+        public readonly string ReadJobs = $"SELECT TOP (@limit) {JobColumns} FROM [{s}].[jobs] ORDER BY created_at DESC, id DESC";
+
+        public readonly string ReadStreamKeys = $"""
+            SELECT TOP (@limit) tenant_id, stream_id FROM [{s}].[streams]
+            WHERE stream_type = @stream_type AND deleted_at IS NULL
+                AND (tenant_id > @after_tenant OR (tenant_id = @after_tenant AND stream_id > @after_stream))
+            ORDER BY tenant_id, stream_id
+            """;
+
+        public readonly string ShredTenant = $"""
+            UPDATE [{s}].[master_keys] SET wrapped_key = 0x, wrapped_by = N'shredded' WHERE tenant_id = @tenant AND key_version > 0;
+            DELETE FROM [{s}].[subject_keys] WHERE tenant_id = @tenant;
+            DELETE FROM [{s}].[subject_streams] WHERE tenant_id = @tenant;
+            UPDATE [{s}].[streams] SET state = NULL WHERE tenant_id = @tenant;
+            """;
 
         public readonly string ReadMasterKeys = $"SELECT tenant_id, key_version, wrapped_key, wrapped_by FROM [{s}].[master_keys] ORDER BY tenant_id, key_version";
 

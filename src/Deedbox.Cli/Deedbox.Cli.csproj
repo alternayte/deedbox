@@ -14,7 +14,10 @@
     <ProjectReference Include="../Deedbox/Deedbox.csproj" />
     <ProjectReference Include="../Deedbox.Postgres/Deedbox.Postgres.csproj" />
     <ProjectReference Include="../Deedbox.SqlServer/Deedbox.SqlServer.csproj" />
+    <ProjectReference Include="../Deedbox.Testing/Deedbox.Testing.csproj" />
+    <ProjectReference Include="../Deedbox.Keys.AzureKeyVault/Deedbox.Keys.AzureKeyVault.csproj" />
     <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Azure.Identity" />
   </ItemGroup>
 
   <ItemGroup>

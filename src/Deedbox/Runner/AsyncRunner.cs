@@ -115,11 +115,30 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
 
     public Consumer Consumer => consumer;
 
+    public long Lag { get; private set; }
+
+    public double LagSeconds { get; private set; }
+
+    public int StatusCode { get; private set; }
+
     private DeedboxProvider Provider => runtime.Provider;
 
     private RunnerOptions Options => runtime.Options.Runner;
 
     public async Task Run(CancellationToken ct)
+    {
+        DeedboxDiagnostics.Loops[this] = runtime.Provider.Schema;
+        try
+        {
+            await Loop(ct);
+        }
+        finally
+        {
+            DeedboxDiagnostics.Loops.TryRemove(this, out _);
+        }
+    }
+
+    private async Task Loop(CancellationToken ct)
     {
         var delay = Options.MinPollDelay;
         while (!ct.IsCancellationRequested)
@@ -158,6 +177,11 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
         var row = await Provider.LockCheckpoint(connection, transaction, consumer.Name, CheckpointLock.Batch, ct);
+        if (row is not null)
+        {
+            StatusCode = row.Status switch { CheckpointStatus.Rebuilding => 1, CheckpointStatus.Stalled => 2, _ => 0 };
+        }
+
         if (row is null || !ShouldRun(row))
             return Outcome.Idle;
 
@@ -181,6 +205,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
             var stored = await Provider.ReadEventsAfter(connection, transaction, row.Position, limit, consumer.PayloadTypes, ct);
             if (stored.Count == 0)
             {
+                (Lag, LagSeconds) = (0, 0);
                 if (row.Status != CheckpointStatus.Rebuilding || consumer.IsInline)
                     return Outcome.Idle;
 
@@ -189,6 +214,12 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
                 LogRebuilt(consumer.Name);
                 return Outcome.Progress;
             }
+
+            using var activity = DeedboxDiagnostics.Source.StartActivity("deedbox.batch");
+            activity?.SetTag("deedbox.consumer", consumer.Name);
+            activity?.SetTag("deedbox.from_position", stored[0].GlobalPosition);
+            activity?.SetTag("deedbox.to_position", stored[^1].GlobalPosition);
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
 
             await consumer.Process(await Decode(connection, transaction, stored, ct), connection, transaction, services, ct);
 
@@ -205,6 +236,20 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
                 LogRebuilt(consumer.Name);
 
             _lastPosition = last;
+            DeedboxDiagnostics.BatchDuration.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                DeedboxDiagnostics.Tag("deedbox.consumer", consumer.Name));
+            if (stored.Count < limit)
+            {
+                (Lag, LagSeconds) = (0, 0);
+            }
+            else
+            {
+                await using var headConnection = Provider.CreateConnection();
+                await headConnection.OpenAsync(ct);
+                Lag = Math.Max(0, await Provider.ReadHead(headConnection, null, ct) - last);
+                LagSeconds = Lag == 0 ? 0 : (runtime.Clock.GetUtcNow() - stored[^1].OccurredAt).TotalSeconds;
+            }
+
             if (_singleStepUntil is { } until && last >= until)
                 ResetFailureState();
             return Outcome.Progress;
@@ -304,6 +349,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
         _attempts = position == _failedPosition ? _attempts + 1 : 1;
         _failedPosition = position;
         _singleStepUntil = Math.Max(failure.RetryUntil, position);
+        DeedboxDiagnostics.HandlerFailures.Add(1, DeedboxDiagnostics.Tag("deedbox.consumer", consumer.Name));
         LogHandlerFailed(failure.InnerException, consumer.Name, position, _attempts, Options.HandlerRetries + 1);
 
         if (_attempts <= Options.HandlerRetries)
@@ -317,6 +363,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
         {
             await Provider.UpdateCheckpoint(connection, transaction, row with { Status = CheckpointStatus.Stalled, Error = PoisonError(failure, _attempts) }, ct);
             await transaction.CommitAsync(ct);
+            DeedboxDiagnostics.Stalls.Add(1, DeedboxDiagnostics.Tag("deedbox.consumer", consumer.Name));
             LogStalled(consumer.Name, failure.Envelope.StreamId, failure.Envelope.Version, failure.Envelope.EventType, position);
         }
 

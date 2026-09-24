@@ -10,5 +10,6 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Deedbox.Tests" />
+    <InternalsVisibleTo Include="Deedbox.Cli" />
   </ItemGroup>
 </Project>

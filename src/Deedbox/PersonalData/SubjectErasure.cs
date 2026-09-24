@@ -28,12 +28,6 @@ internal sealed class SubjectErasure(DeedboxRuntime runtime, DeedboxContext cont
         return await Jobs.Enqueue(runtime, Jobs.Erase, new JsonObject { ["tenantId"] = tenantId, ["subjectId"] = subjectId }, ct);
     }
 
-    public static async Task DeleteKey(DeedboxRuntime runtime, string tenantId, string subjectId, CancellationToken ct)
-    {
-        await using var connection = runtime.Provider.CreateConnection();
-        await connection.OpenAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
-        await runtime.Provider.DeleteSubjectKey(connection, transaction, tenantId, subjectId, ct);
-        await transaction.CommitAsync(ct);
-    }
+    public static Task DeleteKey(DeedboxRuntime runtime, string tenantId, string subjectId, CancellationToken ct) =>
+        Admin.DeleteSubjectKey(runtime.Provider, tenantId, subjectId, ct);
 }

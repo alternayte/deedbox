@@ -46,7 +46,8 @@ public abstract class Applied : Projection
     {
         On<ItemAdded>(async (e, ctx) =>
         {
-            if (e.Sku == probe.PoisonSku)
+            // Only background handlers poison; an inline one would fail the append itself.
+            if (e.Sku == probe.PoisonSku && ctx.GlobalPosition is not null)
                 throw new InvalidOperationException($"poison {e.Sku}");
             await TestTables.Insert(ctx.Connection, ctx.Transaction,
                 $"INSERT INTO {probe.Table("applied")} (event_id, projection, position) VALUES (@id, @projection, @position)",
