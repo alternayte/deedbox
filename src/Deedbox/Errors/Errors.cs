@@ -16,5 +16,6 @@ internal static class Errors
     public const string JsonReflectionDisabled = "DBX011";
     public const string DbContextConnectionMismatch = "DBX012";
     public const string ProviderAlreadySet = "DBX013";
-    public const string InvalidStreamId = "DBX014";
+    public const string Conflict = "DBX014";
+    public const string InvalidName = "DBX015";
 }

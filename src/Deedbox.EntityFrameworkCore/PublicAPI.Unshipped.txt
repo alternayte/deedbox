@@ -1,1 +1,3 @@
 #nullable enable
+Deedbox.DeedboxEntityFrameworkCoreExtensions
+static Deedbox.DeedboxEntityFrameworkCoreExtensions.UseDbContext(this Deedbox.IEventStore! store, Microsoft.EntityFrameworkCore.DbContext! context, params Microsoft.EntityFrameworkCore.DbContext![]! others) -> Deedbox.IEventStore!

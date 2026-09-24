@@ -6,7 +6,7 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 
 - [x] 1. Repo scaffold: solution, packages, Directory.Build.props, net8.0 + net10.0, analyzers (nullable, AOT, trimming), package validation, GitHub Actions with Testcontainers, CONTRIBUTING stub.
 - [x] 2. Schema: embedded migration scripts for both providers, schema manager with locks, schema_version startup check, CLI "schema script" and "schema apply".
-- [ ] 3. Write path: string stream IDs, position counter (option A), streams and events tables, Append / Load / Execute with expected versions, conflict retry, snapshots with state_version, transaction modes (neither, Dapper, EF Core with several DbContexts in one transaction).
+- [x] 3. Write path: string stream IDs, position counter (option A), streams and events tables, Append / Load / Execute with expected versions, conflict retry, snapshots with state_version, transaction modes (neither, Dapper, EF Core with several DbContexts in one transaction).
 - [ ] 4. Torture suite v1: concurrent appends with rollbacks and long transactions; assert gapless commit-ordered positions and per-stream order. HUMAN GATE 1: API shape review and torture suite v1 results.
 - [ ] 5. Registry and evolution: naming convention, aliases, event_types table, startup name check, JSON upcasters and typed upcasters, lockfile in Deedbox.Testing, Given/When/Then helpers.
 - [ ] 6. Inline projections (EF and ADO flavours), OnAppending hook, metadata context, causation/correlation, TraceParent capture, tenancy scoping.
@@ -37,5 +37,17 @@ The design doc (SDD) is the source of truth. It is local only and never committe
 - Step 2: Error docs URLs use https://deedbox.dev/errors/dbxNNN until the docs domain is chosen (open item).
 - Step 2: No ConfigureAwait (CA2007 off). Deedbox targets hosts without a synchronization context.
 - Step 2: `just api` records new public API symbols from RS0016 build errors into PublicAPI.Unshipped.txt.
+- Step 3: A write locks the stream identity before it reads the stream. SQL Server uses UPDLOCK + HOLDLOCK on the row or its key range. Postgres uses a transaction advisory lock on a hash of (tenant, stream) plus FOR UPDATE. Writers of one stream queue up on both providers, including when they create it.
+- Step 3: Execute reads the stream under that lock and decides on locked state, instead of load-then-check. This removes a round trip and wasted decisions. Conflict retries (default 3, no delay) stay as a safety net; the torture suite shows whether they ever fire.
+- Step 3: `streams.state_at` is added: the stream version the stored state reflects. "Every N events" snapshots need it.
+- Step 3: JSON defaults are JsonSerializerDefaults.Web (camelCase). Enums stay numbers, the System.Text.Json default, because the non-generic string enum converter is not AOT-safe. ConfigureJson changes this.
+- Step 3: `ExpectedVersion.Exact(0)` equals NoStream, so `Exact(version)` from a Load of a missing stream works.
+- Step 3: Stream IDs are 1 to 200 characters with no leading or trailing white space. SQL Server ignores trailing spaces in comparisons; rejecting them keeps both providers identical.
+- Step 3: `StreamId.Deterministic(ns, parts)` joins parts with ':' and uses RFC UUIDv5. This matches Anthology's StreamId.For, so migrated IDs still resolve.
+- Step 3: SQL Server appends pass all events as one JSON parameter to OPENJSON. This needs SQL Server 2016+ at compatibility level 130+.
+- Step 3: The events metadata column holds "{}" until step 6 adds metadata.
+- Step 3: Transaction modes are `store.UseTransaction(dbTransaction)` for Dapper/ADO.NET and `store.UseDbContext(context, params others)` for EF Core. The SDD names neither; gate 1 confirms.
+- Step 3: In EF mode, when the caller owns the transaction, Deedbox enlists the other contexts and leaves them enlisted. The caller completes the transaction.
+- Step 3: IEventStore is registered as scoped, for the tenant and metadata context in step 6.
 
 ## Gate reports

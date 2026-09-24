@@ -4,6 +4,6 @@
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <NoWarn>$(NoWarn);CA2007;CA1707;CA1515;CA1816</NoWarn>
+    <NoWarn>$(NoWarn);CA2007;CA1707;CA1515;CA1816;xUnit1051</NoWarn>
   </PropertyGroup>
 </Project>

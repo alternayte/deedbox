@@ -20,6 +20,7 @@ public static class DeedboxServiceCollectionExtensions
         var runtime = builder.Build();
 
         services.AddSingleton(_ => runtime);
+        services.AddScoped<IEventStore>(sp => new EventStore(sp.GetRequiredService<DeedboxRuntime>(), OwnedTransactions.Instance));
         services.AddHostedService<SchemaStartup>();
         return services;
     }
