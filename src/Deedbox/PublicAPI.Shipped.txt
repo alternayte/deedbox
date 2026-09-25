@@ -128,6 +128,7 @@ Deedbox.IEventStoreAdmin.GetJobAsync(System.Guid jobId, System.Threading.Cancell
 Deedbox.IEventStoreAdmin.GetStatusAsync(System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Deedbox.StoreStatus!>!
 Deedbox.IEventStoreAdmin.RebuildAsync(string! projection, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
 Deedbox.IEventStoreAdmin.RebuildSnapshotsAsync(string! streamType, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
+Deedbox.IEventStoreAdmin.RetireAsync(string! projection, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Deedbox.IEventStoreAdmin.RewrapKeysAsync(Deedbox.IMasterKeyProvider! target, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
 Deedbox.IEventStoreAdmin.ShredTenantAsync(string! tenantId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Deedbox.IEventStoreAdmin.SkipAsync(string! consumer, System.Guid eventId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!

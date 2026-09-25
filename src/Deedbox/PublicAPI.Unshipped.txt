@@ -1,2 +1,1 @@
 #nullable enable
-Deedbox.IEventStoreAdmin.RetireAsync(string! projection, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!

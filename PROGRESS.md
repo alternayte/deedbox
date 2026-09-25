@@ -315,3 +315,4 @@ Spec: `docs/specs/live-instances-and-retired-projections.md` (from the grill on 
 - CI caught a job race that predates 0.3.0: any instance's job loop claimed any job, and one without the projection's code failed a rebuild for good, even with another live instance able to run it. Rebuild and snapshot jobs now use the heartbeat: an instance without the projection or stream type leaves the job, skips it for one liveness window, then looks again; with no live instance that can run it, it runs the job, which fails with the reason. A test with a registering instance whose runner is off shows the job staying queued, then failing once that instance stops.
 - Runner tests use a 2-second heartbeat, so a liveness window is 6 seconds instead of 30.
 
+- Released on 2026-09-25: https://github.com/alternayte/deedbox/releases/tag/v0.3.0. All nine packages pushed through trusted publishing.
