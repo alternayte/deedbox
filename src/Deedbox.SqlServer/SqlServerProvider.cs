@@ -381,9 +381,10 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    public override async Task<JobRow?> ClaimJob(DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    public override async Task<JobRow?> ClaimJob(DbConnection connection, DbTransaction transaction, IReadOnlyCollection<Guid> except, CancellationToken ct)
     {
         await using var command = Command(connection, transaction, Sql.ClaimJob);
+        AddJson(command, "except", except.Select(id => new[] { id.ToString("D") }).ToArray());
         return (await ReadJobRows(command, ct)).FirstOrDefault();
     }
 
@@ -782,7 +783,8 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             """;
 
         public readonly string ClaimJob =
-            $"SELECT TOP (1) {JobColumns} FROM [{s}].[jobs] WITH (UPDLOCK, READPAST, ROWLOCK) WHERE status = N'queued' ORDER BY created_at, id";
+            $"SELECT TOP (1) {JobColumns} FROM [{s}].[jobs] WITH (UPDLOCK, READPAST, ROWLOCK) WHERE status = N'queued' " +
+            "AND id NOT IN (SELECT i FROM OPENJSON(@except) WITH (i uniqueidentifier '$[0]')) ORDER BY created_at, id";
 
         public readonly string UpdateJob = $"""
             UPDATE [{s}].[jobs] SET status = @status, args = @args, progress = @progress, started_at = @started_at, finished_at = @finished_at,

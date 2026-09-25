@@ -317,9 +317,10 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    public override async Task<JobRow?> ClaimJob(DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    public override async Task<JobRow?> ClaimJob(DbConnection connection, DbTransaction transaction, IReadOnlyCollection<Guid> except, CancellationToken ct)
     {
         await using var command = Command(connection, transaction, Sql.ClaimJob);
+        Add(command, "except", except.ToArray());
         return (await ReadJobRows(command, ct)).FirstOrDefault();
     }
 
@@ -675,7 +676,8 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             """;
 
         public readonly string ClaimJob = $"""
-            SELECT {JobColumns} FROM {s}.jobs WHERE status = 'queued' ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
+            SELECT {JobColumns} FROM {s}.jobs WHERE status = 'queued' AND NOT (id = ANY(@except))
+            ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
             """;
 
         public readonly string UpdateJob = $"""

@@ -15,6 +15,10 @@ This file records every notable change to the Deedbox packages. The format follo
 - An instance that starts without a running inline projection, but can append its events, moves that projection back to catch-up from the current head. A rollback no longer makes an inline projection miss events.
 - `IEventStoreAdmin.RetireAsync` has a default body, so an implementation of the interface written for 0.2 still compiles.
 
+### Fixed
+
+- A rebuild or snapshot job claimed by an instance that does not register the projection or stream type failed, even when another live instance could run it. That instance now leaves the job to one that can, and runs it, failing with the reason, only when no live instance can.
+
 ## [0.2.1] - 2026-09-25
 
 ### Fixed

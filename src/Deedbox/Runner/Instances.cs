@@ -75,7 +75,7 @@ internal static class Instances
 
     public static IReadOnlyList<string> ReadList(string json) => JsonSerializer.Deserialize(json, InstanceJson.Default.StringArray) ?? [];
 
-    private static string StreamOf(string pair) => pair[..pair.IndexOf('/', StringComparison.Ordinal)];
+    public static string StreamOf(string pair) => pair[..pair.IndexOf('/', StringComparison.Ordinal)];
 }
 
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]

@@ -172,6 +172,7 @@ public abstract class RunnerTest(Databases databases, Db db) : DatabaseTest(data
                 o.MaxPollDelay = TimeSpan.FromMilliseconds(200);
                 o.RetryDelay = TimeSpan.FromMilliseconds(10);
                 o.HandlerRetries = 2;
+                o.HeartbeatInterval = TimeSpan.FromSeconds(2);
                 runner?.Invoke(o);
             });
             configure(b);

@@ -35,6 +35,7 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
     private const int InterruptionRetries = 10;
     private readonly ILogger _logger = logger;
     private readonly Dictionary<Guid, int> _interruptions = [];
+    private readonly Dictionary<Guid, DateTimeOffset> _leftForOthers = [];
 
     private DeedboxProvider Provider => runtime.Provider;
 
@@ -73,9 +74,21 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         {
             await connection.OpenAsync(ct);
             await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-            var job = await Provider.ClaimJob(connection, transaction, ct);
+            // A job left for another instance is looked at again after one liveness window, in case that instance stopped.
+            var now = runtime.Clock.GetUtcNow();
+            foreach (var expired in _leftForOthers.Where(l => l.Value <= now).Select(l => l.Key).ToList())
+                _leftForOthers.Remove(expired);
+            var job = await Provider.ClaimJob(connection, transaction, _leftForOthers.Keys, ct);
             if (job is null)
                 return false;
+
+            // A job that needs code this instance lacks waits for an instance that has it; the rollback releases it.
+            if (await LeaveForAnother(job, connection, transaction, ct))
+            {
+                _leftForOthers[job.Id] = now + runtime.Options.Runner.HeartbeatInterval * Instances.LiveIntervals;
+                LogJobLeft(job.Kind, job.Id);
+                return false;
+            }
 
             id = job.Id;
             var started = runtime.Clock.GetUtcNow();
@@ -110,6 +123,28 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
                 return true;
             }
         }
+    }
+
+    /// <summary>
+    /// True when this instance cannot run the job, a rebuild of a projection or of a stream type's snapshots that it
+    /// does not register, but a live instance can. With no such instance, the job runs here and fails with the reason.
+    /// </summary>
+    private async Task<bool> LeaveForAnother(JobRow job, DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    {
+        var args = JsonNode.Parse(job.Args)!.AsObject();
+        Func<InstanceRow, bool>? canRun = job.Kind switch
+        {
+            Jobs.Rebuild when args["projection"]?.GetValue<string>() is { } name
+                && !services.GetRequiredService<ProjectionSet>().All.Any(p => p.Name == name) => i => i.Consumers.Contains(name, StringComparer.Ordinal),
+            Jobs.Snapshots when args["streamType"]?.GetValue<string>() is { } streamType
+                && runtime.Registry.FindStream(streamType) is null => i => i.Events.Any(e => Instances.StreamOf(e) == streamType),
+            _ => null,
+        };
+        if (canRun is null)
+            return false;
+
+        var live = await Provider.ReadLiveInstances(connection, transaction, runtime.Options.Runner.HeartbeatInterval * Instances.LiveIntervals, ct);
+        return live.Any(i => i.Id != runtime.InstanceId && canRun(i));
     }
 
     private static void Finished(string kind, string status) =>
@@ -285,6 +320,9 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
     [LoggerMessage(EventId = 33, Level = LogLevel.Warning, Message = "Deedbox job {Kind} {Id} was interrupted; it runs again.")]
     private partial void LogJobInterrupted(Exception exception, string kind, Guid id);
 
-    [LoggerMessage(EventId = 32, Level = LogLevel.Error, Message = "Deedbox job {Kind} {Id} failed.")]
+    [LoggerMessage(EventId = 34, Level = LogLevel.Information, Message = "Deedbox job {Kind} {Id} needs code this instance lacks; a live instance that has it runs it.")]
+    private partial void LogJobLeft(string kind, Guid id);
+
+        [LoggerMessage(EventId = 32, Level = LogLevel.Error, Message = "Deedbox job {Kind} {Id} failed.")]
     private partial void LogJobFailed(Exception exception, string kind, Guid id);
 }

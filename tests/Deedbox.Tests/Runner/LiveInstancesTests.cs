@@ -90,9 +90,27 @@ public abstract class LiveInstancesTests(Databases databases, Db db) : RunnerTes
         Assert.Equal(1, await AppliedCount("async"));
         Assert.Equal(HealthStatus.Degraded, (await Health(back)).Status);
 
-        await WaitForJob(back, await AdminOf(back).RebuildAsync("applied"));
+        Assert.Equal("done", (await WaitForJob(back, await AdminOf(back).RebuildAsync("applied"))).Status);
         await WaitForCaughtUp(back, "applied");
         Assert.Equal(2, await AppliedCount("async"));
         Assert.Equal(HealthStatus.Healthy, (await Health(back)).Status);
+    }
+
+    [Fact]
+    public async Task A_rebuild_job_waits_for_a_live_instance_that_registers_the_projection_instead_of_failing()
+    {
+        var probe = NewProbe();
+        var other = await StartHost(probe, _ => { });
+        var registers = await StartHost(probe, b => b.Projection<AsyncApplied>("applied", Run.Async), o => o.Enabled = false);
+
+        var id = await AdminOf(registers).RebuildAsync("applied");
+        await Task.Delay(1000, Ct);
+        Assert.Equal("queued", (await AdminOf(other).GetJobAsync(id))!.Status);
+
+        // With no live instance that registers it, the job runs where it is and fails with the reason.
+        await StopHost(registers);
+        var job = await WaitForJob(other, id);
+        Assert.Equal("failed", job.Status);
+        Assert.Contains("not a registered projection", job.Progress, StringComparison.Ordinal);
     }
 }

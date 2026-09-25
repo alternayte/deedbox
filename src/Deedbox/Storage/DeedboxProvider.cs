@@ -140,8 +140,8 @@ internal abstract class DeedboxProvider : IAsyncDisposable
 
     public abstract Task InsertJob(DbConnection connection, DbTransaction? transaction, JobRow job, CancellationToken ct);
 
-    /// <summary>Locks the oldest queued job, skipping jobs another runner holds.</summary>
-    public abstract Task<JobRow?> ClaimJob(DbConnection connection, DbTransaction transaction, CancellationToken ct);
+    /// <summary>Locks the oldest queued job, skipping jobs another runner holds and the jobs in <paramref name="except"/>.</summary>
+    public abstract Task<JobRow?> ClaimJob(DbConnection connection, DbTransaction transaction, IReadOnlyCollection<Guid> except, CancellationToken ct);
 
     public abstract Task UpdateJob(DbConnection connection, DbTransaction transaction, JobRow job, CancellationToken ct);
 
