@@ -82,10 +82,22 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     // ---- Async runner ----
 
     /// <summary>
-    /// Adds checkpoint rows that do not exist yet, at position 0. A new inline projection on a store that already holds
-    /// events starts as rebuilding, so the runner applies the earlier events before it cuts over; every other one starts running.
+    /// Adds checkpoint rows that do not exist yet, at position 0, and records what each one handles. A new inline
+    /// projection starts as rebuilding when the store already holds events or the seed asks for it, so the runner
+    /// applies the earlier events before it cuts over; every other one starts running.
     /// </summary>
-    public abstract Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<(string Name, string Mode)> checkpoints, CancellationToken ct);
+    public abstract Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<CheckpointSeed> checkpoints, CancellationToken ct);
+
+    // ---- Instances ----
+
+    /// <summary>Writes this instance's heartbeat with the database clock, and deletes rows unseen for ten liveness windows.</summary>
+    public abstract Task Beat(DbConnection connection, InstanceRow instance, TimeSpan liveFor, CancellationToken ct);
+
+    /// <summary>Deletes this instance's heartbeat row.</summary>
+    public abstract Task Leave(DbConnection connection, Guid instanceId, CancellationToken ct);
+
+    /// <summary>The instances whose heartbeat, by the database clock, is younger than <paramref name="liveFor"/>.</summary>
+    public abstract Task<List<InstanceRow>> ReadLiveInstances(DbConnection connection, DbTransaction? transaction, TimeSpan liveFor, CancellationToken ct);
 
     /// <summary>Every checkpoint row.</summary>
     public abstract Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct);
@@ -249,6 +261,9 @@ internal static class CheckpointStatus
     public const string Running = "running";
     public const string Stalled = "stalled";
     public const string Rebuilding = "rebuilding";
+
+    /// <summary>Retired from the admin API or the CLI: nothing applies it until a rebuild.</summary>
+    public const string Retired = "retired";
 }
 
 internal static class CheckpointMode
@@ -258,7 +273,10 @@ internal static class CheckpointMode
     public const string Subscription = "subscription";
 }
 
-internal sealed record CheckpointRow(string Name, long Position, string Mode, string Status, string? Error, DateTimeOffset UpdatedAt);
+internal sealed record CheckpointRow(string Name, long Position, string Mode, string Status, string? Error, DateTimeOffset UpdatedAt, string? Handles = null);
+
+/// <summary>A checkpoint to create if it is missing. <paramref name="Rebuild"/> starts a new inline one in catch-up.</summary>
+internal sealed record CheckpointSeed(string Name, string Mode, string Handles, bool Rebuild);
 
 internal sealed record JobRow(Guid Id, string Kind, string Args, string Status, string? Progress, DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? FinishedAt);
 

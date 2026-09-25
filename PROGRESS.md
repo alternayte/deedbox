@@ -292,7 +292,7 @@ Spec: `docs/specs/queuebox-message-shaping.md` (from the grill on 2026-09-24).
 - GraphQL moved to the how-to "Serve a read model over GraphQL", with Hot Chocolate type extensions and batch and grouped DataLoaders. The snippet test shows a page with authors, latest version and versions costs three queries. Queries open a context per call from IDbContextFactory, because GraphQL resolvers run in parallel.
 - The tutorial adds a second projection, `people`, with `people` and `manuscript_authors` tables: manuscripts by person, search by name or affiliation, counts per person and per institution, and one profile per person across manuscripts. AuthorAdded now carries PersonId, ORCID and the corresponding-author flag; affiliation belongs to the authorship. Byline order is the event's stream version. The snippet test covers each scenario and an erasure.
 - New concept page "Inline or async projections" and how-to "Replace a read model without downtime" (a manual blue/green rebuild: the new projection is registered async under a new name and serves reads once caught up).
-- Two gaps found while writing them, documented as known limits and not fixed yet: (1) nothing removes a retired projection's checkpoint, so `deedbox status` lists it until someone deletes the row; (2) during a rolling deploy, instances of the old version append without applying a new inline projection, which then misses those events after its cut-over.
+- Two gaps found while writing them: (1) nothing removed a retired projection's checkpoint; (2) during a rolling deploy, instances of the old version appended without applying a new inline projection, which then missed those events after its cut-over. Both are fixed in 0.3.0.
 
 ## 0.2.1
 
@@ -301,3 +301,15 @@ Spec: `docs/specs/queuebox-message-shaping.md` (from the grill on 2026-09-24).
 - The torture observers now read through the provider, as the runner does, instead of their own range query. The ordering concept page states the bound, and shows it for apps that read the events table with their own SQL.
 - VersionPrefix is 0.2.1, with package validation against 0.2.0.
 - Released on 2026-09-25: https://github.com/alternayte/deedbox/releases/tag/v0.2.1. All nine packages pushed through trusted publishing.
+
+## 0.3.0
+
+Spec: `docs/specs/live-instances-and-retired-projections.md` (from the grill on 2026-09-25).
+
+- Heartbeat: every instance writes a row to `instances` at start-up, every 10 seconds and until it stops, listing its projections and subscriptions, its inline projections, and the `streamType/eventType` pairs it can append. Liveness is three intervals by the database clock. A clean stop deletes the row; rows unseen for ten liveness windows are deleted.
+- `checkpoints.handles` records the events a projection handles, including aliases and built-ins, so an instance without the projection's code can compute whether it would skip it. An instance skips a projection when it does not run it inline and can append one of its events; built-ins count only where the instance's stream types meet the projection's.
+- The inline cut-over checks the live instances before and again after taking the gate and counter locks, and keeps catching up while any would skip the projection. Start-up writes the heartbeat first, seeds new inline checkpoints in catch-up when a live instance would skip them, then moves back to catch-up any running inline projection that this instance would skip, at the current head under the same locks.
+- Retire: `Admin.Retire` serves both `IEventStoreAdmin.RetireAsync` and `deedbox retire`. It refuses with DBX035 while a live instance registers the name, and DBX033 when no checkpoint has it. `retired` checkpoints are skipped by appends and by the runner, listed with no lag, and reported degraded by the health check when the app registers the name. `RebuildAsync` brings one back.
+- `RetireAsync` has a default interface body that throws NotSupportedException, so implementations of IEventStoreAdmin written for 0.2 still compile; package validation against 0.2.1 passes. Version 0.3.0, a minor release for the new API and schema.
+- The tests `LiveInstancesTests` cover the rolling deploy, the rollback, an instance with other stream types, and retire; with the conflict rule disabled, the first two fail.
+

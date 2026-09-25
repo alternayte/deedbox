@@ -16,6 +16,21 @@ public abstract class CliOperationsTests(Databases databases, Db db) : RunnerTes
     private string[] Target => ["--provider", Db == Db.Postgres ? "postgres" : "sqlserver", "--schema", Schema, "--connection", ConnectionString];
 
     [Fact]
+    public async Task Retire_refuses_while_an_app_registers_the_projection_and_retires_it_after()
+    {
+        var host = await StartHost(NewProbe(), b => b.Projection<AsyncApplied>("applied", Run.Async));
+
+        var refused = await Cli(["retire", "applied", .. Target]);
+        Assert.Equal(1, refused.Code);
+        Assert.StartsWith("DBX035:", refused.Error, StringComparison.Ordinal);
+
+        await StopHost(host);
+        var retired = await Cli(["retire", "applied", .. Target]);
+        Assert.Equal((0, "'applied' is retired. Rebuild it to use it again."), (retired.Code, retired.Output.Trim()));
+        Assert.Contains("retired", (await Cli(["status", .. Target])).Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Status_rebuild_and_skip_work_against_a_running_app()
     {
         var probe = NewProbe();

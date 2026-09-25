@@ -29,6 +29,9 @@ public sealed class RunnerOptions
     /// </summary>
     public TimeSpan StallAfter { get; set; } = TimeSpan.FromMinutes(10);
 
+    /// <summary>How often each instance writes its heartbeat. Internal: tests shorten it.</summary>
+    internal TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(10);
+
     internal void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(BatchSize, 1, nameof(BatchSize));

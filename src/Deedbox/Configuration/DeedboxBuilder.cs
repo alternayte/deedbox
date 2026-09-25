@@ -266,6 +266,9 @@ internal sealed class DeedboxRuntime(DeedboxOptions options, DeedboxProvider pro
     public DeedboxJson Json { get; } = json;
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 
+    /// <summary>This process's ID in the heartbeat table.</summary>
+    public Guid InstanceId { get; } = Uuid7.New();
+
     /// <summary>The key hierarchy, or null when no key mode is configured.</summary>
     public KeyRing? Keys { get; init; }
 

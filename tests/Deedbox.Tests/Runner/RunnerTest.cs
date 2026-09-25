@@ -153,7 +153,7 @@ public abstract class RunnerTest(Databases databases, Db db) : DatabaseTest(data
 
     protected Probe NewProbe() => new(Schema, Db);
 
-    protected async Task<IHost> StartHost(Probe probe, Action<DeedboxBuilder> configure, Action<RunnerOptions>? runner = null, string? applicationName = null)
+    protected async Task<IHost> StartHost(Probe probe, Action<DeedboxBuilder> configure, Action<RunnerOptions>? runner = null, string? applicationName = null, bool defaultStreams = true)
     {
         var connectionString = applicationName is null ? ConnectionString : $"{ConnectionString};Application Name={applicationName}";
         var builder = Host.CreateApplicationBuilder();
@@ -163,7 +163,9 @@ public abstract class RunnerTest(Databases databases, Db db) : DatabaseTest(data
         builder.Services.AddDeedbox(b =>
         {
             (Db == Db.Postgres ? b.UsePostgres(connectionString) : b.UseSqlServer(connectionString, Databases.SqlServerOptions)).Schema(Schema)
-                .ApplySchemaOnStartup().Stream<Cart>(s => s.Events<ItemAdded, CheckedOut>()).Stream<Order>(s => s.Events<OrderPlaced>());
+                .ApplySchemaOnStartup();
+            if (defaultStreams)
+                b.Stream<Cart>(s => s.Events<ItemAdded, CheckedOut>()).Stream<Order>(s => s.Events<OrderPlaced>());
             b.Runner(o =>
             {
                 o.MinPollDelay = TimeSpan.FromMilliseconds(10);

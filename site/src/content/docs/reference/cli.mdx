@@ -22,6 +22,7 @@ Every command that reaches the database takes `--provider postgres|sqlserver`, `
 | `deedbox tenant shred <tenant> --yes` | Crypto-shreds a tenant. | CLI |
 | `deedbox lockfile diff <old> <new>` | Shows event-contract changes; exits 1 on a break. | CLI |
 | `deedbox rebuild <projection> [--wait]` | Queues a rebuild. | App |
+| `deedbox retire <projection>` | Retires a projection that no live instance registers. Runs at once. | CLI |
 | `deedbox skip <consumer> --event <id> [--wait]` | Queues an audited skip of a poison event. | App |
 | `deedbox erase <subject> [--tenant t] [--wait]` | Deletes the subject's key now; queues the rest. | CLI, then app |
 | `deedbox snapshots rebuild <streamType> [--wait]` | Queues a rebuild of stored state. | App |

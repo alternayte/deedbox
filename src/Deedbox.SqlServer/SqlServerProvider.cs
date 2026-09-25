@@ -22,6 +22,10 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         ("checkpoints", "error", true),
         ("jobs", "args", false),
         ("jobs", "progress", true),
+        ("checkpoints", "handles", true),
+        ("instances", "consumers", false),
+        ("instances", "inline_projections", false),
+        ("instances", "event_types", false),
     ];
 
     private readonly string _connectionString;
@@ -238,11 +242,46 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         return rows;
     }
 
-    public override async Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<(string Name, string Mode)> checkpoints, CancellationToken ct)
+    public override async Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<CheckpointSeed> checkpoints, CancellationToken ct)
     {
         await using var command = Command(connection, null, Sql.EnsureCheckpoints);
-        AddJson(command, "checkpoints", checkpoints.Select(c => new[] { c.Name, c.Mode }).ToArray());
+        AddJson(command, "checkpoints", checkpoints.Select(c => new[] { c.Name, c.Mode, c.Rebuild ? "1" : "0", c.Handles }).ToArray());
         await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task Beat(DbConnection connection, InstanceRow instance, TimeSpan liveFor, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.Beat);
+        Add(command, "id", instance.Id);
+        AddText(command, "host", instance.Host, 200);
+        AddText(command, "app", instance.App, 200);
+        AddText(command, "consumers", Instances.ListJson(instance.Consumers), -1);
+        AddText(command, "inline", Instances.ListJson(instance.Inline), -1);
+        AddText(command, "events", Instances.ListJson(instance.Events), -1);
+        Add(command, "stale_ms", (int)(liveFor * 10).TotalMilliseconds);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task Leave(DbConnection connection, Guid instanceId, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.Leave);
+        Add(command, "id", instanceId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<List<InstanceRow>> ReadLiveInstances(DbConnection connection, DbTransaction? transaction, TimeSpan liveFor, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadLiveInstances);
+        Add(command, "live_ms", (int)liveFor.TotalMilliseconds);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<InstanceRow>();
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(new InstanceRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Instances.ReadList(reader.GetString(3)),
+                Instances.ReadList(reader.GetString(4)), Instances.ReadList(reader.GetString(5)), reader.GetFieldValue<DateTimeOffset>(6)));
+        }
+
+        return rows;
     }
 
     public override async Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct)
@@ -529,7 +568,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         while (await reader.ReadAsync(ct))
         {
             rows.Add(new CheckpointRow(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5)));
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5), reader.IsDBNull(6) ? null : reader.GetString(6)));
         }
 
         return rows;
@@ -660,7 +699,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         public readonly string ReadEventTypes =
             $"SELECT stream_type, event_type, event_version FROM [{s}].[event_types] ORDER BY stream_type, event_type, event_version";
 
-        private const string CheckpointColumns = "name, position, mode, status, error, updated_at";
+        private const string CheckpointColumns = "name, position, mode, status, error, updated_at, handles";
 
         private const string JobColumns = "id, kind, args, status, progress, created_at, started_at, finished_at";
 
@@ -669,10 +708,29 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         private const string Now = "TODATETIMEOFFSET(SYSUTCDATETIME(), 0)";
 
         public readonly string EnsureCheckpoints = $"""
-            INSERT INTO [{s}].[checkpoints] (name, mode, status)
-            SELECT c.n, c.m, CASE WHEN c.m = N'inline' AND (SELECT value FROM [{s}].[position]) > 0 THEN N'rebuilding' ELSE N'running' END
-            FROM OPENJSON(@checkpoints) WITH (n nvarchar(200) '$[0]', m nvarchar(20) '$[1]') AS c
-            WHERE NOT EXISTS (SELECT 1 FROM [{s}].[checkpoints] WITH (UPDLOCK, HOLDLOCK) WHERE name = c.n)
+            INSERT INTO [{s}].[checkpoints] (name, mode, status, handles)
+            SELECT c.n, c.m, CASE WHEN c.m = N'inline' AND (c.r = N'1' OR (SELECT value FROM [{s}].[position]) > 0) THEN N'rebuilding' ELSE N'running' END, c.h
+            FROM OPENJSON(@checkpoints) WITH (n nvarchar(200) '$[0]', m nvarchar(20) '$[1]', r nvarchar(1) '$[2]', h nvarchar(max) '$[3]') AS c
+            WHERE NOT EXISTS (SELECT 1 FROM [{s}].[checkpoints] WITH (UPDLOCK, HOLDLOCK) WHERE name = c.n);
+            UPDATE k SET handles = c.h
+            FROM [{s}].[checkpoints] AS k
+            JOIN OPENJSON(@checkpoints) WITH (n nvarchar(200) '$[0]', h nvarchar(max) '$[3]') AS c ON k.name = c.n;
+            """;
+
+        public string Beat => $"""
+            UPDATE [{s}].[instances] SET consumers = @consumers, inline_projections = @inline, event_types = @events, seen_at = {Now}
+            WHERE instance_id = @id;
+            IF @@ROWCOUNT = 0
+                INSERT INTO [{s}].[instances] (instance_id, host, app, consumers, inline_projections, event_types)
+                VALUES (@id, @host, @app, @consumers, @inline, @events);
+            DELETE FROM [{s}].[instances] WHERE seen_at < DATEADD(millisecond, -@stale_ms, {Now});
+            """;
+
+        public readonly string Leave = $"DELETE FROM [{s}].[instances] WHERE instance_id = @id";
+
+        public string ReadLiveInstances => $"""
+            SELECT instance_id, host, app, consumers, inline_projections, event_types, seen_at
+            FROM [{s}].[instances] WHERE seen_at > DATEADD(millisecond, -@live_ms, {Now}) ORDER BY started_at
             """;
 
         public readonly string ReadCheckpoints = $"SELECT {CheckpointColumns} FROM [{s}].[checkpoints] ORDER BY name";

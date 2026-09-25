@@ -35,8 +35,8 @@ internal sealed partial class AsyncRunner(DeedboxRuntime runtime, IServiceProvid
 
     public static List<Consumer> Consumers(DeedboxRuntime runtime, ProjectionSet set) =>
     [
-        .. set.All.Select(p => (Consumer)new ProjectionConsumer(p, runtime.Registry.StoredNamesOf(p.Instance.HandledTypes))),
-        .. set.Subscriptions.Select(s => (Consumer)new SubscriptionConsumer(s, runtime.Registry.StoredNamesOf(s.Instance.HandledTypes))),
+        .. set.All.Select(p => (Consumer)new ProjectionConsumer(p, runtime.Registry.StoredNamesOf(p.Instance.HandledTypes), Handles.Of(runtime.Registry, p.Instance.HandledTypes))),
+        .. set.Subscriptions.Select(s => (Consumer)new SubscriptionConsumer(s, runtime.Registry.StoredNamesOf(s.Instance.HandledTypes), Handles.Of(runtime.Registry, s.Instance.HandledTypes))),
     ];
 
     /// <summary>Wakes the loops on push notifications, and reconnects with backoff when the listener fails.</summary>
@@ -112,6 +112,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
     private bool _retryStalled = true;
     private long _rebuildGap = long.MaxValue;
     private int _gapNotShrinking;
+    private string _waitingFor = "";
 
     public Consumer Consumer => consumer;
 
@@ -193,12 +194,17 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
         {
             // An inline rebuild switches over once the rest fits in one batch. If appends outpace the catch-up so the gap
             // stops shrinking, it switches over anyway: appends then wait while the rest is applied under the counter lock.
-            if (consumer.IsInline && ShouldCutOver(await Provider.ReadHead(connection, transaction, ct) - row.Position))
+            // It also waits while a live instance can append its events without running it: such an instance's appends
+            // would skip it once it is inline. Meanwhile the catch-up goes on, so it stays current by position.
+            if (consumer.IsInline && ShouldCutOver(await Provider.ReadHead(connection, transaction, ct) - row.Position)
+                && await Skipping(connection, transaction, ct) is [])
             {
-                await CutOver(connection, transaction, row, ct);
-                await transaction.CommitAsync(ct);
-                LogRebuilt(consumer.Name);
-                return Outcome.Progress;
+                if (await CutOver(connection, transaction, row, ct))
+                {
+                    await transaction.CommitAsync(ct);
+                    LogRebuilt(consumer.Name);
+                    return Outcome.Progress;
+                }
             }
 
             var limit = _singleStepUntil is null ? Options.BatchSize : 1;
@@ -288,6 +294,8 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
 
     private bool ShouldRun(CheckpointRow row)
     {
+        if (row.Status == CheckpointStatus.Retired)
+            return false;
         if (consumer.IsInline)
             return row.Status == CheckpointStatus.Rebuilding;
         if (row.Status != CheckpointStatus.Stalled)
@@ -302,10 +310,16 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
     /// that read the old status, then locks the counter, so no append commits while the last events are applied and
     /// the status flips back to running. Appends that follow see running and apply the projection inline again.
     /// </summary>
-    private async Task CutOver(DbConnection connection, DbTransaction transaction, CheckpointRow row, CancellationToken ct)
+    private async Task<bool> CutOver(DbConnection connection, DbTransaction transaction, CheckpointRow row, CancellationToken ct)
     {
         await Provider.LockInlineGate(connection, transaction, consumer.Name, ct);
         var head = await Provider.LockCounter(connection, transaction, ct);
+
+        // Checked again under the locks: an instance that started since then moves the projection back itself only
+        // after this commits, so it must not be missed here.
+        if (await Skipping(connection, transaction, ct) is not [])
+            return false;
+
         var position = row.Position;
         while (position < head)
         {
@@ -318,6 +332,19 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
 
         await Provider.UpdateCheckpoint(connection, transaction,
             row with { Position = Math.Max(position, head), Status = CheckpointStatus.Running, Mode = consumer.Mode, Error = null }, ct);
+        return true;
+    }
+
+    /// <summary>The live instances that can append this projection's events without running it inline.</summary>
+    private async Task<List<InstanceRow>> Skipping(DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    {
+        var live = await Provider.ReadLiveInstances(connection, transaction, Options.HeartbeatInterval * Instances.LiveIntervals, ct);
+        var skipping = live.Where(i => Instances.Skips(i, consumer.Name, consumer.Handles)).ToList();
+        var waitingFor = Instances.Describe(skipping);
+        if (skipping.Count > 0 && waitingFor != _waitingFor)
+            LogWaitingForInstances(consumer.Name, waitingFor);
+        _waitingFor = waitingFor;
+        return skipping;
     }
 
     private async Task<List<EventEnvelope>> Decode(DbConnection connection, DbTransaction transaction, List<StoredEvent> stored, CancellationToken ct)
@@ -431,6 +458,9 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
     [LoggerMessage(EventId = 25, Level = LogLevel.Warning, Message = "Deedbox projection '{Consumer}' is not catching up with appends; appends wait while it applies the last {Gap} events.")]
     private partial void LogForcedCutOver(string consumer, long gap);
 
-    [LoggerMessage(EventId = 24, Level = LogLevel.Information, Message = "Deedbox projection '{Consumer}' finished rebuilding.")]
+    [LoggerMessage(EventId = 26, Level = LogLevel.Information, Message = "Deedbox projection '{Consumer}' stays in catch-up: {Instances} can append its events without running it inline.")]
+    private partial void LogWaitingForInstances(string consumer, string instances);
+
+        [LoggerMessage(EventId = 24, Level = LogLevel.Information, Message = "Deedbox projection '{Consumer}' finished rebuilding.")]
     private partial void LogRebuilt(string consumer);
 }

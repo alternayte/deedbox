@@ -122,6 +122,17 @@ internal static class CliApp
         var rebuild = new Command("rebuild", "Queue an in-place rebuild of a projection; the app's runner does it.") { projectionName, wait };
         rebuild.SetAction((result, ct) => Queue(result, target, output, wait, Jobs.Rebuild, Admin.RebuildArgs(result.GetValue(projectionName)!), ct));
 
+        var retiredName = new Argument<string>("projection") { Description = "The stored projection or subscription name." };
+        var retire = new Command("retire", "Retire a projection that no live instance registers; nothing applies it until a rebuild.") { retiredName };
+        retire.SetAction(async (result, ct) =>
+        {
+            var name = result.GetValue(retiredName)!;
+            await using var db = target.Open(result);
+            await Admin.Retire(db, name, Instances.DefaultLiveFor, ct);
+            await output.WriteLineAsync($"'{name}' is retired. Rebuild it to use it again.");
+            return 0;
+        });
+
         var consumerName = new Argument<string>("consumer") { Description = "The stalled projection or subscription." };
         var eventId = new Option<Guid>("--event") { Description = "The event it stalled on, from deedbox status.", Required = true };
         var skip = new Command("skip", "Queue an audited skip of the event a consumer stalled on.") { consumerName, eventId, wait };
@@ -199,6 +210,7 @@ internal static class CliApp
             new Command("schema", "Print or apply the Deedbox schema.") { script, apply },
             status,
             rebuild,
+            retire,
             skip,
             erase,
             new Command("snapshots", "Rebuild stored state.") { snapshotsRebuild },

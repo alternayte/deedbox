@@ -71,7 +71,7 @@ public abstract class SchemaTests(Databases databases, Db db) : DatabaseTest(dat
 {
     private static readonly string[] Tables =
     [
-        "checkpoints", "event_types", "events", "jobs", "master_keys", "position",
+        "checkpoints", "event_types", "events", "instances", "jobs", "master_keys", "position",
         "schema_version", "streams", "subject_keys", "subject_streams",
     ];
 

@@ -43,3 +43,4 @@ This page lists every Deedbox error. Each error message starts with its code and
 | [DBX032](/reference/errors/dbx032/) | A QueueBox publication is not valid |
 | [DBX033](/reference/errors/dbx033/) | A projection or subscription name is not registered |
 | [DBX034](/reference/errors/dbx034/) | Native json columns are not available or not applied |
+| [DBX035](/reference/errors/dbx035/) | A live instance still registers the projection |

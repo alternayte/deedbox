@@ -15,7 +15,8 @@ internal static class Admin
         var head = await provider.ReadHead(connection, null, ct);
         var consumers = (await provider.ReadCheckpoints(connection, ct))
             .Select(r => new ConsumerStatus(r.Name, r.Mode, r.Status, r.Position,
-                r.Mode == CheckpointMode.Inline && r.Status == CheckpointStatus.Running ? 0 : Math.Max(0, head - r.Position), r.UpdatedAt, r.Error))
+                (r.Mode == CheckpointMode.Inline && r.Status == CheckpointStatus.Running) || r.Status == CheckpointStatus.Retired ? 0 : Math.Max(0, head - r.Position),
+                r.UpdatedAt, r.Error))
             .ToList();
         var jobs = (await provider.ReadJobs(connection, 20, ct)).Select(Info).ToList();
         return new StoreStatus(head, consumers, jobs);
@@ -45,6 +46,36 @@ internal static class Admin
         await connection.OpenAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
         await provider.ShredTenant(connection, transaction, tenantId, ct);
+        await transaction.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// Retires a projection or subscription: its checkpoint becomes retired, so nothing applies it until a rebuild. Refuses
+    /// while a live instance registers the name, because that instance would go on applying it.
+    /// </summary>
+    public static async Task Retire(DeedboxProvider provider, string name, TimeSpan liveFor, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        await using var connection = provider.CreateConnection();
+        await connection.OpenAsync(ct);
+        var stored = (await provider.ReadCheckpoints(connection, ct)).FirstOrDefault(r => r.Name == name)
+            ?? throw new DeedboxException(Errors.UnknownConsumer, $"No projection or subscription named '{name}' has a checkpoint in this store.");
+        if (stored.Status == CheckpointStatus.Retired)
+            return;
+
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        if (stored.Mode == CheckpointMode.Inline)
+            await provider.LockInlineGate(connection, transaction, name, ct);
+        var row = (await provider.LockCheckpoint(connection, transaction, name, CheckpointLock.Exclusive, ct))!;
+
+        var users = (await provider.ReadLiveInstances(connection, transaction, liveFor, ct)).Where(i => i.Consumers.Contains(name, StringComparer.Ordinal)).ToList();
+        if (users.Count > 0)
+        {
+            throw new DeedboxException(Errors.ProjectionInUse,
+                $"'{name}' cannot be retired while live instances register it: {Instances.Describe(users)}. Deploy a version without it first.");
+        }
+
+        await provider.UpdateCheckpoint(connection, transaction, row with { Status = CheckpointStatus.Retired, Error = null }, ct);
         await transaction.CommitAsync(ct);
     }
 
@@ -95,6 +126,9 @@ internal sealed class EventStoreAdmin(DeedboxRuntime runtime) : IEventStoreAdmin
         await SubjectErasure.DeleteKey(runtime, tenantId, subjectId, ct);
         return await Queue(Jobs.Erase, args, ct);
     }
+
+    public Task RetireAsync(string projection, CancellationToken ct = default) =>
+        Admin.Retire(runtime.Provider, projection, runtime.Options.Runner.HeartbeatInterval * Instances.LiveIntervals, ct);
 
     public Task<Guid> RebuildSnapshotsAsync(string streamType, CancellationToken ct = default)
     {

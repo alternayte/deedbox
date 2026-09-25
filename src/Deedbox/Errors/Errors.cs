@@ -37,6 +37,7 @@ internal static class Errors
     public const string QueueBoxMapping = "DBX032";
     public const string UnknownConsumer = "DBX033";
     public const string StorageOptions = "DBX034";
+    public const string ProjectionInUse = "DBX035";
 
     /// <summary>The error catalogue: each code's page title. The docs build one page per entry; a test checks every code has one.</summary>
     public static readonly IReadOnlyDictionary<string, string> Titles = new Dictionary<string, string>
@@ -75,5 +76,6 @@ internal static class Errors
         [QueueBoxMapping] = "A QueueBox publication is not valid",
         [UnknownConsumer] = "A projection or subscription name is not registered",
         [StorageOptions] = "Native json columns are not available or not applied",
+        [ProjectionInUse] = "A live instance still registers the projection",
     };
 }

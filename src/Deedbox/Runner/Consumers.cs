@@ -15,9 +15,12 @@ internal sealed class HandlerFailure(EventEnvelope envelope, long retryUntil, Ex
 }
 
 /// <summary>Something the runner feeds committed events to: an async or rebuilding projection, or a subscription.</summary>
-internal abstract class Consumer(string name, string mode, IReadOnlyList<string> payloadTypes)
+internal abstract class Consumer(string name, string mode, IReadOnlyList<string> payloadTypes, Handles handles)
 {
     public string Name { get; } = name;
+
+    /// <summary>The events it handles, stored with its checkpoint for instances that do not run it.</summary>
+    public Handles Handles { get; } = handles;
 
     public string Mode { get; } = mode;
 
@@ -43,8 +46,8 @@ internal abstract class Consumer(string name, string mode, IReadOnlyList<string>
     }
 }
 
-internal sealed class ProjectionConsumer(RegisteredProjection projection, IReadOnlyList<string> payloadTypes)
-    : Consumer(projection.Name, projection.Run == Run.Inline ? CheckpointMode.Inline : CheckpointMode.Async, payloadTypes)
+internal sealed class ProjectionConsumer(RegisteredProjection projection, IReadOnlyList<string> payloadTypes, Handles handles)
+    : Consumer(projection.Name, projection.Run == Run.Inline ? CheckpointMode.Inline : CheckpointMode.Async, payloadTypes, handles)
 {
     public ProjectionBase Instance => projection.Instance;
 
@@ -112,8 +115,8 @@ internal sealed class ProjectionConsumer(RegisteredProjection projection, IReadO
     };
 }
 
-internal sealed class SubscriptionConsumer(RegisteredSubscription subscription, IReadOnlyList<string> payloadTypes)
-    : Consumer(subscription.Name, CheckpointMode.Subscription, payloadTypes)
+internal sealed class SubscriptionConsumer(RegisteredSubscription subscription, IReadOnlyList<string> payloadTypes, Handles handles)
+    : Consumer(subscription.Name, CheckpointMode.Subscription, payloadTypes, handles)
 {
     public override bool Transactional => false;
 

@@ -8,7 +8,7 @@ namespace Deedbox;
 /// Runs when the host starts: checks or applies the schema, then checks that every stored event name maps
 /// to a registered event, so a rename fails here instead of on the first read.
 /// </summary>
-internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServiceProvider services, ILogger<DeedboxStartup> logger) : IHostedService
+internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServiceProvider services, InstanceHeartbeat heartbeat, ILogger<DeedboxStartup> logger) : IHostedService
 {
     private readonly ILogger _logger = logger;
 
@@ -35,7 +35,44 @@ internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServicePro
             if (keys.Master is DatabaseMasterKey)
                 LogDatabaseMasterKey();
         }
+
+        // The first heartbeat goes in before anything reads the other instances, so an instance that starts at the same
+        // time sees this one.
+        await heartbeat.Beat(cancellationToken);
         await EnsureCheckpoints(projections, cancellationToken);
+        await CatchUpWhatThisInstanceSkips(projections, cancellationToken);
+    }
+
+    /// <summary>
+    /// An inline projection that this instance does not run, but whose events it can append, would miss those appends.
+    /// So before this instance serves, it moves such a projection to catch-up from the current head, under the locks a
+    /// cut-over takes: every append up to the head applied it inline. The instances that run it then apply this
+    /// instance's appends by position, and switch it back to inline once no such instance is live.
+    /// </summary>
+    private async Task CatchUpWhatThisInstanceSkips(ProjectionSet projections, CancellationToken ct)
+    {
+        var self = heartbeat.Self;
+        await using var connection = runtime.Provider.CreateConnection();
+        await connection.OpenAsync(ct);
+        foreach (var row in await runtime.Provider.ReadCheckpoints(connection, ct))
+        {
+            if (row.Mode != CheckpointMode.Inline || row.Status != CheckpointStatus.Running || Handles.FromJson(row.Handles) is not { } handles
+                || !Instances.Skips(self, row.Name, handles))
+            {
+                continue;
+            }
+
+            await using var transaction = await connection.BeginTransactionAsync(ct);
+            await runtime.Provider.LockInlineGate(connection, transaction, row.Name, ct);
+            var locked = await runtime.Provider.LockCheckpoint(connection, transaction, row.Name, CheckpointLock.Exclusive, ct);
+            if (locked is not { Status: CheckpointStatus.Running, Mode: CheckpointMode.Inline })
+                continue;
+
+            var head = await runtime.Provider.LockCounter(connection, transaction, ct);
+            await runtime.Provider.UpdateCheckpoint(connection, transaction, locked with { Position = head, Status = CheckpointStatus.Rebuilding, Error = null }, ct);
+            await transaction.CommitAsync(ct);
+            LogCatchingUp(row.Name, head);
+        }
     }
 
     /// <summary>
@@ -45,19 +82,25 @@ internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServicePro
     /// </summary>
     private async Task EnsureCheckpoints(ProjectionSet projections, CancellationToken ct)
     {
-        var wanted = AsyncRunner.Consumers(runtime, projections).Select(c => (c.Name, c.Mode)).ToList();
-        if (wanted.Count == 0)
+        var consumers = AsyncRunner.Consumers(runtime, projections);
+        if (consumers.Count == 0)
             return;
 
         await using var connection = runtime.Provider.CreateConnection();
         await connection.OpenAsync(ct);
-        await runtime.Provider.EnsureCheckpoints(connection, wanted, ct);
+
+        // A new inline projection starts in catch-up while a live instance can append its events without running it.
+        var live = await runtime.Provider.ReadLiveInstances(connection, null, heartbeat.LiveFor, ct);
+        var seeds = consumers.Select(c => new CheckpointSeed(c.Name, c.Mode, c.Handles.ToJson(),
+            c.IsInline && live.Any(i => Instances.Skips(i, c.Name, c.Handles)))).ToList();
+        await runtime.Provider.EnsureCheckpoints(connection, seeds, ct);
+        var wanted = consumers.Select(c => (c.Name, c.Mode)).ToList();
 
         var stored = (await runtime.Provider.ReadCheckpoints(connection, ct)).ToDictionary(r => r.Name, StringComparer.Ordinal);
         foreach (var (name, mode) in wanted)
         {
             var row = stored[name];
-            if (row.Mode == mode || row.Status == CheckpointStatus.Rebuilding || ConsumerLoop.StallReason(row.Error) == "mode_changed")
+            if (row.Mode == mode || row.Status is CheckpointStatus.Rebuilding or CheckpointStatus.Retired || ConsumerLoop.StallReason(row.Error) == "mode_changed")
                 continue;
 
             await using var transaction = await connection.BeginTransactionAsync(ct);
@@ -75,6 +118,9 @@ internal sealed partial class DeedboxStartup(DeedboxRuntime runtime, IServicePro
 
     [LoggerMessage(EventId = 3, Level = LogLevel.Warning, Message = "Deedbox keeps its master key in the database. Erasure works, but a database copy or backup exposes personal data. Move the key out with deedbox keys rewrap.")]
     private partial void LogDatabaseMasterKey();
+
+    [LoggerMessage(EventId = 4, Level = LogLevel.Warning, Message = "Deedbox projection '{Name}' runs inline elsewhere, but this instance appends its events without running it. It catches up from position {Head} until no such instance is live.")]
+    private partial void LogCatchingUp(string name, long head);
 
     [LoggerMessage(EventId = 2, Level = LogLevel.Error, Message = "Deedbox projection '{Name}' changed from {From} to {To}; it is stalled until you rebuild it.")]
     private partial void LogModeChanged(string name, string from, string to);

@@ -43,13 +43,11 @@ One stream can feed several projections, each in its own mode. A common set is a
 
 A projection whose mode changes stalls until you rebuild it, because its stored progress belongs to the other mode ([rebuild a projection](/how-to/rebuild-a-projection/)). To change the mode without a gap in the read model, register the new mode under a new name, and switch the reads when it catches up. See [replace a read model without downtime](/how-to/replace-a-read-model/).
 
-## Add an inline projection during a rolling deploy
+## Deploy inline projections safely
 
-A new inline projection on a store with events starts as `rebuilding`. The runner applies the earlier events, then switches it to inline. After that switch, each append applies it, but only on instances that register it.
+An instance that does not run an inline projection cannot apply it to its own appends. That happens during a rolling deploy, when old and new versions run side by side, or after a rollback. Deedbox handles both, with a heartbeat that each instance writes: what it runs, and what event types it can append.
 
-During a rolling deploy, instances of the old version still append. They do not know the new projection, so their appends skip it, and the projection misses those events. To avoid that:
+- **A new inline projection** starts in catch-up. The runner applies events by position, whichever instance appended them. The projection switches to inline only when no live instance can append its events without running it, so it waits until the old instances stop.
+- **An instance that starts without a running inline projection**, but can append its events, first moves that projection back to catch-up from the current head. The instances that run the projection then apply the old instance's appends by position, and switch it back to inline when the old instances stop.
 
-- Add the projection as async. The runner reads every event by position, whichever instance appended it.
-- Or deploy so that old and new versions do not append at the same time, such as with the Kubernetes `Recreate` strategy.
-
-The same applies to any change to a set of inline projections, such as a new handler for another event type.
+While a projection waits, `deedbox status` shows it as `rebuilding` with a small lag, and the log names the instances it waits for. An instance that stops cleanly leaves at once. One that crashes counts as live for 30 seconds after its last heartbeat, so the switch to inline waits that long.

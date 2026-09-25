@@ -2,6 +2,19 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.3.0] - Unreleased
+
+### Added
+
+- Each app instance writes a heartbeat: the projections it runs and the event types it can append. Migration 4 adds the `instances` table and `checkpoints.handles`.
+- `IEventStoreAdmin.RetireAsync(name)` and `deedbox retire <name>` retire a projection that no live instance registers ([DBX035](https://deedbox-docs.pages.dev/reference/errors/dbx035/) otherwise). A retired projection keeps its checkpoint, nothing applies it, and `RebuildAsync` brings it back. An instance that still registers it starts, and its health check reports degraded.
+
+### Changed
+
+- An inline projection switches from catch-up to inline only when no live instance can append its events without running it. Before, a new inline projection added during a rolling deploy missed the appends of instances of the old version.
+- An instance that starts without a running inline projection, but can append its events, moves that projection back to catch-up from the current head. A rollback no longer makes an inline projection miss events.
+- `IEventStoreAdmin.RetireAsync` has a default body, so an implementation of the interface written for 0.2 still compiles.
+
 ## [0.2.1] - 2026-09-25
 
 ### Fixed
@@ -41,6 +54,7 @@ The first release. It targets .NET 8 and .NET 10.
 - `IEventStoreAdmin`, metrics, traces, and DBX error codes that link to their docs pages.
 - Native `json` columns on SQL Server 2025 and Azure SQL, with `UseSqlServer(connectionString, sql => sql.NativeJson = true)`. Applying the schema converts existing `nvarchar(max)` columns.
 
+[0.3.0]: https://github.com/alternayte/deedbox/compare/v0.2.1...main
 [0.2.1]: https://github.com/alternayte/deedbox/releases/tag/v0.2.1
 [0.2.0]: https://github.com/alternayte/deedbox/releases/tag/v0.2.0
 [0.1.0]: https://github.com/alternayte/deedbox/releases/tag/v0.1.0

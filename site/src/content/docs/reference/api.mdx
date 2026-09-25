@@ -35,7 +35,7 @@ This page lists every public type. Each member has XML docs, so your editor show
 | `KeysBuilder`, `IMasterKeyProvider` | Choose where the master key lives. |
 | `ISubjectErasure` | Erase a data subject in the scope's tenant. |
 | `SubjectErased`, `StreamDeleted` | Built-in events every handler can handle. |
-| `IEventStoreAdmin` | Status, jobs, rebuild, skip, erase, snapshots, key re-wrap, tenant shred. |
+| `IEventStoreAdmin` | Status, jobs, rebuild, retire, skip, erase, snapshots, key re-wrap, tenant shred. |
 | `StoreStatus`, `ConsumerStatus`, `JobInfo` | What the admin API returns. |
 | `AddDeedboxHealthChecks()` | The health check. |
 | `DeedboxException`, `ConcurrencyException` | Errors, each with a DBX code. |

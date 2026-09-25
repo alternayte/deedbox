@@ -181,12 +181,49 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         return rows;
     }
 
-    public override async Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<(string Name, string Mode)> checkpoints, CancellationToken ct)
+    public override async Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<CheckpointSeed> checkpoints, CancellationToken ct)
     {
         await using var command = Command(connection, null, Sql.EnsureCheckpoints);
         Add(command, "names", checkpoints.Select(c => c.Name).ToArray());
         Add(command, "modes", checkpoints.Select(c => c.Mode).ToArray());
+        Add(command, "rebuild", checkpoints.Select(c => c.Rebuild).ToArray());
+        command.Parameters.Add(new NpgsqlParameter("handles", NpgsqlDbType.Array | NpgsqlDbType.Jsonb) { Value = checkpoints.Select(c => c.Handles).ToArray() });
         await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task Beat(DbConnection connection, InstanceRow instance, TimeSpan liveFor, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.Beat);
+        Add(command, "id", instance.Id);
+        Add(command, "host", instance.Host);
+        Add(command, "app", instance.App);
+        command.Parameters.Add(new NpgsqlParameter("consumers", NpgsqlDbType.Jsonb) { Value = Instances.ListJson(instance.Consumers) });
+        command.Parameters.Add(new NpgsqlParameter("inline", NpgsqlDbType.Jsonb) { Value = Instances.ListJson(instance.Inline) });
+        command.Parameters.Add(new NpgsqlParameter("events", NpgsqlDbType.Jsonb) { Value = Instances.ListJson(instance.Events) });
+        Add(command, "stale", liveFor * 10);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task Leave(DbConnection connection, Guid instanceId, CancellationToken ct)
+    {
+        await using var command = Command(connection, null, Sql.Leave);
+        Add(command, "id", instanceId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<List<InstanceRow>> ReadLiveInstances(DbConnection connection, DbTransaction? transaction, TimeSpan liveFor, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadLiveInstances);
+        Add(command, "live", liveFor);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<InstanceRow>();
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(new InstanceRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Instances.ReadList(reader.GetString(3)),
+                Instances.ReadList(reader.GetString(4)), Instances.ReadList(reader.GetString(5)), reader.GetFieldValue<DateTimeOffset>(6)));
+        }
+
+        return rows;
     }
 
     public override async Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct)
@@ -479,7 +516,7 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         while (await reader.ReadAsync(ct))
         {
             rows.Add(new CheckpointRow(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5)));
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5), reader.IsDBNull(6) ? null : reader.GetString(6)));
         }
 
         return rows;
@@ -575,17 +612,33 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         public readonly string ReadEventTypes =
             $"SELECT stream_type, event_type, event_version FROM {s}.event_types ORDER BY stream_type, event_type, event_version";
 
-        private const string CheckpointColumns = "name, position, mode, status, error::text, updated_at";
+        private const string CheckpointColumns = "name, position, mode, status, error::text, updated_at, handles::text";
 
         private const string JobColumns = "id, kind, args::text, status, progress::text, created_at, started_at, finished_at";
 
         private const string EventColumns = "global_position, event_id, tenant_id, stream_id, version, stream_type, event_type, event_version";
 
         public readonly string EnsureCheckpoints = $"""
-            INSERT INTO {s}.checkpoints (name, mode, status)
-            SELECT n, m, CASE WHEN m = 'inline' AND (SELECT value FROM {s}.position) > 0 THEN 'rebuilding' ELSE 'running' END
-            FROM unnest(@names, @modes) AS c(n, m)
-            ON CONFLICT (name) DO NOTHING
+            INSERT INTO {s}.checkpoints (name, mode, status, handles)
+            SELECT n, m, CASE WHEN m = 'inline' AND (r OR (SELECT value FROM {s}.position) > 0) THEN 'rebuilding' ELSE 'running' END, h
+            FROM unnest(@names, @modes, @rebuild, @handles) AS c(n, m, r, h)
+            ON CONFLICT (name) DO UPDATE SET handles = EXCLUDED.handles
+            """;
+
+        public readonly string Beat = $"""
+            INSERT INTO {s}.instances (instance_id, host, app, consumers, inline_projections, event_types)
+            VALUES (@id, @host, @app, @consumers, @inline, @events)
+            ON CONFLICT (instance_id) DO UPDATE SET
+                consumers = EXCLUDED.consumers, inline_projections = EXCLUDED.inline_projections,
+                event_types = EXCLUDED.event_types, seen_at = clock_timestamp();
+            DELETE FROM {s}.instances WHERE seen_at < clock_timestamp() - @stale;
+            """;
+
+        public readonly string Leave = $"DELETE FROM {s}.instances WHERE instance_id = @id";
+
+        public readonly string ReadLiveInstances = $"""
+            SELECT instance_id, host, app, consumers::text, inline_projections::text, event_types::text, seen_at
+            FROM {s}.instances WHERE seen_at > clock_timestamp() - @live ORDER BY started_at
             """;
 
         public readonly string ReadCheckpoints = $"SELECT {CheckpointColumns} FROM {s}.checkpoints ORDER BY name";
