@@ -67,6 +67,30 @@ public static class Integrations
         return q;
     }
 
+    public static QueueBoxBuilder StableContract(QueueBoxBuilder q)
+    {
+        // begin-snippet: queuebox-stable-contract
+        // cart.item_added is at version 3 in the store, and upcasting gives the callback that shape for old events too.
+        // The message keeps the fields consumers already read, and adds price as a new field they can ignore.
+        q.Publish<ItemPriced>((e, p) => new QueueBoxMessage("cart.item_added", new { sku = e.Sku, qty = e.Qty, price = e.Price }));
+        // end-snippet
+        return q;
+    }
+
+    public static QueueBoxBuilder NewContract(QueueBoxBuilder q)
+    {
+        // begin-snippet: queuebox-new-contract
+        // A breaking change goes to a new topic. From this release, nothing in the app writes the old topic.
+        q.Publish<ItemPriced>((e, p) => new QueueBoxMessage("cart.item_added.v2", new
+        {
+            sku = e.Sku,
+            quantity = e.Qty,
+            unitPrice = new { amount = e.Price, currency = "EUR" },
+        }));
+        // end-snippet
+        return q;
+    }
+
     public static void Metadata(WebApplication app)
     {
         // begin-snippet: metadata-middleware

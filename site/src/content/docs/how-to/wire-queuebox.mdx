@@ -6,6 +6,8 @@ description: Publish events to brokers and webhooks through QueueBox.
 import QueueBox from '../../../snippets/queuebox.md';
 import Structured from '../../../snippets/queuebox-cloudevents-structured.md';
 import Binary from '../../../snippets/queuebox-cloudevents-binary.md';
+import StableContract from '../../../snippets/queuebox-stable-contract.md';
+import NewContract from '../../../snippets/queuebox-new-contract.md';
 
 This guide shows you how to send events to other systems with [QueueBox](https://github.com/alternayte/queuebox). Deedbox writes a QueueBox outbox row in the append's transaction, so a message exists exactly when its event commits. QueueBox delivers it, with retries, at least once.
 
@@ -13,7 +15,7 @@ This guide shows you how to send events to other systems with [QueueBox](https:/
 2. Add the package:
 
    ```sh
-   dotnet add package Deedbox.QueueBox --prerelease
+   dotnet add package Deedbox.QueueBox
    ```
 
 3. Choose the events to publish:
@@ -61,3 +63,27 @@ In binary mode, the attributes are headers and the payload is the event:
 
 The HTTP binding names the headers `ce-*`. For Kafka, the binding uses `ce_*`; name the headers the way your destination expects.
 
+
+## Change a message's contract
+
+A message is a contract with other teams; an event is not. Change them apart.
+
+### Keep the contract when an event changes
+
+When you change an event's shape, the callback gets the new shape, for old events too. Map it to the fields that consumers already read:
+
+<StableContract />
+
+Add fields. Do not remove or rename them. A consumer that ignores unknown fields then needs no change.
+
+### Move consumers to a new contract
+
+A breaking change, such as a renamed or removed field, needs a new topic. Deedbox writes one message per event, so the app cannot write the old topic and the new topic in one transaction. Feed the old topic from the new one while consumers move:
+
+1. Start a translator: a consumer that reads the new topic and writes the old contract to the old topic. It keeps each message ID, so consumers still deduplicate.
+2. Release the app with the new publication:
+
+   <NewContract />
+
+3. Move each consumer to the new topic.
+4. Confirm that no consumer reads the old topic, from the broker's consumer groups or the QueueBox metrics. Then stop the translator.

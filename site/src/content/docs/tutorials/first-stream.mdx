@@ -27,7 +27,7 @@ You need the .NET 10 SDK (or .NET 8) and a Postgres or SQL Server database. Dock
    ```sh
    dotnet new web -o Shop
    cd Shop
-   dotnet add package Deedbox.Postgres --prerelease
+   dotnet add package Deedbox.Postgres
    docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17-alpine
    ```
    </TabItem>
@@ -35,7 +35,7 @@ You need the .NET 10 SDK (or .NET 8) and a Postgres or SQL Server database. Dock
    ```sh
    dotnet new web -o Shop
    cd Shop
-   dotnet add package Deedbox.SqlServer --prerelease
+   dotnet add package Deedbox.SqlServer
    docker run -d -p 1433:1433 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='yourStrong(!)Password' mcr.microsoft.com/mssql/server:2022-latest
    ```
    </TabItem>

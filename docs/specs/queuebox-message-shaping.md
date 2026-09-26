@@ -14,7 +14,7 @@ Deedbox.QueueBox 0.2.0 adds `Publish<TEvent>((e, pending) => QueueBoxMessage?)`.
 - The row key stays the stream ID, and `aggregate_type` stays the stream type — one stream's messages keep their order.
 - A `null` return skips the event — an app can publish only some events of a type.
 - An empty topic, a topic over 255 characters, an empty header name, a null header value, or an exception in the callback fails the append with DBX032 and rolls it back — events and messages commit together or not at all.
-- An event type still has one publication — one event gives at most one message; QueueBox routing fans out to destinations.
+- An event type still has one publication — one event gives at most one message. QueueBox sends a row to one destination, so a second topic needs a second row; the app cannot write one today.
 - The callback counts as a payload mapping for the `[PersonalData]` rule — the app chooses what reaches the outbox, as with the payload overload.
 - Deedbox's JSON options serialize the payload — the same as the payload overload.
 - No CloudEvents helper; the "Wire QueueBox" guide documents both modes with compiled snippets — Deedbox stays free of message formats, and `source` and the attribute mapping differ per app.

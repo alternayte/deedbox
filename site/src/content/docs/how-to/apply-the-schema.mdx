@@ -15,7 +15,7 @@ Call `ApplySchemaOnStartup()` in `AddDeedbox`. Pods take a database lock, so con
 ## With the CLI
 
 ```sh
-dotnet tool install -g Deedbox.Cli --prerelease
+dotnet tool install -g Deedbox.Cli
 deedbox schema apply --provider postgres --connection "$DEEDBOX_CONNECTION"
 ```
 

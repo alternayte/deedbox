@@ -1,0 +1,60 @@
+---
+title: Call an external service
+description: Call a service before a decision for the data it needs, or after it for a side effect, and handle each failure.
+---
+
+import ExternalCallBefore from '../../../snippets/external-call-before.md';
+import ExternalOrder from '../../../snippets/external-order.md';
+import ExternalCallAfter from '../../../snippets/external-call-after.md';
+import ExternalCallRegister from '../../../snippets/external-call-register.md';
+
+This guide shows you where to call an external service, such as a pricing API or a payment provider, when you write events.
+
+## Do not call a service in a decision
+
+A decision is a function from state to events. It is synchronous, and it gets no services. Deedbox relies on this:
+
+- `Execute` holds the stream's row lock and a transaction while the decision runs. A network call in a decision makes every other writer of that stream wait for it.
+- `Execute` runs a decision again when it loses a race to create the stream. A call in the decision then runs again too.
+- The call can succeed and the commit can fail. The change in the other system then stays, and no event records it.
+
+When a decision throws, `Execute` rolls back its transaction and passes the exception to you. It writes no events, no inline projection rows and no QueueBox messages.
+
+Put each call before or after the decision, by what the call does:
+
+| The call | Where | Example |
+| --- | --- | --- |
+| Reads data that the decision needs | Before `Execute` | A price, a stock level, an address check |
+| Changes something in another system | After the decision, in a subscription | A payment, an email, an account in another service |
+
+## Call before the decision for data
+
+<ExternalCallBefore />
+
+If the service fails, you do not call `Execute`, and nothing is written. The value can be out of date when the transaction commits. When that matters, the decision checks the value against the state.
+
+## Call after the decision for side effects
+
+The decision records the request as an event. A subscription makes the call, then records the result as another event.
+
+<ExternalOrder />
+
+<ExternalCallAfter />
+
+<ExternalCallRegister />
+
+- A subscription gets each event at least once. Give the event ID to the service as its idempotency key, so a retry does not charge twice.
+- The store from `ctx.Services` appends with the event's tenant and correlation ID, and records the event as the cause.
+- The subscription can append its result and stop before its checkpoint moves. The event then arrives again. `RecordPayment` finds the order already paid and returns no events.
+
+A subscription changes other streams in the same way. Deedbox appends to one stream per transaction, so a change to a second stream follows as its own event; see [known limits](/concepts/known-limits/).
+
+When the other system is your own service and reads messages, publish the event instead of calling the service; see [wire QueueBox](/how-to/wire-queuebox/).
+
+## Handle each failure
+
+- **The service returns a result that the business expects**, such as a declined card: record it as an event. Do not throw. The order then shows why it stopped, and the subscription moves on.
+- **The service is down or times out:** throw. The runner retries the event after `RetryDelay`, and doubles the delay on each retry. After `HandlerRetries` retries, it stalls the subscription.
+- **The subscription stalls:** it handles no later events until you act. Other consumers keep running. Restart the app to retry the event once more, or skip it; see [poison event](/operations/poison-event/).
+
+The default retries stop after about 30 seconds. For a service with longer outages, raise `HandlerRetries`, or retry in the handler with a resilience library such as Polly. The runner settings apply to every consumer; [configuration](/reference/configuration/) lists them.
