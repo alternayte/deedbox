@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.Common;
+using System.Globalization;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -110,6 +111,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
     private int _attempts;
     private long _lastPosition;
     private bool _retryStalled = true;
+    private string? _claimedRetry;
     private long _rebuildGap = long.MaxValue;
     private int _gapNotShrinking;
     private string _waitingFor = "";
@@ -181,6 +183,24 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
         if (row is not null)
         {
             StatusCode = row.Status switch { CheckpointStatus.Rebuilding => 1, CheckpointStatus.Stalled => 2, _ => 0 };
+
+            // Only a stall that exists when this loop starts gets the immediate round of retries.
+            if (row.Status != CheckpointStatus.Stalled)
+                _retryStalled = false;
+            if (_claimedRetry is not null && (row.Status != CheckpointStatus.Stalled || StallField(row.Error, "retryAt") != _claimedRetry))
+                _claimedRetry = null;
+
+            if (RetryDue(row))
+            {
+                // The claim commits before the attempt, so the instances make one attempt per interval between them.
+                _claimedRetry = Stamp(runtime.Clock.GetUtcNow() + Options.MaxRetryDelay);
+                var error = JsonNode.Parse(row.Error!)!.AsObject();
+                error["attempts"] = Attempts(row.Error) + 1;
+                error["retryAt"] = _claimedRetry;
+                await Provider.UpdateCheckpoint(connection, transaction, row with { Error = error.ToJsonString() }, ct);
+                await transaction.CommitAsync(ct);
+                return Outcome.Progress;
+            }
         }
 
         if (row is null || !ShouldRun(row))
@@ -207,7 +227,8 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
                 }
             }
 
-            var limit = _singleStepUntil is null ? Options.BatchSize : 1;
+            // A stalled consumer tries its one event first, so a retry touches nothing after it.
+            var limit = _singleStepUntil is null && row.Status != CheckpointStatus.Stalled ? Options.BatchSize : 1;
             var stored = await Provider.ReadEventsAfter(connection, transaction, row.Position, limit, consumer.PayloadTypes, ct);
             if (stored.Count == 0)
             {
@@ -240,6 +261,11 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
             await transaction.CommitAsync(ct);
             if (row.Status == CheckpointStatus.Rebuilding && status == CheckpointStatus.Running)
                 LogRebuilt(consumer.Name);
+            if (row.Status == CheckpointStatus.Stalled)
+            {
+                _claimedRetry = null;
+                LogResumed(consumer.Name, stored[0].GlobalPosition);
+            }
 
             _lastPosition = last;
             DeedboxDiagnostics.BatchDuration.Record(System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
@@ -301,9 +327,16 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
         if (row.Status != CheckpointStatus.Stalled)
             return true;
 
-        // After a restart, a poison stall gets one more round of retries, in case the code was fixed.
-        return _retryStalled && StallReason(row.Error) == "poison";
+        // A poison stall runs when this loop starts, in case the code was fixed, and for each retry this instance claims.
+        return StallReason(row.Error) == "poison" && (_retryStalled || _claimedRetry is not null);
     }
+
+    /// <summary>True when a poison stall's retry time has passed and this instance has no retry of its own pending.</summary>
+    private bool RetryDue(CheckpointRow row) =>
+        !consumer.IsInline && row.Status == CheckpointStatus.Stalled && !_retryStalled && _claimedRetry is null
+        && StallReason(row.Error) == "poison"
+        && (StallField(row.Error, "retryAt") is not { } at
+            || DateTimeOffset.Parse(at, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind) <= runtime.Clock.GetUtcNow());
 
     /// <summary>
     /// Ends an inline projection's rebuild. It takes the projection's gate exclusively, which waits for open appends
@@ -373,6 +406,17 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
     private async Task OnFailure(HandlerFailure failure, CancellationToken ct)
     {
         var position = failure.Envelope.GlobalPosition;
+        if (_claimedRetry is { } retryAt)
+        {
+            // A claimed retry of a stalled consumer is one attempt; the claim already set the next retry time.
+            _claimedRetry = null;
+            ResetFailureState();
+            DeedboxDiagnostics.HandlerFailures.Add(1, DeedboxDiagnostics.Tag("deedbox.consumer", consumer.Name));
+            var tried = await RecordStall(failure, stalled => (Attempts(stalled.Error), retryAt), ct);
+            LogRetryFailed(failure.InnerException, consumer.Name, position, tried, retryAt);
+            return;
+        }
+
         _attempts = position == _failedPosition ? _attempts + 1 : 1;
         _failedPosition = position;
         _singleStepUntil = Math.Max(failure.RetryUntil, position);
@@ -382,27 +426,47 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
         if (_attempts <= Options.HandlerRetries)
             return;
 
-        await using var connection = Provider.CreateConnection();
-        await connection.OpenAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
-        var row = await Provider.LockCheckpoint(connection, transaction, consumer.Name, CheckpointLock.Batch, ct);
-        if (row is not null)
+        // A round after a restart adds to the attempts of the stall it retried.
+        var round = _attempts;
+        var attempts = await RecordStall(failure, row =>
+            (round + (row.Status == CheckpointStatus.Stalled && StallField(row.Error, "eventId") == failure.Envelope.EventId.ToString("D") ? Attempts(row.Error) : 0),
+             Stamp(runtime.Clock.GetUtcNow() + Options.MaxRetryDelay)), ct);
+        if (attempts > 0)
         {
-            await Provider.UpdateCheckpoint(connection, transaction, row with { Status = CheckpointStatus.Stalled, Error = PoisonError(failure, _attempts) }, ct);
-            await transaction.CommitAsync(ct);
             DeedboxDiagnostics.Stalls.Add(1, DeedboxDiagnostics.Tag("deedbox.consumer", consumer.Name));
-            LogStalled(consumer.Name, failure.Envelope.StreamId, failure.Envelope.Version, failure.Envelope.EventType, position);
+            LogStalled(consumer.Name, failure.Envelope.StreamId, failure.Envelope.Version, failure.Envelope.EventType, position, Options.MaxRetryDelay);
         }
 
         _retryStalled = false;
         ResetFailureState();
     }
 
+    /// <summary>Writes the stall with the attempts and the next retry time; returns the attempts, or 0 when another runner holds the row.</summary>
+    private async Task<int> RecordStall(HandlerFailure failure, Func<CheckpointRow, (int Attempts, string RetryAt)> schedule, CancellationToken ct)
+    {
+        await using var connection = Provider.CreateConnection();
+        await connection.OpenAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        var row = await Provider.LockCheckpoint(connection, transaction, consumer.Name, CheckpointLock.Batch, ct);
+        if (row is null)
+            return 0;
+
+        var (attempts, retryAt) = schedule(row);
+        await Provider.UpdateCheckpoint(connection, transaction,
+            row with { Status = CheckpointStatus.Stalled, Error = PoisonError(failure, attempts, retryAt, runtime.Clock.GetUtcNow()) }, ct);
+        await transaction.CommitAsync(ct);
+        return attempts;
+    }
+
     private TimeSpan RetryDelay()
     {
         var factor = Math.Pow(2, Math.Max(0, _attempts - 1));
-        return TimeSpan.FromTicks((long)Math.Min(Options.RetryDelay.Ticks * factor, TimeSpan.FromMinutes(5).Ticks));
+        return TimeSpan.FromTicks((long)Math.Min(Options.RetryDelay.Ticks * factor, Options.MaxRetryDelay.Ticks));
     }
+
+    private static string Stamp(DateTimeOffset at) => at.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
+
+    private static int Attempts(string? error) => int.TryParse(StallField(error, "attempts"), CultureInfo.InvariantCulture, out var n) ? n : 0;
 
     private void ResetFailureState()
     {
@@ -411,13 +475,16 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
         _attempts = 0;
     }
 
-    internal static string? StallReason(string? error)
+    internal static string? StallReason(string? error) => StallField(error, "reason");
+
+    /// <summary>One field of a stall's JSON as text, or null.</summary>
+    private static string? StallField(string? error, string name)
     {
         if (error is null)
             return null;
         try
         {
-            return JsonNode.Parse(error)?["reason"]?.GetValue<string>();
+            return JsonNode.Parse(error)?[name]?.ToString();
         }
         catch (System.Text.Json.JsonException)
         {
@@ -425,7 +492,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
         }
     }
 
-    private static string PoisonError(HandlerFailure failure, int attempts)
+    private static string PoisonError(HandlerFailure failure, int attempts, string retryAt, DateTimeOffset now)
     {
         var e = failure.Envelope;
         var ex = failure.InnerException!;
@@ -442,7 +509,8 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
             ["message"] = ex.Message,
             ["stackTrace"] = ex.ToString(),
             ["attempts"] = attempts,
-            ["at"] = DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["at"] = Stamp(now),
+            ["retryAt"] = retryAt,
         }.ToJsonString();
     }
 
@@ -452,8 +520,14 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
     [LoggerMessage(EventId = 22, Level = LogLevel.Warning, Message = "Deedbox consumer '{Consumer}' failed on the event at position {Position} (attempt {Attempt} of {Attempts}).")]
     private partial void LogHandlerFailed(Exception? exception, string consumer, long position, int attempt, int attempts);
 
-    [LoggerMessage(EventId = 23, Level = LogLevel.Error, Message = "Deedbox consumer '{Consumer}' stalled on stream '{StreamId}' version {Version} ({EventType}, position {Position}). Fix the handler and restart, or skip the event.")]
-    private partial void LogStalled(string consumer, string streamId, long version, string eventType, long position);
+    [LoggerMessage(EventId = 23, Level = LogLevel.Error, Message = "Deedbox consumer '{Consumer}' stalled on stream '{StreamId}' version {Version} ({EventType}, position {Position}). It retries the event every {Interval}; fix the cause, or skip the event.")]
+    private partial void LogStalled(string consumer, string streamId, long version, string eventType, long position, TimeSpan interval);
+
+    [LoggerMessage(EventId = 27, Level = LogLevel.Warning, Message = "Deedbox consumer '{Consumer}' is still stalled: attempt {Attempts} at the event at position {Position} failed. The next retry is at {RetryAt}.")]
+    private partial void LogRetryFailed(Exception? exception, string consumer, long position, int attempts, string retryAt);
+
+    [LoggerMessage(EventId = 28, Level = LogLevel.Information, Message = "Deedbox consumer '{Consumer}' got past the event at position {Position} that it stalled on, and runs again.")]
+    private partial void LogResumed(string consumer, long position);
 
     [LoggerMessage(EventId = 25, Level = LogLevel.Warning, Message = "Deedbox projection '{Consumer}' is not catching up with appends; appends wait while it applies the last {Gap} events.")]
     private partial void LogForcedCutOver(string consumer, long gap);

@@ -138,6 +138,53 @@ public abstract class RunnerTests(Databases databases, Db db) : RunnerTest(datab
     }
 
     [Fact]
+    public async Task A_stalled_subscription_retries_on_its_own_and_runs_again_once_the_event_succeeds()
+    {
+        var probe = NewProbe();
+        probe.PoisonSku = "poison";
+        var host = await StartHost(probe, b => b.Subscription<Receipts>("receipts"), o => o.MaxRetryDelay = TimeSpan.FromSeconds(1));
+        await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 1), new ItemAdded("poison", 1), new ItemAdded("b", 1)]);
+
+        await WaitForCheckpoint(host, "receipts", r => r.Status == "stalled");
+        var first = JsonNode.Parse((await Checkpoint(host, "receipts")).Error!)!;
+        Assert.Equal(3, first["attempts"]!.GetValue<int>());
+        Assert.NotNull(first["retryAt"]);
+
+        // Still failing: each retry adds an attempt and keeps the consumer stalled.
+        await WaitForCheckpoint(host, "receipts", r => r.Status == "stalled" && JsonNode.Parse(r.Error!)!["attempts"]!.GetValue<int>() >= 5);
+        Assert.Equal(HealthStatus.Unhealthy, (await Health(host)).Status);
+
+        probe.PoisonSku = null;
+        await WaitForCaughtUp(host, "receipts");
+
+        Assert.Null((await Checkpoint(host, "receipts")).Error);
+        Assert.Equal(["a", "poison", "b"], probe.Delivered.Select(d => ((ItemAdded)d.Envelope.Event).Sku));
+    }
+
+    [Fact]
+    public async Task Two_instances_retry_a_stalled_consumer_once_per_interval_between_them()
+    {
+        var probe = NewProbe();
+        probe.PoisonSku = "poison";
+        var interval = TimeSpan.FromSeconds(1);
+        var first = await StartHost(probe, b => b.Subscription<Receipts>("receipts"), o => o.MaxRetryDelay = interval);
+        var second = await StartHost(probe, b => b.Subscription<Receipts>("receipts"), o => o.MaxRetryDelay = interval);
+        await StoreOf(first).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 1)]);
+        await WaitForCaughtUp(first, "receipts");
+        await Task.Delay(500, Ct); // both loops see the consumer running, so neither treats the stall as one found at start-up
+
+        await StoreOf(first).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("poison", 1)]);
+        await WaitForCheckpoint(first, "receipts", r => r.Status == "stalled");
+        var before = Volatile.Read(ref probe.PoisonAttempts);
+        await Task.Delay(TimeSpan.FromSeconds(5), Ct);
+        var retries = Volatile.Read(ref probe.PoisonAttempts) - before;
+
+        // One instance alone makes about 5 attempts in 5 seconds; two without a shared schedule make about 10.
+        Assert.InRange(retries, 3, 6);
+        Assert.Equal("stalled", (await Checkpoint(second, "receipts")).Status);
+    }
+
+    [Fact]
     public async Task A_subscription_keeps_its_progress_before_a_failing_event()
     {
         var probe = NewProbe();
@@ -263,7 +310,7 @@ public abstract class RunnerTests(Databases databases, Db db) : RunnerTest(datab
         await StoreOf(inline).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 1)]);
         await StopHost(inline);
 
-        var host = await StartHost(probe, b => b.Projection<AsyncApplied>("applied", Run.Async));
+        var host = await StartHost(probe, b => b.Projection<AsyncApplied>("applied", Run.Async), o => o.MaxRetryDelay = TimeSpan.FromMilliseconds(50));
         await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("b", 1)]);
 
         var stalled = await Checkpoint(host, "applied");

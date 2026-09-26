@@ -21,6 +21,8 @@ public sealed class Probe(string schema, Db db)
 
     public volatile string? PoisonSku;
 
+    public int PoisonAttempts;
+
     public int Resets;
 
     public ConcurrentDictionary<Guid, int> Deliveries { get; } = new();
@@ -119,7 +121,11 @@ public sealed class Receipts : Subscription
         On<ItemAdded>(async (e, ctx) =>
         {
             if (e.Sku == probe.PoisonSku)
+            {
+                Interlocked.Increment(ref probe.PoisonAttempts);
                 throw new InvalidOperationException($"poison {e.Sku}");
+            }
+
             probe.Delivered.Enqueue(("receipts", ctx.Envelope));
             if (e.Sku == "follow-up")
             {

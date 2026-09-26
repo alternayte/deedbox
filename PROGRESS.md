@@ -316,3 +316,14 @@ Spec: `docs/specs/live-instances-and-retired-projections.md` (from the grill on 
 - Runner tests use a 2-second heartbeat, so a liveness window is 6 seconds instead of 30.
 
 - Released on 2026-09-25: https://github.com/alternayte/deedbox/releases/tag/v0.3.0. All nine packages pushed through trusted publishing.
+
+## 0.3.1
+
+Spec: `docs/specs/stalled-consumers-retry.md` (from the grill on 2026-09-26).
+
+- A poison stall keeps retrying: the stall JSON stores `attempts` and `retryAt`. An instance whose retry is due claims it first, in its own committed transaction, by writing the next `retryAt`, then makes the one attempt; so the instances make one attempt per interval between them, and a crash after the claim only delays the next attempt.
+- The interval is the existing 5-minute backoff cap, now the internal `RunnerOptions.MaxRetryDelay`, which tests shorten. No public API changes.
+- A stalled consumer reads one event per attempt, so a retry touches nothing after the stalled event.
+- The immediate round at start-up applies only to a stall the loop finds on its first read; before, every instance that had not stalled the consumer itself added a round after each stall.
+- Log event 27 records a failed scheduled retry and 28 a consumer that got past its stall. Log event 23 names the retry interval.
+- Docs: poison-event runbook, projections and subscriptions, call an external service, configuration and telemetry. The README install table drops `--prerelease`.

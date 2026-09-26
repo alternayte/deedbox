@@ -55,6 +55,6 @@ When the other system is your own service and reads messages, publish the event 
 
 - **The service returns a result that the business expects**, such as a declined card: record it as an event. Do not throw. The order then shows why it stopped, and the subscription moves on.
 - **The service is down or times out:** throw. The runner retries the event after `RetryDelay`, and doubles the delay on each retry. After `HandlerRetries` retries, it stalls the subscription.
-- **The subscription stalls:** it handles no later events until you act. Other consumers keep running. Restart the app to retry the event once more, or skip it; see [poison event](/operations/poison-event/).
+- **The subscription stalls:** it handles no later events of its own. Other consumers keep running. The runner retries the event every 5 minutes, and the subscription runs again once the service is back. To give up on the event, skip it; see [poison event](/operations/poison-event/).
 
-The default retries stop after about 30 seconds. For a service with longer outages, raise `HandlerRetries`, or retry in the handler with a resilience library such as Polly. The runner settings apply to every consumer; [configuration](/reference/configuration/) lists them.
+With the defaults, the subscription stalls after about 30 seconds of failures, and the health check then reports it. To stall later, raise `HandlerRetries`; the runner settings apply to every consumer, and [configuration](/reference/configuration/) lists them.

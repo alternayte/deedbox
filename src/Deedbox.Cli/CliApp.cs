@@ -98,7 +98,9 @@ internal static class CliApp
                 {
                     await output.WriteLineAsync($"  event {Text(e, "eventId")} ({Text(e, "eventType")}) in stream '{Text(e, "streamId")}' version {Text(e, "version")}, position {Text(e, "globalPosition")}");
                     await output.WriteLineAsync($"  {Text(e, "exception")}: {Text(e, "message")}");
-                    await output.WriteLineAsync($"  Fix the handler and restart, or: deedbox skip {c.Name} --event {Text(e, "eventId")}");
+                    if (e.TryGetProperty("retryAt", out var retryAt) && retryAt.TryGetDateTimeOffset(out var at))
+                        await output.WriteLineAsync($"  {Text(e, "attempts")} attempts; the next retry is at {at:u}.");
+                    await output.WriteLineAsync($"  Fix the cause and it runs again at the next retry, or: deedbox skip {c.Name} --event {Text(e, "eventId")}");
                 }
                 else
                 {

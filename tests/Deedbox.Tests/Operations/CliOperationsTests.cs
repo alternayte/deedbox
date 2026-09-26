@@ -44,6 +44,7 @@ public abstract class CliOperationsTests(Databases databases, Db db) : RunnerTes
         Assert.Contains("applied", text, StringComparison.Ordinal);
         Assert.Contains("is stalled (poison)", text, StringComparison.Ordinal);
         Assert.Contains("stream 'cart-1' version 2", text, StringComparison.Ordinal);
+        Assert.Contains("3 attempts; the next retry is at", text, StringComparison.Ordinal);
         var eventId = JsonDocument.Parse((await Cli(["status", "--json", .. Target])).Output).RootElement
             .GetProperty("consumers")[0].GetProperty("error").GetString()!;
         var poison = JsonNode.Parse(eventId)!["eventId"]!.GetValue<string>();

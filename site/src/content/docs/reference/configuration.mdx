@@ -21,7 +21,7 @@ This page lists every setting of `AddDeedbox`.
 | `Runner(r => r.BatchSize)` | 500 | Most events per batch. |
 | `Runner(r => r.MinPollDelay)` | 50 ms | First wait when idle. |
 | `Runner(r => r.MaxPollDelay)` | 5 s | Longest wait when idle. Postgres wakes sooner on LISTEN/NOTIFY. |
-| `Runner(r => r.HandlerRetries)` | 5 | Retries before a consumer stalls. |
+| `Runner(r => r.HandlerRetries)` | 5 | Retries before a consumer stalls. A stalled consumer still retries every 5 minutes. |
 | `Runner(r => r.RetryDelay)` | 1 s | First retry delay; it doubles, up to 5 minutes. |
 | `Runner(r => r.StallAfter)` | 10 min | The health check's "not moving" limit. |
 

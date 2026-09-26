@@ -2,6 +2,13 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.3.1] - Unreleased
+
+### Changed
+
+- A consumer that stalls on a poison event retries the event every 5 minutes, and runs again once it succeeds. Before, it retried only when an instance started, so an outage of a service that a subscription calls stopped the subscription until a restart or a skip. The instances share one schedule, so the event gets one attempt per interval. The consumer stays `stalled` while it retries, so the health check still reports it and `deedbox skip` still works; `deedbox status` shows the attempts and the next retry time.
+- Only a stall that exists when an instance starts gets that instance's immediate round of retries. Before, every instance that had not stalled the consumer itself gave it one more round.
+
 ## [0.3.0] - 2026-09-25
 
 ### Added
@@ -58,6 +65,7 @@ The first release. It targets .NET 8 and .NET 10.
 - `IEventStoreAdmin`, metrics, traces, and DBX error codes that link to their docs pages.
 - Native `json` columns on SQL Server 2025 and Azure SQL, with `UseSqlServer(connectionString, sql => sql.NativeJson = true)`. Applying the schema converts existing `nvarchar(max)` columns.
 
+[0.3.1]: https://github.com/alternayte/deedbox/compare/v0.3.0...main
 [0.3.0]: https://github.com/alternayte/deedbox/releases/tag/v0.3.0
 [0.2.1]: https://github.com/alternayte/deedbox/releases/tag/v0.2.1
 [0.2.0]: https://github.com/alternayte/deedbox/releases/tag/v0.2.0

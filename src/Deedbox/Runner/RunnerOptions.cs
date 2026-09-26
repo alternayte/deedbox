@@ -17,10 +17,13 @@ public sealed class RunnerOptions
     /// </summary>
     public TimeSpan MaxPollDelay { get; set; } = TimeSpan.FromSeconds(5);
 
-    /// <summary>How many times a failing event is retried before its consumer stalls; default 5.</summary>
+    /// <summary>
+    /// How many times a failing event is retried before its consumer stalls; default 5. A stalled consumer still retries
+    /// the event every 5 minutes, and runs again once it succeeds.
+    /// </summary>
     public int HandlerRetries { get; set; } = 5;
 
-    /// <summary>The wait before the first retry of a failing event; it doubles on each retry. Default 1 second.</summary>
+    /// <summary>The wait before the first retry of a failing event; it doubles on each retry, up to 5 minutes. Default 1 second.</summary>
     public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(1);
 
     /// <summary>
@@ -28,6 +31,12 @@ public sealed class RunnerOptions
     /// this long; default 10 minutes. A consumer that is behind but moving stays healthy.
     /// </summary>
     public TimeSpan StallAfter { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// The longest wait between retries of a failing event, and the interval at which a consumer stalled on a poison
+    /// event retries it. Internal: tests shorten it.
+    /// </summary>
+    internal TimeSpan MaxRetryDelay { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>How often each instance writes its heartbeat. Internal: tests shorten it.</summary>
     internal TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(10);

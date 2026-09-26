@@ -90,7 +90,10 @@ public sealed record StoreStatus(long Head, IReadOnlyList<ConsumerStatus> Consum
 /// <param name="Position">The last global position it applied or scanned.</param>
 /// <param name="Lag">How many positions it is behind the head; 0 for an inline projection that is running.</param>
 /// <param name="UpdatedAt">When its checkpoint last moved.</param>
-/// <param name="Error">For a stalled consumer, the stall as JSON: reason, event, stream, version and exception.</param>
+/// <param name="Error">
+/// For a stalled consumer, the stall as JSON: reason, event, stream, version and exception, and for a poison event the
+/// attempts so far and <c>retryAt</c>, when the runner next retries it.
+/// </param>
 public sealed record ConsumerStatus(string Name, string Mode, string Status, long Position, long Lag, DateTimeOffset UpdatedAt, string? Error);
 
 /// <summary>A queued, finished or failed job.</summary>

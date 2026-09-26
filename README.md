@@ -89,13 +89,13 @@ Do not use Deedbox when:
 
 | You use | Install |
 | --- | --- |
-| Postgres | `dotnet add package Deedbox.Postgres --prerelease` |
-| SQL Server | `dotnet add package Deedbox.SqlServer --prerelease` |
+| Postgres | `dotnet add package Deedbox.Postgres` |
+| SQL Server | `dotnet add package Deedbox.SqlServer` |
 | EF Core projections or `UseDbContext` | also `Deedbox.EntityFrameworkCore` |
 | Decider tests and the event-contract lockfile | `Deedbox.Testing` in your test project |
 | Master key in Azure Key Vault | `Deedbox.Keys.AzureKeyVault` |
 | Delivery through QueueBox | `Deedbox.QueueBox` |
-| The CLI | `dotnet tool install -g Deedbox.Cli --prerelease` |
+| The CLI | `dotnet tool install -g Deedbox.Cli` |
 | A starter project | `dotnet new install Deedbox.Templates`, then `dotnet new deedbox` |
 
 ## Guarantees

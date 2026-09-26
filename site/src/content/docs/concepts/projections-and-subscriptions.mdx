@@ -24,9 +24,10 @@ A projection can promise exactly once because its writes and its checkpoint comm
 ## When a handler fails
 
 1. The runner retries the event with growing delays, up to `HandlerRetries` times.
-2. Then it stops that consumer, sets it to `stalled`, and records the stream, version, event type and exception.
+2. Then it sets that consumer to `stalled`, and records the stream, version, event type and exception.
 3. Metrics, logs, the health check and `deedbox status` report it.
-4. You fix the code and restart, or [skip the one event](/operations/poison-event/) with an audited job.
+4. The runner retries the event every 5 minutes, one attempt at a time across all instances. When the event succeeds, the consumer runs again.
+5. You fix the cause, or [skip the one event](/operations/poison-event/) with an audited job.
 
 No timeout ever moves a consumer past an event it did not handle.
 
