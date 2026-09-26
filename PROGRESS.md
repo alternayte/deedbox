@@ -327,3 +327,4 @@ Spec: `docs/specs/stalled-consumers-retry.md` (from the grill on 2026-09-26).
 - The immediate round at start-up applies only to a stall the loop finds on its first read; before, every instance that had not stalled the consumer itself added a round after each stall.
 - Log event 27 records a failed scheduled retry and 28 a consumer that got past its stall. Log event 23 names the retry interval.
 - Docs: poison-event runbook, projections and subscriptions, call an external service, configuration and telemetry. The README install table drops `--prerelease`.
+- Released on 2026-09-26: https://github.com/alternayte/deedbox/releases/tag/v0.3.1. All nine packages pushed through trusted publishing.
