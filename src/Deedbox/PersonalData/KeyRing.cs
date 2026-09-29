@@ -58,8 +58,8 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
     }
 
     /// <summary>
-    /// Crypto-shreds a tenant: its keys become tombstones and its subject keys, subject pairs and stored state are
-    /// deleted, in one transaction. Every personal field and sealed state of the tenant reads as erased.
+    /// Crypto-shreds a tenant: its keys become tombstones and its subject keys, subject pairs, pseudonym secrets and
+    /// stored state are deleted, in one transaction. Every personal field and sealed state of the tenant reads as erased.
     /// </summary>
     public async Task Shred(string tenantId, CancellationToken ct)
     {
@@ -88,8 +88,8 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
     }
 
     /// <summary>
-    /// Re-wraps every tenant key with <paramref name="target"/>, in one transaction. Events and subject keys are not
-    /// touched. Leaving database mode also deletes the master key stored in the database.
+    /// Re-wraps every tenant key and pseudonym secret with <paramref name="target"/>, in one transaction. Events and
+    /// subject keys are not touched. Leaving database mode also deletes the master key stored in the database.
     /// </summary>
     public async Task<int> Rewrap(IMasterKeyProvider target, CancellationToken ct)
     {
@@ -104,6 +104,16 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
                 continue;
             var key = await master.UnwrapAsync(row.WrappedKey, row.WrappedBy, ct);
             await provider.UpdateMasterKey(connection, transaction, row with { WrappedKey = await target.WrapAsync(key, ct), WrappedBy = target.KeyVersion }, ct);
+            count++;
+        }
+
+        // Pseudonym secrets keep their bytes, so no subject ID changes.
+        foreach (var row in await provider.ReadPseudonymKeys(connection, transaction, null, ct))
+        {
+            if (row.Destroyed || row.WrappedBy == target.KeyVersion)
+                continue;
+            var secret = await master.UnwrapAsync(row.WrappedKey, row.WrappedBy, ct);
+            await provider.UpdatePseudonymKey(connection, transaction, row with { WrappedKey = await target.WrapAsync(secret, ct), WrappedBy = target.KeyVersion }, ct);
             count++;
         }
 

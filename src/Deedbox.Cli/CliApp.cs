@@ -140,15 +140,49 @@ internal static class CliApp
         var skip = new Command("skip", "Queue an audited skip of the event a consumer stalled on.") { consumerName, eventId, wait };
         skip.SetAction((result, ct) => Queue(result, target, output, wait, Jobs.Skip, Admin.SkipArgs(result.GetValue(consumerName)!, result.GetValue(eventId)), ct));
 
-        var subject = new Argument<string>("subject") { Description = "The data subject, such as person:8421." };
+        var subject = new Argument<string?>("subject") { Description = "The data subject, such as person:8421.", Arity = ArgumentArity.ZeroOrOne };
         var tenant = new Option<string>("--tenant") { Description = "The tenant; empty by default.", DefaultValueFactory = _ => "" };
-        var erase = new Command("erase", "Delete a data subject's key now, and queue the job that finishes their erasure.") { subject, tenant, wait };
+        var identity = new Option<string?>("--identity")
+        {
+            Description = "Erase an identity, such as github:alice, instead of a subject: its pseudonymous subject in every period with a secret. It is never stored or printed.",
+        };
+        var masterKey = new Option<string?>("--master-key")
+        {
+            Description = "With --identity: the master key that wraps the pseudonym secrets: database, env:<VARIABLE> or azure:<key URL>.",
+        };
+        var erase = new Command("erase", "Delete a data subject's key now, and queue the job that finishes their erasure.") { subject, tenant, identity, masterKey, wait };
         erase.SetAction(async (result, ct) =>
         {
-            var args = Admin.EraseArgs(result.GetValue(tenant)!, result.GetValue(subject)!);
+            var (subjectId, identityValue, keySpec) = (result.GetValue(subject), result.GetValue(identity), result.GetValue(masterKey));
+            if ((subjectId is null) == (identityValue is null))
+                throw new CliException("Pass a subject, such as deedbox erase person:8421, or --identity, such as deedbox erase --identity github:alice --master-key env:DEEDBOX_MASTER_KEY.");
+            if (identityValue is null)
+            {
+                if (keySpec is not null)
+                    throw new CliException("--master-key is only for --identity; erasing a subject needs no master key.");
+                var args = Admin.EraseArgs(result.GetValue(tenant)!, subjectId!);
+                await using (var db = target.Open(result))
+                    await Admin.DeleteSubjectKey(db, result.GetValue(tenant)!, subjectId!, ct);
+                return await Queue(result, target, output, wait, Jobs.Erase, args, ct);
+            }
+
+            if (keySpec is null)
+                throw new CliException("--identity needs --master-key, the master key that wraps the pseudonym secrets: database, env:<VARIABLE> or azure:<key URL>.");
+            var tenantId = DeedboxContext.ValidTenant(result.GetValue(tenant)!);
+            IReadOnlyList<Guid> jobs;
             await using (var db = target.Open(result))
-                await Admin.DeleteSubjectKey(db, result.GetValue(tenant)!, result.GetValue(subject)!, ct);
-            return await Queue(result, target, output, wait, Jobs.Erase, args, ct);
+                jobs = await Admin.EraseIdentity(db, new Pseudonymizer(db, MasterKey(keySpec, db)), TimeProvider.System, tenantId, identityValue, ct);
+            if (jobs.Count == 0)
+            {
+                await output.WriteLineAsync($"Tenant '{tenantId}' has no pseudonym period with a secret, so there is nothing to erase.");
+                return 0;
+            }
+
+            await output.WriteLineAsync($"Deleted the identity's subject keys in {jobs.Count} periods. A running app instance finishes each erasure; follow them with deedbox status.");
+            var failed = false;
+            foreach (var id in jobs)
+                failed |= await Follow(result, target, output, wait, Jobs.Erase, id, ct) != 0;
+            return failed ? 1 : 0;
         });
 
         var streamType = new Argument<string>("streamType") { Description = "The stored stream type name." };
@@ -162,14 +196,14 @@ internal static class CliApp
             Required = true,
         };
         var toKey = new Option<string>("--to") { Description = "The master key to wrap them with: database, env:<VARIABLE> or azure:<key URL>.", Required = true };
-        var rewrap = new Command("rewrap", "Re-wrap every tenant key with another master key. Events are not touched.") { fromKey, toKey };
+        var rewrap = new Command("rewrap", "Re-wrap every tenant key and pseudonym secret with another master key. Events are not touched.") { fromKey, toKey };
         rewrap.SetAction(async (result, ct) =>
         {
             await using var db = target.Open(result);
             var ring = new KeyRing(db, MasterKey(result.GetValue(fromKey)!, db));
             var to = MasterKey(result.GetValue(toKey)!, db);
             var count = await ring.Rewrap(to, ct);
-            await output.WriteLineAsync($"Re-wrapped {count} tenant keys with {to.KeyVersion}. Configure that key mode in the app now.");
+            await output.WriteLineAsync($"Re-wrapped {count} tenant keys and pseudonym secrets with {to.KeyVersion}. Configure that key mode in the app now.");
             return 0;
         });
 
@@ -184,6 +218,24 @@ internal static class CliApp
             await using var db = target.Open(result);
             await Admin.ShredTenant(db, DeedboxContext.ValidTenant(result.GetValue(tenantName)!), ct);
             await output.WriteLineAsync($"Tenant '{result.GetValue(tenantName)}' is shredded. Restart app instances to drop its key from memory; reads already treat it as erased.");
+            return 0;
+        });
+
+        // ---- pseudonyms ----
+        var periodName = new Argument<string>("period") { Description = "The period whose secret to destroy, such as 2026-Q1." };
+        var periodTenant = new Option<string>("--tenant") { Description = "The tenant; empty by default.", DefaultValueFactory = _ => "" };
+        var destroyYes = new Option<bool>("--yes") { Description = "Confirm: this destroys the period's secret and cannot be undone." };
+        var destroy = new Command("destroy", "Destroy a period's pseudonym secret: its subject IDs can never be linked to an identity again.") { periodName, periodTenant, destroyYes };
+        destroy.SetAction(async (result, ct) =>
+        {
+            var (period, tenantId) = (PseudonymPeriod.Validate(result.GetValue(periodName)!), DeedboxContext.ValidTenant(result.GetValue(periodTenant)!));
+            if (!result.GetValue(destroyYes))
+                throw new CliException($"Destroying the pseudonym secret of period '{period}' in tenant '{tenantId}' cannot be undone. Add --yes to confirm.");
+            await using var db = target.Open(result);
+            var destroyed = await Admin.DestroyPseudonymPeriod(db, TimeProvider.System, tenantId, period, ct);
+            await output.WriteLineAsync(destroyed
+                ? $"Destroyed the pseudonym secret of period '{period}' in tenant '{tenantId}'. Its subject IDs can no longer be linked to an identity; the jobs table records it."
+                : $"Period '{period}' in tenant '{tenantId}' had no pseudonym secret. It is closed now; the jobs table records it.");
             return 0;
         });
 
@@ -218,18 +270,26 @@ internal static class CliApp
             new Command("snapshots", "Rebuild stored state.") { snapshotsRebuild },
             new Command("keys", "Manage the master key.") { rewrap },
             new Command("tenant", "Manage tenants.") { shred },
+            new Command("pseudonyms", "Manage pseudonym secrets.") { destroy },
             new Command("lockfile", "Work with event-contract lockfiles.") { diff },
         };
     }
 
     private static async Task<int> Queue(ParseResult result, Target target, TextWriter output, Option<bool> wait, string kind, System.Text.Json.Nodes.JsonObject args, CancellationToken ct)
     {
-        await using var db = target.Open(result);
-        var id = await Jobs.Enqueue(db, TimeProvider.System, kind, args, ct);
+        Guid id;
+        await using (var db = target.Open(result))
+            id = await Jobs.Enqueue(db, TimeProvider.System, kind, args, ct);
+        return await Follow(result, target, output, wait, kind, id, ct);
+    }
+
+    private static async Task<int> Follow(ParseResult result, Target target, TextWriter output, Option<bool> wait, string kind, Guid id, CancellationToken ct)
+    {
         await output.WriteLineAsync($"Queued {kind} job {id}. A running app instance does it; follow it with deedbox status.");
         if (!result.GetValue(wait))
             return 0;
 
+        await using var db = target.Open(result);
         while (true)
         {
             var job = await Admin.Job(db, id, ct);

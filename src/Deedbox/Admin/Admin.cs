@@ -39,6 +39,53 @@ internal static class Admin
         await transaction.CommitAsync(ct);
     }
 
+    /// <summary>
+    /// Erases an identity in a tenant: its subject in every period with a secret. The subject keys go in one
+    /// transaction, so every period's data reads as erased at once; then one erasure job per period finishes the rest.
+    /// </summary>
+    public static async Task<IReadOnlyList<Guid>> EraseIdentity(DeedboxProvider provider, Pseudonymizer pseudonyms, TimeProvider clock, string tenantId, string identity, CancellationToken ct)
+    {
+        Pseudonymizer.ValidateIdentity(identity);
+        DeedboxContext.ValidTenant(tenantId);
+        var subjects = await pseudonyms.SubjectsInEveryPeriod(tenantId, identity, ct);
+        if (subjects.Count == 0)
+            return [];
+
+        await using (var connection = provider.CreateConnection())
+        {
+            await connection.OpenAsync(ct);
+            await using var transaction = await connection.BeginTransactionAsync(ct);
+            foreach (var subject in subjects)
+                await provider.DeleteSubjectKey(connection, transaction, tenantId, subject, ct);
+            await transaction.CommitAsync(ct);
+        }
+
+        var jobs = new List<Guid>();
+        foreach (var subject in subjects)
+            jobs.Add(await Jobs.Enqueue(provider, clock, Jobs.Erase, EraseArgs(tenantId, subject), ct));
+        return jobs;
+    }
+
+    /// <summary>
+    /// Destroys a period's pseudonym secret: the row becomes a tombstone, and a done job row records the operation, in
+    /// one transaction. Returns true when the period had a secret.
+    /// </summary>
+    public static async Task<bool> DestroyPseudonymPeriod(DeedboxProvider provider, TimeProvider clock, string tenantId, string periodId, CancellationToken ct)
+    {
+        DeedboxContext.ValidTenant(tenantId);
+        PseudonymPeriod.Validate(periodId);
+        await using var connection = provider.CreateConnection();
+        await connection.OpenAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        var destroyed = await provider.DestroyPseudonymKey(connection, transaction, tenantId, periodId, ct);
+        var now = clock.GetUtcNow();
+        await provider.InsertJob(connection, transaction, new JobRow(Uuid7.New(), Jobs.PseudonymsDestroyed,
+            new JsonObject { ["tenantId"] = tenantId, ["periodId"] = periodId }.ToJsonString(), JobStatus.Done,
+            new JsonObject { ["destroyed"] = destroyed }.ToJsonString(), now, now, now), ct);
+        await transaction.CommitAsync(ct);
+        return destroyed;
+    }
+
     /// <summary>Shreds a tenant with the database alone. App instances still hold its key in memory until they reload.</summary>
     public static async Task ShredTenant(DeedboxProvider provider, string tenantId, CancellationToken ct)
     {
@@ -146,6 +193,19 @@ internal sealed class EventStoreAdmin(DeedboxRuntime runtime) : IEventStoreAdmin
 
     public Task ShredTenantAsync(string tenantId, CancellationToken ct = default) =>
         runtime.RequireKeys().Shred(DeedboxContext.ValidTenant(tenantId), ct);
+
+    public Task<IReadOnlyList<Guid>> EraseIdentityAsync(string identity, string tenantId = "", CancellationToken ct = default)
+    {
+        Pseudonymizer.ValidateIdentity(identity);
+        return Admin.EraseIdentity(runtime.Provider, runtime.RequirePseudonyms(), runtime.Clock, tenantId, identity, ct);
+    }
+
+    public async Task<bool> DestroyPseudonymPeriodAsync(string periodId, string tenantId = "", CancellationToken ct = default)
+    {
+        var destroyed = await Admin.DestroyPseudonymPeriod(runtime.Provider, runtime.Clock, tenantId, periodId, ct);
+        runtime.Pseudonyms?.Forget(tenantId, periodId);
+        return destroyed;
+    }
 
     private Task<Guid> Queue(string kind, JsonObject args, CancellationToken ct) => Jobs.Enqueue(runtime.Provider, runtime.Clock, kind, args, ct);
 }

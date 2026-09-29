@@ -194,6 +194,29 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// </summary>
     public abstract Task DeleteStreamData(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, long keepFromVersion, CancellationToken ct);
 
+    // ---- Pseudonyms ----
+
+    /// <summary>One period's pseudonym row, live or a tombstone; null when the period has none.</summary>
+    public abstract Task<PseudonymKeyRow?> ReadPseudonymKey(DbConnection connection, DbTransaction? transaction, string tenantId, string periodId, CancellationToken ct);
+
+    /// <summary>
+    /// The pseudonym rows of one tenant, or of every tenant when <paramref name="tenantId"/> is null, tombstones
+    /// included, in (tenant, period) order.
+    /// </summary>
+    public abstract Task<List<PseudonymKeyRow>> ReadPseudonymKeys(DbConnection connection, DbTransaction? transaction, string? tenantId, CancellationToken ct);
+
+    /// <summary>Adds a period's secret unless the period already has a row, live or a tombstone.</summary>
+    public abstract Task InsertPseudonymKey(DbConnection connection, DbTransaction? transaction, PseudonymKeyRow row, CancellationToken ct);
+
+    /// <summary>Replaces a live secret's wrapped bytes and wrapping key version; a tombstone is left alone.</summary>
+    public abstract Task UpdatePseudonymKey(DbConnection connection, DbTransaction transaction, PseudonymKeyRow row, CancellationToken ct);
+
+    /// <summary>
+    /// Makes the period's row a tombstone with no key material, creating the row when the period has none, so the
+    /// period can never get a secret again. Returns true when the row held a live secret.
+    /// </summary>
+    public abstract Task<bool> DestroyPseudonymKey(DbConnection connection, DbTransaction transaction, string tenantId, string periodId, CancellationToken ct);
+
     // ---- Operations ----
 
     /// <summary>The most recent jobs, newest first.</summary>
@@ -204,7 +227,7 @@ internal abstract class DeedboxProvider : IAsyncDisposable
 
     /// <summary>
     /// Crypto-shreds a tenant: its key rows become tombstones (no key material; versions kept so they are never
-    /// reused), and its subject keys, subject pairs and stored state are deleted.
+    /// reused), and its subject keys, subject pairs, pseudonym rows and stored state are deleted.
     /// </summary>
     public abstract Task ShredTenant(DbConnection connection, DbTransaction transaction, string tenantId, CancellationToken ct);
 
@@ -291,3 +314,9 @@ internal static class JobStatus
 internal sealed record MasterKeyRow(string TenantId, int KeyVersion, byte[] WrappedKey, string WrappedBy);
 
 internal sealed record SubjectKeyRow(string TenantId, string SubjectId, string KeyId, byte[] WrappedKey);
+
+/// <summary>A period's pseudonym secret, wrapped by the master key, or a tombstone when <see cref="DestroyedAt"/> is set.</summary>
+internal sealed record PseudonymKeyRow(string TenantId, string PeriodId, string Prefix, byte[] WrappedKey, string WrappedBy, DateTimeOffset? DestroyedAt = null)
+{
+    public bool Destroyed => DestroyedAt is not null;
+}

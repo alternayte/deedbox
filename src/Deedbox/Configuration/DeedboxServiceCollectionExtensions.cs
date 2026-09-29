@@ -25,6 +25,7 @@ public static class DeedboxServiceCollectionExtensions
         services.AddScoped<DeedboxContext>();
         services.AddSingleton<IEventStoreAdmin>(sp => new EventStoreAdmin(sp.GetRequiredService<DeedboxRuntime>()));
         services.AddScoped<ISubjectErasure>(sp => new SubjectErasure(sp.GetRequiredService<DeedboxRuntime>(), sp.GetRequiredService<DeedboxContext>()));
+        services.AddScoped<IPseudonyms>(sp => new Pseudonyms(sp.GetRequiredService<DeedboxRuntime>(), sp.GetRequiredService<DeedboxContext>()));
         services.AddScoped<IEventStore>(sp => new EventStore(
             sp.GetRequiredService<DeedboxRuntime>(), OwnedTransactions.Instance, sp, sp.GetRequiredService<DeedboxContext>(), metadata: null));
         services.AddSingleton<InstanceHeartbeat>();

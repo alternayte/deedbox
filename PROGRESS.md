@@ -328,3 +328,15 @@ Spec: `docs/specs/stalled-consumers-retry.md` (from the grill on 2026-09-26).
 - Log event 27 records a failed scheduled retry and 28 a consumer that got past its stall. Log event 23 names the retry interval.
 - Docs: poison-event runbook, projections and subscriptions, call an external service, configuration and telemetry. The README install table drops `--prerelease`.
 - Released on 2026-09-26: https://github.com/alternayte/deedbox/releases/tag/v0.3.1. All nine packages pushed through trusted publishing.
+
+## 0.4.0
+
+Spec: `docs/specs/pseudonyms.md` (issue alternayte/deedbox#3, a prerequisite for Casebox).
+
+- Pseudonymous subject IDs: `IPseudonyms.SubjectForAsync(identity, periodId)` returns prefix + base32 of the first 128 bits of HMAC-SHA256 under a random secret per (tenant, period), wrapped by the master key in `pseudonym_keys` (migration 5). Periods are explicit IDs from the app; `PseudonymPeriod.Quarter` and `Month` build UTC IDs.
+- The row stores the prefix the period was created with, so erasure by identity from the admin API or the CLI needs no prefix option; a different configured prefix fails with DBX037.
+- A destroyed period is a tombstone and stays closed (DBX036); the destroy writes a done `pseudonyms_destroyed` job row as its audit record. Shredding a tenant deletes its pseudonym rows, tombstones included, so the tenant starts again with new secrets.
+- Each `SubjectForAsync` reads the period row; the unwrapped secret is reused only while the wrapped bytes match, so a destroy, shred or re-wrap on another instance applies at the next call without a master key call per write.
+- `RewrapKeysAsync` re-wraps pseudonym secrets in the same transaction as tenant keys and counts them.
+- `deedbox erase --identity` requires `--master-key`, because the CLI unwraps the secrets itself.
+- VersionPrefix is 0.4.0, with package validation against 0.3.1.

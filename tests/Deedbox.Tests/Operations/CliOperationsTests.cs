@@ -4,6 +4,7 @@ using Deedbox.Cli;
 using Deedbox.Tests.Infrastructure;
 using Deedbox.Tests.PersonalData;
 using Deedbox.Tests.Runner;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Deedbox.Tests.Operations;
 
@@ -72,6 +73,46 @@ public abstract class CliOperationsTests(Databases databases, Db db) : RunnerTes
 
         Assert.Equal(0, (await Cli(["snapshots", "rebuild", "manuscript", "--wait", .. Target])).Code);
         Assert.Equal(1, (await Cli(["snapshots", "rebuild", "nope", "--wait", .. Target])).Code);
+    }
+
+    [Fact]
+    public async Task Erase_by_identity_erases_its_subject_in_every_period_without_printing_it_and_destroy_needs_confirmation()
+    {
+        var host = await StartHost(NewProbe(), b => { Keys.Streams(b); b.Keys(k => k.StoreInDatabase()); });
+        var identity = $"github:{Guid.NewGuid():N}";
+        var scope = host.Services.CreateScope().ServiceProvider;
+        scope.GetRequiredService<DeedboxContext>().TenantId = "acme";
+        var pseudonyms = scope.GetRequiredService<IPseudonyms>();
+        var store = scope.GetRequiredService<IEventStore>();
+        await store.Append("m-1", ExpectedVersion.NoStream,
+        [
+            new ReviewerInvited("m-1", await pseudonyms.SubjectForAsync(identity, "2026-Q1"), "Ada", null),
+            new ReviewerInvited("m-1", await pseudonyms.SubjectForAsync(identity, "2026-Q2"), "Ada again", null),
+            new ReviewerInvited("m-1", await pseudonyms.SubjectForAsync("github:grace", "2026-Q2"), "Grace", null),
+        ]);
+
+        var noKey = await Cli(["erase", "--identity", identity, "--tenant", "acme", .. Target]);
+        var both = await Cli(["erase", "person:1", "--identity", identity, "--master-key", "database", .. Target]);
+        var erased = await Cli(["erase", "--identity", identity, "--tenant", "acme", "--master-key", "database", "--wait", .. Target]);
+
+        Assert.Equal((1, 1, 0), (noKey.Code, both.Code, erased.Code));
+        Assert.Contains("--master-key", noKey.Error, StringComparison.Ordinal);
+        Assert.Contains("in 2 periods", erased.Output, StringComparison.Ordinal);
+        Assert.Equal(2, erased.Output.Split('\n').Count(l => l.Contains(" done: ", StringComparison.Ordinal)));
+        Assert.All(new[] { noKey, both, erased }, r => Assert.DoesNotContain(identity, r.Output + r.Error, StringComparison.Ordinal));
+        Assert.Equal([null, null, "Grace"], (await store.Load<Manuscript>("m-1")).State.Names);
+
+        var unconfirmed = await Cli(["pseudonyms", "destroy", "2026-Q1", "--tenant", "acme", .. Target]);
+        var destroyed = await Cli(["pseudonyms", "destroy", "2026-Q1", "--tenant", "acme", "--yes", .. Target]);
+        var again = await Cli(["pseudonyms", "destroy", "2026-Q1", "--tenant", "acme", "--yes", .. Target]);
+
+        Assert.Equal((1, 0, 0), (unconfirmed.Code, destroyed.Code, again.Code));
+        Assert.Contains("--yes", unconfirmed.Error, StringComparison.Ordinal);
+        Assert.StartsWith("Destroyed the pseudonym secret of period '2026-Q1' in tenant 'acme'.", destroyed.Output, StringComparison.Ordinal);
+        Assert.Contains("had no pseudonym secret", again.Output, StringComparison.Ordinal);
+        Assert.Equal(Errors.PseudonymPeriodDestroyed, (await Assert.ThrowsAsync<DeedboxException>(() => pseudonyms.SubjectForAsync(identity, "2026-Q1"))).Code);
+        Assert.Equal(2, await Scalar<int>($"SELECT COUNT(*) FROM {Table("jobs")} WHERE kind = 'pseudonyms_destroyed' AND status = 'done'"));
+        Assert.Contains("pseudonyms_destroyed", (await Cli(["status", .. Target])).Output, StringComparison.Ordinal);
     }
 
     [Fact]

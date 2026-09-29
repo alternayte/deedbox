@@ -59,22 +59,51 @@ public interface IEventStoreAdmin
     Task<Guid> RebuildSnapshotsAsync(string streamType, CancellationToken ct = default);
 
     /// <summary>
-    /// Re-wraps every tenant key with <paramref name="target"/>, such as when moving the master key out of the
-    /// database or rotating it. No event is touched. Afterwards, configure the target as the key mode.
+    /// Re-wraps every tenant key and pseudonym secret with <paramref name="target"/>, such as when moving the master
+    /// key out of the database or rotating it. No event is touched, and no pseudonymous subject ID changes. Afterwards,
+    /// configure the target as the key mode.
     /// </summary>
     /// <param name="target">The master key to wrap with from now on.</param>
     /// <param name="ct">Cancels the call.</param>
-    /// <returns>How many tenant keys were re-wrapped.</returns>
+    /// <returns>How many tenant keys and pseudonym secrets were re-wrapped.</returns>
     Task<int> RewrapKeysAsync(IMasterKeyProvider target, CancellationToken ct = default);
 
     /// <summary>
     /// Crypto-shreds a whole tenant at once: its keys are destroyed, so every personal field and every sealed state
-    /// of the tenant reads as erased, on every instance. Events stay; data written afterwards uses a new key.
+    /// of the tenant reads as erased, on every instance. Its pseudonym secrets are deleted, so none of its subject IDs
+    /// can be linked to an identity again. Events stay; data written afterwards uses new keys and new secrets.
     /// This cannot be undone.
     /// </summary>
     /// <param name="tenantId">The tenant.</param>
     /// <param name="ct">Cancels the call.</param>
     Task ShredTenantAsync(string tenantId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Erases an identity in a tenant: computes its pseudonymous subject ID in every period whose secret still exists,
+    /// deletes those subjects' keys at once, and queues one erasure job per period. The same as
+    /// <see cref="IPseudonyms.EraseIdentityAsync"/> with an explicit tenant. The identity is never stored.
+    /// </summary>
+    /// <param name="identity">The identity, such as <c>github:alice</c>.</param>
+    /// <param name="tenantId">The tenant; empty when the app has no tenants.</param>
+    /// <param name="ct">Cancels the call.</param>
+    /// <returns>The erasure job IDs, one per period, in period order.</returns>
+    /// <remarks>The default body exists so that test doubles written against 0.3 still compile; Deedbox's own admin overrides it.</remarks>
+    Task<IReadOnlyList<Guid>> EraseIdentityAsync(string identity, string tenantId = "", CancellationToken ct = default) =>
+        throw new NotSupportedException("This IEventStoreAdmin does not support EraseIdentityAsync. Use the one that AddDeedbox registers.");
+
+    /// <summary>
+    /// Destroys the pseudonym secret of one period in a tenant, so its subject IDs can never be linked to an identity
+    /// again, even by an admin. The period stays closed: computing a subject ID in it fails with DBX036. A done
+    /// <c>pseudonyms_destroyed</c> job records the operation. Personal data stays readable, and erasure by subject ID
+    /// still works. This cannot be undone.
+    /// </summary>
+    /// <param name="periodId">The period, such as <c>2026-Q1</c>.</param>
+    /// <param name="tenantId">The tenant; empty when the app has no tenants.</param>
+    /// <param name="ct">Cancels the call.</param>
+    /// <returns>True when the period had a secret; false when it had none or was already destroyed.</returns>
+    /// <remarks>The default body exists so that test doubles written against 0.3 still compile; Deedbox's own admin overrides it.</remarks>
+    Task<bool> DestroyPseudonymPeriodAsync(string periodId, string tenantId = "", CancellationToken ct = default) =>
+        throw new NotSupportedException("This IEventStoreAdmin does not support DestroyPseudonymPeriodAsync. Use the one that AddDeedbox registers.");
 }
 
 /// <summary>The state of the store's background work.</summary>
@@ -98,7 +127,7 @@ public sealed record ConsumerStatus(string Name, string Mode, string Status, lon
 
 /// <summary>A queued, finished or failed job.</summary>
 /// <param name="Id">The job ID.</param>
-/// <param name="Kind">rebuild, skip, erase or snapshots.</param>
+/// <param name="Kind">rebuild, skip, erase, snapshots, or pseudonyms_destroyed for the record of a destroyed pseudonym period.</param>
 /// <param name="Args">The job's arguments as JSON.</param>
 /// <param name="Status">queued, done or failed.</param>
 /// <param name="Progress">What the job did or why it failed, as JSON.</param>

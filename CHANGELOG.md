@@ -2,6 +2,22 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.4.0] - Unreleased
+
+### Added
+
+- `IPseudonyms.SubjectForAsync(identity, periodId)` turns a real identity, such as `github:alice`, into a keyed subject ID, such as `person:k7q2m9x4…`: the prefix plus the first 128 bits of HMAC-SHA256 in lower-case base32. Each tenant and period has its own random secret, wrapped by the master key. The same identity and period give the same subject ID on every instance. `PseudonymPeriod.Quarter(at)` and `PseudonymPeriod.Month(at)` build UTC period IDs; one fixed period ID gives subject IDs that never change. `DeedboxBuilder.PseudonymPrefix(prefix)` sets the prefix, `person:` by default. Migration 5 adds the `pseudonym_keys` table.
+- `IPseudonyms.EraseIdentityAsync(identity)`, `IEventStoreAdmin.EraseIdentityAsync(identity, tenantId)` and `deedbox erase --identity <id> --master-key <key>` erase the identity's subject in every period whose secret still exists.
+- `IEventStoreAdmin.DestroyPseudonymPeriodAsync(periodId, tenantId)` and `deedbox pseudonyms destroy <period> --yes` destroy a period's secret, so its subject IDs can never be linked to an identity again. A `pseudonyms_destroyed` job row records it. A destroyed period stays closed ([DBX036](https://deedbox-docs.pages.dev/reference/errors/dbx036/)). A period keeps its prefix ([DBX037](https://deedbox-docs.pages.dev/reference/errors/dbx037/)).
+- The identity is never stored, logged, traced, measured or put in an error message. Reads and rebuilds never need a pseudonym secret.
+- Docs: the how-to guide "Use pseudonymous subject IDs", and a pseudonym section in "Erasure and the key hierarchy".
+
+### Changed
+
+- Shredding a tenant also deletes its pseudonym secrets.
+- `RewrapKeysAsync` and `deedbox keys rewrap` also re-wrap pseudonym secrets, in the same transaction, and the count includes them. No subject ID changes.
+- `IEventStoreAdmin.EraseIdentityAsync` and `DestroyPseudonymPeriodAsync` have default bodies, so an implementation of the interface written for 0.3 still compiles.
+
 ## [0.3.1] - 2026-09-26
 
 ### Changed

@@ -159,13 +159,15 @@ public abstract class RunnerTest(Databases databases, Db db) : DatabaseTest(data
 
     protected Probe NewProbe() => new(Schema, Db);
 
-    protected async Task<IHost> StartHost(Probe probe, Action<DeedboxBuilder> configure, Action<RunnerOptions>? runner = null, string? applicationName = null, bool defaultStreams = true)
+    protected async Task<IHost> StartHost(Probe probe, Action<DeedboxBuilder> configure, Action<RunnerOptions>? runner = null, string? applicationName = null, bool defaultStreams = true,
+        Action<IServiceCollection>? services = null)
     {
         var connectionString = applicationName is null ? ConnectionString : $"{ConnectionString};Application Name={applicationName}";
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton(probe);
         builder.Services.AddDbContext<OrdersDb>(o => o.Use(Db, ConnectionString));
         builder.Services.AddHealthChecks().AddDeedboxHealthChecks();
+        services?.Invoke(builder.Services);
         builder.Services.AddDeedbox(b =>
         {
             (Db == Db.Postgres ? b.UsePostgres(connectionString) : b.UseSqlServer(connectionString, Databases.SqlServerOptions)).Schema(Schema)
