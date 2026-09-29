@@ -46,6 +46,6 @@ From the CLI: `deedbox erase person:8421 --tenant acme`.
 ## Know the limits
 
 - Backups taken before an erasure still hold the subject's key until they age out. Set your backup retention with this in mind.
-- Metadata and subject IDs are not encrypted. Use pseudonymous IDs such as `person:8421`.
+- Metadata and subject IDs are not encrypted. Use pseudonymous IDs such as `person:8421`. [Use pseudonymous subject IDs](/how-to/use-pseudonymous-ids/) shows how Deedbox makes them from an email or a login.
 - Only top-level properties are encrypted.
 - Data written about the subject after the erasure uses a new key and stays readable.

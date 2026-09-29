@@ -17,6 +17,7 @@ Deedbox stores events in the app's own Postgres or SQL Server database. Docs: ht
 - A projection registers handlers in its constructor with `On<T>`, overrides `ResetAsync`, and is registered with a stable name and one run mode: `.Projection<T>("name", Run.Inline)` or `Run.Async`.
 - A subscription is for side effects outside the database. Delivery is at least once: pass `ctx.Envelope.EventId` on as an idempotency key.
 - Mark personal data with `[property: DataSubject]` on the subject ID and `[property: PersonalData]` on each personal field. Personal fields are strings or nullable. Choose a key mode with `.Keys(...)`.
+- Never put an email or a login in a subject ID. Compute it with `IPseudonyms.SubjectForAsync("github:alice", PseudonymPeriod.Quarter(now))`, and erase by identity with `IPseudonyms.EraseIdentityAsync`.
 - Never append `SubjectErased` or `StreamDeleted`. Use `ISubjectErasure.EraseSubjectAsync` and `IEventStore.DeleteStream`.
 - In a transaction the app owns (`UseTransaction`, `UseDbContext`), append to one stream, then commit soon.
 - Test decisions with `Deedbox.Testing`: `Decider.Given<TState>(events).When(decide).Then(expected)`. Keep an `EventContracts.Verify(...)` test and commit its `events.lock`.

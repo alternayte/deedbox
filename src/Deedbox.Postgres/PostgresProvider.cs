@@ -423,6 +423,74 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         return await command.ExecuteNonQueryAsync(ct);
     }
 
+    public override async Task<PseudonymKeyRow?> ReadPseudonymKey(DbConnection connection, DbTransaction? transaction, string tenantId, string periodId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ReadPseudonymKey);
+        Add(command, "tenant", tenantId);
+        Add(command, "period", periodId);
+        return (await ReadPseudonymRows(command, ct)).SingleOrDefault();
+    }
+
+    public override async Task<List<PseudonymKeyRow>> ReadPseudonymKeys(DbConnection connection, DbTransaction? transaction, string? tenantId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, tenantId is null ? Sql.ReadAllPseudonymKeys : Sql.ReadPseudonymKeys);
+        if (tenantId is not null)
+            Add(command, "tenant", tenantId);
+        return await ReadPseudonymRows(command, ct);
+    }
+
+    public override async Task InsertPseudonymKey(DbConnection connection, DbTransaction? transaction, PseudonymKeyRow row, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.InsertPseudonymKey);
+        AddPseudonymKey(command, row);
+        Add(command, "prefix", row.Prefix);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task UpdatePseudonymKey(DbConnection connection, DbTransaction transaction, PseudonymKeyRow row, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.UpdatePseudonymKey);
+        AddPseudonymKey(command, row);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task<bool> DestroyPseudonymKey(DbConnection connection, DbTransaction transaction, string tenantId, string periodId, CancellationToken ct)
+    {
+        // The tombstone goes in first, so a secret created concurrently can never slip in after the update.
+        await using (var tombstone = Command(connection, transaction, Sql.InsertPseudonymTombstone))
+        {
+            Add(tombstone, "tenant", tenantId);
+            Add(tombstone, "period", periodId);
+            await tombstone.ExecuteNonQueryAsync(ct);
+        }
+
+        await using var command = Command(connection, transaction, Sql.DestroyPseudonymKey);
+        Add(command, "tenant", tenantId);
+        Add(command, "period", periodId);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    private static void AddPseudonymKey(DbCommand command, PseudonymKeyRow row)
+    {
+        Add(command, "tenant", row.TenantId);
+        Add(command, "period", row.PeriodId);
+        Add(command, "wrapped", row.WrappedKey);
+        Add(command, "wrapped_by", row.WrappedBy);
+    }
+
+    private static async Task<List<PseudonymKeyRow>> ReadPseudonymRows(DbCommand command, CancellationToken ct)
+    {
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var rows = new List<PseudonymKeyRow>();
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(new PseudonymKeyRow(reader.GetString(0), reader.GetString(1), reader.GetString(2), (byte[])reader.GetValue(3), reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5)));
+        }
+
+        return rows;
+    }
+
     public override async Task RecordSubjectStreams(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, IReadOnlyList<string> subjectIds, CancellationToken ct)
     {
         await using var command = Command(connection, transaction, Sql.RecordSubjectStreams);
@@ -700,7 +768,37 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             UPDATE {s}.master_keys SET wrapped_key = '\x'::bytea, wrapped_by = 'shredded' WHERE tenant_id = @tenant AND key_version > 0;
             DELETE FROM {s}.subject_keys WHERE tenant_id = @tenant;
             DELETE FROM {s}.subject_streams WHERE tenant_id = @tenant;
+            DELETE FROM {s}.pseudonym_keys WHERE tenant_id = @tenant;
             UPDATE {s}.streams SET state = NULL WHERE tenant_id = @tenant;
+            """;
+
+        private const string PseudonymColumns = "tenant_id, period_id, prefix, wrapped_key, wrapped_by, destroyed_at";
+
+        public readonly string ReadPseudonymKey = $"SELECT {PseudonymColumns} FROM {s}.pseudonym_keys WHERE tenant_id = @tenant AND period_id = @period";
+
+        public readonly string ReadPseudonymKeys = $"SELECT {PseudonymColumns} FROM {s}.pseudonym_keys WHERE tenant_id = @tenant ORDER BY period_id";
+
+        public readonly string ReadAllPseudonymKeys = $"SELECT {PseudonymColumns} FROM {s}.pseudonym_keys ORDER BY tenant_id, period_id";
+
+        public readonly string InsertPseudonymKey = $"""
+            INSERT INTO {s}.pseudonym_keys (tenant_id, period_id, prefix, wrapped_key, wrapped_by) VALUES (@tenant, @period, @prefix, @wrapped, @wrapped_by)
+            ON CONFLICT (tenant_id, period_id) DO NOTHING
+            """;
+
+        public readonly string UpdatePseudonymKey = $"""
+            UPDATE {s}.pseudonym_keys SET wrapped_key = @wrapped, wrapped_by = @wrapped_by
+            WHERE tenant_id = @tenant AND period_id = @period AND destroyed_at IS NULL
+            """;
+
+        public readonly string InsertPseudonymTombstone = $"""
+            INSERT INTO {s}.pseudonym_keys (tenant_id, period_id, prefix, wrapped_key, wrapped_by, destroyed_at)
+            VALUES (@tenant, @period, '', '\x'::bytea, 'destroyed', now())
+            ON CONFLICT (tenant_id, period_id) DO NOTHING
+            """;
+
+        public readonly string DestroyPseudonymKey = $"""
+            UPDATE {s}.pseudonym_keys SET prefix = '', wrapped_key = '\x'::bytea, wrapped_by = 'destroyed', destroyed_at = now()
+            WHERE tenant_id = @tenant AND period_id = @period AND destroyed_at IS NULL
             """;
 
         public readonly string ReadMasterKeys = $"SELECT tenant_id, key_version, wrapped_key, wrapped_by FROM {s}.master_keys ORDER BY tenant_id, key_version";

@@ -14,6 +14,9 @@ internal static class Jobs
     public const string Erase = "erase";
     public const string Snapshots = "snapshots";
 
+    /// <summary>Recorded as done when a pseudonym period's secret is destroyed; never queued.</summary>
+    public const string PseudonymsDestroyed = "pseudonyms_destroyed";
+
     public static Task<Guid> Enqueue(DeedboxRuntime runtime, string kind, JsonObject args, CancellationToken ct) =>
         Enqueue(runtime.Provider, runtime.Clock, kind, args, ct);
 

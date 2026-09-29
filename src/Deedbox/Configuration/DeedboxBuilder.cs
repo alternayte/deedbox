@@ -22,6 +22,7 @@ public sealed class DeedboxBuilder
     private string _schema = SchemaName.Default;
     private bool _applySchemaOnStartup;
     private int _executeRetries = 3;
+    private string _pseudonymPrefix = Pseudonymizer.DefaultPrefix;
 
     internal DeedboxBuilder()
     {
@@ -147,6 +148,17 @@ public sealed class DeedboxBuilder
         return this;
     }
 
+    /// <summary>
+    /// Sets the prefix of every subject ID that <see cref="IPseudonyms"/> computes; <c>person:</c> by default. Set it
+    /// once: a period keeps the prefix it was created with, and a different prefix fails with DBX037.
+    /// </summary>
+    /// <param name="prefix">The prefix, such as <c>user:</c>; at most 74 characters with no white space.</param>
+    public DeedboxBuilder PseudonymPrefix(string prefix)
+    {
+        _pseudonymPrefix = Pseudonymizer.ValidatePrefix(prefix);
+        return this;
+    }
+
     /// <summary>Changes the background runner's settings.</summary>
     /// <param name="configure">Changes the settings.</param>
     public DeedboxBuilder Runner(Action<RunnerOptions> configure)
@@ -237,13 +249,17 @@ public sealed class DeedboxBuilder
         foreach (var check in _checks)
             check(registry);
 
-        var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries, _projections, _subscriptions, _runner, _keys.Placeholder);
+        var options = new DeedboxOptions(_schema, _applySchemaOnStartup, _executeRetries, _projections, _subscriptions, _runner, _keys.Placeholder, _pseudonymPrefix);
         var (createProvider, createKeys, schema) = (_provider, _keys.Factory, _schema);
         return services =>
         {
             var provider = createProvider(schema, services);
-            var keys = createKeys is { } factory ? new KeyRing(provider, factory(provider)) : null;
-            return new DeedboxRuntime(options, provider, registry, json) { Keys = keys };
+            var master = createKeys?.Invoke(provider);
+            return new DeedboxRuntime(options, provider, registry, json)
+            {
+                Keys = master is null ? null : new KeyRing(provider, master),
+                Pseudonyms = master is null ? null : new Pseudonymizer(provider, master),
+            };
         };
     }
 }
@@ -255,7 +271,8 @@ internal sealed record DeedboxOptions(
     IReadOnlyList<ProjectionRegistration> Projections,
     IReadOnlyList<SubscriptionRegistration> Subscriptions,
     RunnerOptions Runner,
-    string? RedactedPlaceholder);
+    string? RedactedPlaceholder,
+    string PseudonymPrefix);
 
 /// <summary>Everything a store needs that lives for the life of the app.</summary>
 internal sealed class DeedboxRuntime(DeedboxOptions options, DeedboxProvider provider, EventRegistry registry, DeedboxJson json) : IAsyncDisposable
@@ -274,6 +291,12 @@ internal sealed class DeedboxRuntime(DeedboxOptions options, DeedboxProvider pro
 
     public KeyRing RequireKeys() => Keys ?? throw new DeedboxException(Errors.NoKeyMode,
         "Stored events hold encrypted personal data, but no key mode is configured. Add .Keys(keys => ...) with the mode that encrypted them.");
+
+    /// <summary>Computes pseudonymous subject IDs; null when no key mode is configured.</summary>
+    public Pseudonymizer? Pseudonyms { get; init; }
+
+    public Pseudonymizer RequirePseudonyms() => Pseudonyms ?? throw new DeedboxException(Errors.NoKeyMode,
+        "Pseudonymous subject IDs need a key mode, because the master key wraps each period's secret. Add .Keys(keys => ...), such as keys.StoreInDatabase() or keys.FromEnvironment(\"DEEDBOX_MASTER_KEY\").");
 
     /// <summary>Event types known to be committed in event_types, so appends skip recording them.</summary>
     public System.Collections.Concurrent.ConcurrentDictionary<EventTypeRow, bool> KnownEventTypes { get; } = new();

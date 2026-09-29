@@ -12,7 +12,7 @@ This page lists every public type. Each member has XML docs, so your editor show
 | Type | What it does |
 | --- | --- |
 | `AddDeedbox(Action<DeedboxBuilder>)` | Registers Deedbox. Configuration errors throw here. |
-| `DeedboxBuilder` | `Schema`, `ApplySchemaOnStartup`, `Stream<T>`, `Projection<T>`, `Subscription<T>`, `OnAppending<T>`, `Keys`, `Runner`, `ConfigureJson`, `UseJsonContext`, `ExecuteRetries`. |
+| `DeedboxBuilder` | `Schema`, `ApplySchemaOnStartup`, `Stream<T>`, `Projection<T>`, `Subscription<T>`, `OnAppending<T>`, `Keys`, `PseudonymPrefix`, `Runner`, `ConfigureJson`, `UseJsonContext`, `ExecuteRetries`. |
 | `StreamBuilder<TState>` | `Event<T>`, `Events<T1..T6>`, `EventsNestedIn`, `StateVersion`, `Snapshots`. |
 | `EventBuilder<TEvent>` | `Name`, `Alias`, `From` (JSON upcaster), `Upcast<TOld, TNew>`. |
 | `IState<TSelf>` | `Initial` and `Evolve`: what a state type implements. |
@@ -34,8 +34,10 @@ This page lists every public type. Each member has XML docs, so your editor show
 | `DataSubjectAttribute`, `PersonalDataAttribute` | Mark personal data. |
 | `KeysBuilder`, `IMasterKeyProvider` | Choose where the master key lives. |
 | `ISubjectErasure` | Erase a data subject in the scope's tenant. |
+| `IPseudonyms` | Compute a pseudonymous subject ID from an identity, and erase by identity, in the scope's tenant. Scoped. |
+| `PseudonymPeriod` | `Quarter(at)` and `Month(at)`: calendar period IDs in UTC. |
 | `SubjectErased`, `StreamDeleted` | Built-in events every handler can handle. |
-| `IEventStoreAdmin` | Status, jobs, rebuild, retire, skip, erase, snapshots, key re-wrap, tenant shred. |
+| `IEventStoreAdmin` | Status, jobs, rebuild, retire, skip, erase, erase by identity, pseudonym period destroy, snapshots, key re-wrap, tenant shred. |
 | `StoreStatus`, `ConsumerStatus`, `JobInfo` | What the admin API returns. |
 | `AddDeedboxHealthChecks()` | The health check. |
 | `DeedboxException`, `ConcurrencyException` | Errors, each with a DBX code. |
