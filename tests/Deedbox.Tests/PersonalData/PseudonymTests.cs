@@ -63,7 +63,9 @@ public abstract class PseudonymTests(Databases databases, Db db) : RunnerTest(da
         Assert.Equal([null, null, "Alice in 2025", "Bob"], (await Store(host, "acme").Load<Manuscript>("m-1")).State.Names);
         foreach (var job in jobs)
             Assert.Equal("done", (await WaitForJob(host, job)).Status);
-        Assert.Equal([q1, q2], await Strings($"SELECT args FROM {Table("jobs")} WHERE kind = 'erase' ORDER BY created_at, id", json: "subjectId"));
+        // Two jobs enqueued back to back can share created_at (SQL Server's clock ticks every few milliseconds), so
+        // their order is not part of the contract: exactly the live periods' subjects are erased.
+        Assert.Equal(new[] { q1, q2 }.Order(StringComparer.Ordinal), (await Strings($"SELECT args FROM {Table("jobs")} WHERE kind = 'erase'", json: "subjectId")).Order(StringComparer.Ordinal));
         Assert.Empty(await Pseudonyms(host, "globex").EraseIdentityAsync("github:alice"));
     }
 
