@@ -1,10 +1,1 @@
 #nullable enable
-Deedbox.DeedboxBuilder.PseudonymPrefix(string! prefix) -> Deedbox.DeedboxBuilder!
-Deedbox.IEventStoreAdmin.DestroyPseudonymPeriodAsync(string! periodId, string! tenantId = "", System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
-Deedbox.IEventStoreAdmin.EraseIdentityAsync(string! identity, string! tenantId = "", System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<System.Guid>!>!
-Deedbox.IPseudonyms
-Deedbox.IPseudonyms.EraseIdentityAsync(string! identity, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<System.Guid>!>!
-Deedbox.IPseudonyms.SubjectForAsync(string! identity, string! periodId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
-Deedbox.PseudonymPeriod
-static Deedbox.PseudonymPeriod.Month(System.DateTimeOffset at) -> string!
-static Deedbox.PseudonymPeriod.Quarter(System.DateTimeOffset at) -> string!
