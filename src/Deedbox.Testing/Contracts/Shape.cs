@@ -113,6 +113,10 @@ internal sealed record Shape(string Kind, bool Nullable, IReadOnlyList<(string N
         var members = new List<(string, Shape)>();
         foreach (var property in info.Properties.OrderBy(p => p.Name, StringComparer.Ordinal))
         {
+            // System.Text.Json keeps a [JsonIgnore] property in the contract with no getter and never writes it,
+            // so stored events never hold it. A conditional ignore keeps its getter and is still written sometimes.
+            if (property.Get is null)
+                continue;
             var shape = Of(property.PropertyType, options, visiting);
             if (!property.PropertyType.IsValueType && IsNullable(property, nullability))
                 shape = shape.WithNullable(true);

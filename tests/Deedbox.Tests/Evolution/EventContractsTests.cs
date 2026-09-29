@@ -14,6 +14,25 @@ public record ItemAddedQtyText(string Sku, string Qty);
 
 public record PlainInvited(string ManuscriptId, string ReviewerId, string ReviewerName, string? ReviewerEmail);
 
+public record CartSettings(int? Months)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Label { get; init; }
+}
+
+public record CartSettingsWithRetention(int? Months)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Label { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int Retention => Months ?? 12;
+}
+
+public record SettingsChanged(CartSettings Settings);
+
+public record SettingsChangedWithRetention(CartSettingsWithRetention Settings);
+
 public enum Colour
 {
     Red,
@@ -141,6 +160,21 @@ public sealed class EventContractsTests : IDisposable
         var error = Assert.Throws<EventContractException>(() => EventContracts.Verify(
             b => b.Stream<Deedbox.Tests.PersonalData.Manuscript>(s => s.Event<PlainInvited>(version: 2, up => up.Name("m.invited").From(1, _ => { }))), _path, onCi: false));
         Assert.Contains("'reviewerName' is no longer [PersonalData]", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_ignored_property_is_not_in_the_lockfile_and_adding_one_does_not_break()
+    {
+        Action<DeedboxBuilder> locked = b => b.Stream<Cart>(s => s.Events<ItemAdded>().Event<SettingsChanged>("cart.settings_changed"));
+        Create(locked);
+        var before = File.ReadAllText(_path);
+        Assert.Contains("cart.settings_changed v1 { settings: { label: string?, months: int32? } }", before, StringComparison.Ordinal);
+
+        EventContracts.Verify(b => b.Stream<Cart>(s => s.Events<ItemAdded>().Event<SettingsChangedWithRetention>("cart.settings_changed")), _path, onCi: false);
+
+        var after = File.ReadAllText(_path);
+        Assert.Equal(before, after);
+        Assert.DoesNotContain("retention", after, StringComparison.Ordinal);
     }
 
     [Fact]

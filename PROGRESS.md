@@ -341,3 +341,8 @@ Spec: `docs/specs/pseudonyms.md` (issue alternayte/deedbox#3, a prerequisite for
 - `deedbox erase --identity` requires `--master-key`, because the CLI unwraps the secrets itself.
 - VersionPrefix is 0.4.0, with package validation against 0.3.1.
 - Released on 2026-09-29: https://github.com/alternayte/deedbox/releases/tag/v0.4.0. All nine packages pushed through trusted publishing.
+
+## 0.4.1
+
+- Issue alternayte/deedbox#5: the lockfile walker skips a `JsonPropertyInfo` whose `Get` is null. System.Text.Json keeps a `[JsonIgnore]` property in the contract that way and never writes it. Conditional ignores (WhenWritingNull, WhenWritingDefault) keep their getter and stay in the lockfile. No public API changes.
+- A lockfile written before 0.4.1 that lists an always-ignored member now reports it as removed. Compare does not excuse this, because adding [JsonIgnore] to a stored member is a real removal. The CHANGELOG tells users to delete the member from the lockfile line.

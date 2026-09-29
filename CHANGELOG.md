@@ -2,6 +2,12 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.4.1] - Unreleased
+
+### Fixed
+
+- `EventContracts.Verify` leaves out a property marked `[JsonIgnore]`, because System.Text.Json never writes it. Before, the lockfile listed it, so a computed, ignored property added to a type inside a locked event failed the check as "added as non-nullable", although the stored JSON did not change. A property ignored only when null or default stays in the lockfile, because it is still written. A lockfile written before 0.4.1 that lists an ignored property now fails with "was removed" for it: delete that member from the lockfile line, because stored events never held it ([#5](https://github.com/alternayte/deedbox/issues/5)).
+
 ## [0.4.0] - 2026-09-29
 
 ### Added
@@ -81,6 +87,7 @@ The first release. It targets .NET 8 and .NET 10.
 - `IEventStoreAdmin`, metrics, traces, and DBX error codes that link to their docs pages.
 - Native `json` columns on SQL Server 2025 and Azure SQL, with `UseSqlServer(connectionString, sql => sql.NativeJson = true)`. Applying the schema converts existing `nvarchar(max)` columns.
 
+[0.4.1]: https://github.com/alternayte/deedbox/releases/tag/v0.4.1
 [0.4.0]: https://github.com/alternayte/deedbox/releases/tag/v0.4.0
 [0.3.1]: https://github.com/alternayte/deedbox/releases/tag/v0.3.1
 [0.3.0]: https://github.com/alternayte/deedbox/releases/tag/v0.3.0
