@@ -340,3 +340,4 @@ Spec: `docs/specs/pseudonyms.md` (issue alternayte/deedbox#3, a prerequisite for
 - `RewrapKeysAsync` re-wraps pseudonym secrets in the same transaction as tenant keys and counts them.
 - `deedbox erase --identity` requires `--master-key`, because the CLI unwraps the secrets itself.
 - VersionPrefix is 0.4.0, with package validation against 0.3.1.
+- Released on 2026-09-29: https://github.com/alternayte/deedbox/releases/tag/v0.4.0. All nine packages pushed through trusted publishing.
