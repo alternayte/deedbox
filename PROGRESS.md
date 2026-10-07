@@ -367,4 +367,5 @@ Spec: `docs/specs/hardening-before-1-0.md` (from the 1.0 readiness review of 202
 - The Kubernetes guide keeps the health check off both probes. The spec said "readiness probe"; a readiness probe takes every pod out of the Service while a subscription is stalled.
 - `IEventStore` and `IAppendingHook` keep their names without `Async`. The interface default bodies of `IEventStoreAdmin` stay.
 - Upgrade tests build `tests/Deedbox.OldVersion` against 0.1.0, 0.2.1, 0.3.1 and 0.4.1 from nuget.org. `tests/Deedbox.Aot` is published with native AOT by `just aot`. Both projects are outside the solution.
-- Package validation against 0.4.1 has suppressions in `src/Deedbox/CompatibilitySuppressions.xml` for the listed API breaks. Remove the file when 0.5.0 is the baseline.
+- Package validation against 0.4.1 needed suppressions for the listed API breaks. They are gone: 0.5.0 is the baseline now, and VersionPrefix is 0.5.1.
+- Released on 2026-10-07: https://github.com/alternayte/deedbox/releases/tag/v0.5.0. All nine packages pushed through trusted publishing in one attempt. The docs site was deployed with wrangler from a local build, because CI has no CLOUDFLARE_API_TOKEN.
