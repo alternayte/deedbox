@@ -17,6 +17,10 @@ This guide shows you how to store personal data so that you can erase one person
 
 `[DataSubject]` marks whose data the event carries. Each `[PersonalData]` field is encrypted under that subject's own key. A personal-data property must be a string or nullable, because it reads as null after erasure.
 
+- Put `[PersonalData]` on a property of the event itself. On a type nested in the event, start-up fails with [DBX026](/reference/errors/dbx026/).
+- Deedbox takes the property's JSON name from the serializer's contract, so a renamed property is still encrypted.
+- A subject ID has 1 to 100 characters, with no white space at its start or end ([DBX027](/reference/errors/dbx027/)).
+
 Use person IDs, not role IDs, as subjects. One erasure then covers every role a person has.
 
 <PersonalDataSeveral />
@@ -37,15 +41,20 @@ See [rotate keys](/how-to/rotate-keys/) to move between modes.
 
 <EraseSubject />
 
-1. Deedbox deletes the subject's key and clears the stored state of every stream with their data, in one transaction. From then on, every read returns their fields as null (or the `RedactWith` placeholder).
-2. A job appends a `SubjectErased` event to each of those streams and stores rebuilt state. Handle `SubjectErased` in your projections to scrub what they stored.
-3. The job resumes after a crash.
+1. Deedbox deletes the subject's key, clears the stored state of every stream with their data, and queues a job, in one transaction. When the call returns, no load reads their data: every read returns their fields as null (or the `RedactWith` placeholder).
+2. The job appends a `SubjectErased` event to each of those streams and stores rebuilt state. Handle `SubjectErased` in your projections to scrub what they stored.
+3. Each instance handles the stream types that it registers. The job waits for an instance that registers the rest.
+4. The job resumes after a crash. It deletes no key, so a subject who comes back keeps their new key.
 
-From the CLI: `deedbox erase person:8421 --tenant acme`.
+From the CLI: `deedbox erase person:8421 --tenant acme`. The command exits 1 when it deleted no key.
+
+From the admin API, `IEventStoreAdmin.EraseSubjectAsync(subjectId, tenantId)` erases in a named tenant. The tenant is required; pass `""` when the app has no tenants. It returns an `ErasureResult` with `JobIds` and `KeysDeleted`. Zero keys means the subject ID or the tenant is wrong, or the subject was erased before.
 
 ## Know the limits
 
 - Backups taken before an erasure still hold the subject's key until they age out. Set your backup retention with this in mind.
 - Metadata and subject IDs are not encrypted. Use pseudonymous IDs such as `person:8421`. [Use pseudonymous subject IDs](/how-to/use-pseudonymous-ids/) shows how Deedbox makes them from an email or a login.
 - Only top-level properties are encrypted.
+- Deedbox does not erase outbox rows, your read models or your other tables. Scrub them when you handle `SubjectErased`.
+- An exception's message can hold personal data. Deedbox stores only the exception type and stack frames for a stall or a failed job, but your app's log holds the message.
 - Data written about the subject after the erasure uses a new key and stays readable.

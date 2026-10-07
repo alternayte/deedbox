@@ -17,20 +17,25 @@ public static class KeyProviderCompliance
 
         var key = RandomNumberGenerator.GetBytes(32);
         var wrapped = await provider.WrapAsync(key, ct);
-        var version = provider.KeyVersion;
+        var version = wrapped.KeyVersion;
 
         Check(!string.IsNullOrWhiteSpace(version) && version.Contains(':', StringComparison.Ordinal),
-            $"KeyVersion '{version}' must name the provider and the key, such as env:v1.");
-        Check(!wrapped.AsSpan().SequenceEqual(key), "WrapAsync returned the key unwrapped.");
-        Check((await provider.UnwrapAsync(wrapped, version, ct)).AsSpan().SequenceEqual(key), "UnwrapAsync did not return the wrapped key.");
+            $"The key version '{version}' must name the provider and the key, such as env:v1.");
+        Check(!wrapped.Bytes.AsSpan().SequenceEqual(key), "WrapAsync returned the key unwrapped.");
+        Check((await provider.UnwrapAsync(wrapped.Bytes, version, ct)).AsSpan().SequenceEqual(key), "UnwrapAsync did not return the wrapped key.");
 
-        var again = await provider.WrapAsync(key, ct);
-        Check((await provider.UnwrapAsync(again, provider.KeyVersion, ct)).AsSpan().SequenceEqual(key), "A second wrap of the same key did not unwrap.");
+        // Wraps that overlap must each unwrap with the version their own call returned.
+        var overlapping = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => provider.WrapAsync(key, ct)));
+        foreach (var again in overlapping)
+        {
+            Check((await provider.UnwrapAsync(again.Bytes, again.KeyVersion, ct)).AsSpan().SequenceEqual(key),
+                "A wrap that overlapped another did not unwrap with the key version it returned.");
+        }
 
-        var altered = (byte[])wrapped.Clone();
+        var altered = (byte[])wrapped.Bytes.Clone();
         altered[altered.Length / 2] ^= 0x01;
         await CheckThrows(() => provider.UnwrapAsync(altered, version, ct), "UnwrapAsync accepted altered bytes. It must verify what it unwraps.");
-        await CheckThrows(() => provider.UnwrapAsync(wrapped, version + "-unknown", ct), "UnwrapAsync accepted an unknown key version.");
+        await CheckThrows(() => provider.UnwrapAsync(wrapped.Bytes, version + "-unknown", ct), "UnwrapAsync accepted an unknown key version.");
     }
 
     private static void Check(bool condition, string failure)

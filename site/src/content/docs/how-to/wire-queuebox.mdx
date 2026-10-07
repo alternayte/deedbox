@@ -28,10 +28,12 @@ This guide shows you how to send events to other systems with [QueueBox](https:/
 | --- | --- |
 | `id` | The event ID. A destination deduplicates on `X-Message-Id`. |
 | `topic` | The topic you chose. |
-| `key` | The stream ID, so one stream's messages keep their order. |
+| `key` | The stream ID. It groups one stream's messages; it does not order them. |
 | `payload` | The event's JSON, or the payload you shaped. |
-| `headers` | `X-Correlation-Id`, `traceparent`, and the event's type, stream and version, plus the headers you add. |
+| `headers` | `X-Correlation-Id`, `traceparent`, and the event's type, stream and version, plus the headers you add. The stream version is in `x-deedbox-stream-version`. |
 | `aggregate_type` | The stream type. |
+
+One stream's messages can reach a destination out of order: the events of one append share an outbox time, and QueueBox publishes a batch concurrently. A receiver that needs order compares `x-deedbox-stream-version` and drops a message older than the one it holds.
 
 An event with `[PersonalData]` needs a payload you shape; start-up fails otherwise ([DBX032](/reference/errors/dbx032/)).
 

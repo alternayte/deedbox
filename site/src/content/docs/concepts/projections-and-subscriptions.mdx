@@ -12,24 +12,37 @@ This page explains the two kinds of handler and the guarantee each one gives.
 | | Projection | Subscription |
 | --- | --- | --- |
 | Writes to | The same database | Anything: email, HTTP, other systems |
-| Checkpoint | In the same transaction as its writes | After the handler succeeds |
+| Checkpoint | In the same transaction as its writes | After each event, when the handler succeeds |
 | Guarantee | Each event's effect happens exactly once | Each event arrives at least once |
 | Idempotency key | Not needed | `EventId`, or `StreamId` with `Version` |
 | Run modes | Inline or async | Async only |
 
 A projection can promise exactly once because its writes and its checkpoint commit together. A subscription cannot: an email can be sent and the process can die before the checkpoint moves. Pass the event ID on as an idempotency key.
 
+The runner commits a subscription's checkpoint after each event, so a crash repeats one event, not a batch. A batch projection still commits once per batch.
+
 <Subscription />
+
+## Where a new subscription starts
+
+A new subscription starts at the first event. On a store that already holds events, it handles all of them, so its side effects run for the whole history. Start-up then logs warning event 5 with the number of events.
+
+To handle only later events, register it with `Subscription<T>(name, SubscriptionStart.Now)`. It then starts after the newest stored event. The choice applies when Deedbox first creates the subscription's checkpoint; it has no effect afterwards.
 
 ## When a handler fails
 
 1. The runner retries the event with growing delays, up to `HandlerRetries` times.
-2. Then it sets that consumer to `stalled`, and records the stream, version, event type and exception.
+2. Then it sets that consumer to `stalled`, and records the stream, version, event type, exception type and stack frames. It never stores the exception's message, which can hold personal data; the message is in your app's log.
 3. Metrics, logs, the health check and `deedbox status` report it.
 4. The runner retries the event every 5 minutes, one attempt at a time across all instances. When the event succeeds, the consumer runs again.
 5. You fix the cause, or [skip the one event](/operations/poison-event/) with an audited job.
 
-No timeout ever moves a consumer past an event it did not handle.
+No timeout ever moves a consumer past an event it did not handle. An inline projection that stalls in catch-up follows the same steps.
+
+Two cases differ from a plain failure:
+
+- **A handler that does not return.** After `HandlerTimeout`, 5 minutes by default, the runner cancels the call through the handler's cancellation token and counts a failed attempt. For a batch projection, the limit covers the one call for the whole batch. A subscription handler that ignores the token is left behind 10 seconds later. A projection handler writes in the batch's transaction, so the runner waits for it: pass `ctx.CancellationToken` to everything a projection handler awaits.
+- **A transient database error**, such as a failover, a lost connection or a deadlock victim. The runner retries with backoff and counts no attempt, so a short database outage stalls no consumer. Log event 29 records each one.
 
 ## Causation and tracing
 

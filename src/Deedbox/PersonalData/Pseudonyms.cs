@@ -104,8 +104,8 @@ internal sealed class Pseudonymizer(DeedboxProvider provider, IMasterKeyProvider
         if (row is null)
         {
             // Created in its own committed transaction: a rolled-back append must never leave a secret in memory only.
-            await provider.InsertPseudonymKey(connection, null,
-                new PseudonymKeyRow(tenantId, periodId, prefix, await master.WrapAsync(Crypto.NewKey(), ct), master.KeyVersion), ct);
+            var wrapped = await master.WrapAsync(Crypto.NewKey(), ct);
+            await provider.InsertPseudonymKey(connection, null, new PseudonymKeyRow(tenantId, periodId, prefix, wrapped.Bytes, wrapped.KeyVersion), ct);
             row = await provider.ReadPseudonymKey(connection, null, tenantId, periodId, ct)
                 ?? throw new InvalidOperationException($"The pseudonym secret of period '{periodId}' in tenant '{tenantId}' vanished while it was created.");
         }
@@ -233,10 +233,10 @@ internal sealed class Pseudonyms(DeedboxRuntime runtime, DeedboxContext context)
         return runtime.RequirePseudonyms().SubjectFor(tenantId, identity, periodId, runtime.Options.PseudonymPrefix, ct);
     }
 
-    public Task<IReadOnlyList<Guid>> EraseIdentityAsync(string identity, CancellationToken ct = default)
+    public async Task<IReadOnlyList<Guid>> EraseIdentityAsync(string identity, CancellationToken ct = default)
     {
         Pseudonymizer.ValidateIdentity(identity);
         var tenantId = DeedboxContext.ValidTenant(context.TenantId);
-        return Admin.EraseIdentity(runtime.Provider, runtime.RequirePseudonyms(), runtime.Clock, tenantId, identity, ct);
+        return (await Admin.EraseIdentity(runtime.Provider, runtime.RequirePseudonyms(), runtime.Clock, tenantId, identity, ct)).JobIds;
     }
 }

@@ -31,7 +31,7 @@ internal static class Enlistment
         }
 
         work.Items[typeof(T)] = db;
-        work.BeforeCounter(ct => db.SaveChangesAsync(ct));
+        work.BeforeCounter(ct => InTransaction.Run(db, () => db.SaveChangesAsync(ct), ct));
         work.Cleanup(db);
         return db;
     }

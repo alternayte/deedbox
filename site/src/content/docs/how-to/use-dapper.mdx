@@ -14,12 +14,18 @@ This guide shows you how to append events in a transaction you own, with Dapper 
 
 `UseTransaction` returns a store that runs every operation in your transaction. Deedbox never commits or rolls it back. Inline projections and appending hooks run in it too.
 
+A failed append rolls back to a savepoint and leaves the rest of your transaction as it was. You can catch the error and commit your other work.
+
 The position counter stays locked from your append until your commit. Commit soon after the append; other appends wait meanwhile.
 
 ## Write a projection with the same connection
 
 <ProjectionAdo />
 
-## Append to one stream per transaction
+## Make one append per transaction
 
-A transaction that appends to two streams holds the counter from its first append while it waits for the second stream. A concurrent append can hold that stream and wait for the counter. The database then aborts one transaction as a deadlock. Nothing is lost or reordered, but that transaction fails. Append to one stream per transaction, or retry the transaction when it fails.
+A transaction holds the counter from its first append until it commits. A second append in the same transaction takes more locks while it holds the counter. A concurrent append, or the cut-over of an inline projection, can hold one of those locks and wait for the counter. The database then aborts one transaction as a deadlock. Nothing is lost or reordered, but that transaction fails. Make one append per transaction, or run the transaction again when it fails.
+
+## Run the transaction again after DBX038
+
+An append in your transaction fails with [DBX038](/reference/errors/dbx038/) when Deedbox did not count this instance as live, for example after a pause of the process. Roll the transaction back and run it again. See [an instance whose heartbeat is late](/concepts/inline-or-async/#an-instance-whose-heartbeat-is-late).

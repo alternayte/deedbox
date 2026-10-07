@@ -9,9 +9,9 @@ This page explains the global position, and the design choice that makes it safe
 
 ## Every event has a global position
 
-Positions order every event of the store. They are gapless and follow commit order: an event at position 11 commits after the event at position 10. So when a reader sees position 11, position 10 is already committed. A reader that asks for "everything after my checkpoint" never misses an event that commits later.
+Positions order every event of the store. Deedbox assigns them without gaps, in commit order: an event at position 11 commits after the event at position 10. So when a reader sees position 11, position 10 is already committed. A reader that asks for "everything after my checkpoint" never misses an event that commits later.
 
-Compare positions; never do arithmetic on them. Deleting a stream removes its events and leaves gaps.
+Compare positions; never do arithmetic on them. Deedbox assigns every position without a gap. Deleting a stream removes that stream's earlier events, so the stored positions can have gaps afterwards.
 
 ## One counter serializes appends
 
@@ -21,11 +21,11 @@ In one append, in this order:
 
 1. Lock and update the stream row.
 2. Run inline projections and appending hooks.
-3. Update the position counter.
+3. Update the position counter, and check this instance's [heartbeat row](/concepts/inline-or-async/#an-instance-whose-heartbeat-is-late) in the same statement.
 4. Insert the events at the new positions.
 5. Commit, which releases the counter.
 
-The cost is that appends take turns for that short window. See [the benchmarks](/operations/benchmarks/) for the ceiling. A transaction you own keeps the counter locked until you commit, so commit soon after an append.
+The cost is that appends take turns for that short window. See [the benchmarks](/operations/benchmarks/) for the ceiling. A transaction you own keeps the counter locked until you commit, so commit soon after an append. When Deedbox owns the transaction, its commit does not take your cancellation token, so a cancelled request never leaves the write in doubt.
 
 ## Reads stop at the committed head
 

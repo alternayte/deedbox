@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    A small app built against a RELEASED Deedbox from nuget.org, never against this repository. The upgrade tests run it
+    to write a store as that release wrote it, and again to append with the old release after this build migrated the
+    schema. It is not in the solution: `dotnet build Deedbox.slnx` must not need an old package.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0</TargetFrameworks>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <IsTestProject>false</IsTestProject>
+    <DeedboxVersion Condition="'$(DeedboxVersion)' == ''">0.4.1</DeedboxVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Deedbox.Postgres" Version="[$(DeedboxVersion)]" />
+    <PackageReference Include="Deedbox.SqlServer" Version="[$(DeedboxVersion)]" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+  </ItemGroup>
+</Project>

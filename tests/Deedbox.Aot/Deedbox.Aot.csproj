@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Published with native AOT and run by scripts/aot-check.sh. IsAotCompatible on the packages only turns the analyzers
+    on; this app proves that a trimmed native binary appends, loads and erases. It is not in the solution, because a
+    native publish needs a platform toolchain that `dotnet build Deedbox.slnx` must not need.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Deedbox/Deedbox.csproj" />
+    <ProjectReference Include="../../src/Deedbox.Postgres/Deedbox.Postgres.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+</Project>

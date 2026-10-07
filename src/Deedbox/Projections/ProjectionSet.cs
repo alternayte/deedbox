@@ -11,9 +11,9 @@ internal sealed record ProjectionRegistration(
 
 internal sealed record RegisteredProjection(string Name, Run Run, ProjectionBase Instance);
 
-internal sealed record SubscriptionRegistration(string Name, Type Type, Func<IServiceProvider, Subscription> Create);
+internal sealed record SubscriptionRegistration(string Name, Type Type, SubscriptionStart Start, Func<IServiceProvider, Subscription> Create);
 
-internal sealed record RegisteredSubscription(string Name, Subscription Instance);
+internal sealed record RegisteredSubscription(string Name, SubscriptionStart Start, Subscription Instance);
 
 /// <summary>
 /// The app's projections, created once from the root container. Handlers must keep no state between
@@ -24,7 +24,7 @@ internal sealed class ProjectionSet
     public ProjectionSet(DeedboxRuntime runtime, IServiceProvider services)
     {
         All = runtime.Options.Projections.Select(p => new RegisteredProjection(p.Name, p.Run, p.Create(services))).ToList();
-        Subscriptions = runtime.Options.Subscriptions.Select(s => new RegisteredSubscription(s.Name, s.Create(services))).ToList();
+        Subscriptions = runtime.Options.Subscriptions.Select(s => new RegisteredSubscription(s.Name, s.Start, s.Create(services))).ToList();
 
         foreach (var projection in All)
         {

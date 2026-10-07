@@ -12,24 +12,27 @@ This runbook helps you handle a poison event: an event that makes a handler thro
 ## What Deedbox has done
 
 1. It retried the event, with growing delays, `HandlerRetries` times.
-2. It set the consumer to `stalled` and recorded the event. Other consumers keep running.
+2. It set the consumer to `stalled` and recorded the event, the exception type and the stack frames. Other consumers keep running.
 3. It retries the event every 5 minutes. When the event succeeds, the consumer runs again without a restart.
 4. No event after it was applied, and no event was skipped.
 
 If the cause was outside the handler, such as a service that was down, the consumer runs again at the next retry after the cause is gone.
 
+An inline projection that stalls in catch-up gets the same retries. A transient database error, such as a failover, counts no attempt, so it does not cause a stall.
+
 ## Steps
 
-1. Run `deedbox status`. It shows the event ID, event type, stream, version and exception, the attempts so far, and the time of the next retry.
-2. Read the stream and the exception. Decide whether the handler, the event or a service it calls is wrong.
-3. If the handler is wrong, fix it and deploy. At start-up, a poison stall gets one more round of retries at once, and the consumer moves on once the event succeeds.
-4. If the event can never be handled, skip it:
+1. Run `deedbox status`. It shows the event ID, event type, stream, version and exception type, the attempts so far, and the time of the next retry.
+2. Find the exception in your app's log: log event 22 records each failed attempt. Deedbox never stores the message, because it can hold personal data. A `TimeoutException` means that the handler passed `HandlerTimeout`.
+3. Read the stream. Decide whether the handler, the event or a service it calls is wrong.
+4. If the handler is wrong, fix it and deploy. At start-up, a poison stall gets one more round of retries at once, and the consumer moves on once the event succeeds.
+5. If the event can never be handled, skip it:
 
    ```sh
    deedbox skip cart_totals --event 01a0d1cd-e1f2-73f6-9d0b-bd9eec9e61c9 --wait
    ```
 
-   The job checks that this is the event the consumer stalled on, moves the checkpoint one event past it, and records the event and the stall in the jobs table.
+   The job checks that this is the event the consumer stalled on, moves the checkpoint one event past it, and records the event and the stall in the jobs table. A skip puts an inline projection that stalled in catch-up back in catch-up, so it applies every later event before it runs inline again.
 
 The same operations are on the admin API:
 

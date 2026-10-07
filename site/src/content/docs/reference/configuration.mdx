@@ -16,7 +16,8 @@ This page lists every setting of `AddDeedbox`.
 | `ExecuteRetries(n)` | 3 | How often `Execute` reruns a decision after a creation race. |
 | `ConfigureJson(o => ...)` | web defaults (camelCase); enums as numbers | Deedbox's own JSON options. The app's global options never apply. |
 | `UseJsonContext(context)` | reflection | Source-generated contracts, for trimmed and native AOT apps. |
-| `Keys(k => ...)` | none; required with `[PersonalData]` | `StoreInDatabase()`, `FromEnvironment(var)`, `FromKeyRing(ring)`, `Use(provider)`, `RedactWith(text)`. |
+| `Keys(k => ...)` | none; required with `[PersonalData]` | `StoreInDatabase()`, `FromEnvironment(var)`, `FromKeyRing(ring)`, `Use(provider)`, `RedactWith(text)`. `AlsoUnwrapWith(k => ...)` adds a master key that only unwraps; see [rotate keys](/how-to/rotate-keys/). |
+| `Subscription<T>(name, start)` | `SubscriptionStart.FirstEvent` | Where a new subscription starts. `SubscriptionStart.Now` starts after the newest stored event. It applies only when the checkpoint is first created. |
 | `PseudonymPrefix(prefix)` | `person:` | The prefix of every subject ID that `IPseudonyms` computes. Set it once; a period keeps the prefix it was created with. |
 | `Runner(r => r.Enabled)` | true | Runs async projections, subscriptions and jobs in this process. |
 | `Runner(r => r.BatchSize)` | 500 | Most events per batch. |
@@ -24,6 +25,7 @@ This page lists every setting of `AddDeedbox`.
 | `Runner(r => r.MaxPollDelay)` | 5 s | Longest wait when idle. Postgres wakes sooner on LISTEN/NOTIFY. |
 | `Runner(r => r.HandlerRetries)` | 5 | Retries before a consumer stalls. A stalled consumer still retries every 5 minutes. |
 | `Runner(r => r.RetryDelay)` | 1 s | First retry delay; it doubles, up to 5 minutes. |
+| `Runner(r => r.HandlerTimeout)` | 5 min | The longest one handler call may run; for a batch projection, the one call for the whole batch. The runner cancels a longer call through its cancellation token and counts a failed attempt. |
 | `Runner(r => r.StallAfter)` | 10 min | The health check's "not moving" limit. |
 
 Per stream type:

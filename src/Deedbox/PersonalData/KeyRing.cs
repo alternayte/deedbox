@@ -47,7 +47,7 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
             // A shredded tenant's versions stay as tombstones, so a new key never reuses a version another instance cached.
             var version = rows.Where(r => r.TenantId == tenantId).Select(r => r.KeyVersion).DefaultIfEmpty(0).Max() + 1;
             var wrapped = await master.WrapAsync(Crypto.NewKey(), ct);
-            await provider.InsertMasterKey(connection, null, new MasterKeyRow(tenantId, version, wrapped, master.KeyVersion), ct);
+            await provider.InsertMasterKey(connection, null, new MasterKeyRow(tenantId, version, wrapped.Bytes, wrapped.KeyVersion), ct);
             await Load(await provider.ReadMasterKeys(connection, null, ct), ct);
             return Newest(_tenants[tenantId]);
         }
@@ -97,25 +97,24 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
         await connection.OpenAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
         var rows = await provider.ReadMasterKeys(connection, transaction, ct);
-        var count = 0;
-        foreach (var row in rows.Where(r => r.KeyVersion > 0 && r.WrappedBy != Shredded))
-        {
-            if (row.WrappedBy == target.KeyVersion)
-                continue;
-            var key = await master.UnwrapAsync(row.WrappedKey, row.WrappedBy, ct);
-            await provider.UpdateMasterKey(connection, transaction, row with { WrappedKey = await target.WrapAsync(key, ct), WrappedBy = target.KeyVersion }, ct);
-            count++;
-        }
+        var secrets = await provider.ReadPseudonymKeys(connection, transaction, null, ct);
+
+        // Every key is wrapped before the first row changes. A master key provider may read the database itself, on its
+        // own connection, and would wait for ever on a row that this transaction has already updated.
+        var keys = new List<(MasterKeyRow Row, WrappedKey Wrapped)>();
+        foreach (var row in rows.Where(r => r.KeyVersion > 0 && r.WrappedBy != Shredded && r.WrappedBy != target.KeyVersion))
+            keys.Add((row, await target.WrapAsync(await master.UnwrapAsync(row.WrappedKey, row.WrappedBy, ct), ct)));
 
         // Pseudonym secrets keep their bytes, so no subject ID changes.
-        foreach (var row in await provider.ReadPseudonymKeys(connection, transaction, null, ct))
-        {
-            if (row.Destroyed || row.WrappedBy == target.KeyVersion)
-                continue;
-            var secret = await master.UnwrapAsync(row.WrappedKey, row.WrappedBy, ct);
-            await provider.UpdatePseudonymKey(connection, transaction, row with { WrappedKey = await target.WrapAsync(secret, ct), WrappedBy = target.KeyVersion }, ct);
-            count++;
-        }
+        var periods = new List<(PseudonymKeyRow Row, WrappedKey Wrapped)>();
+        foreach (var row in secrets.Where(r => !r.Destroyed && r.WrappedBy != target.KeyVersion))
+            periods.Add((row, await target.WrapAsync(await master.UnwrapAsync(row.WrappedKey, row.WrappedBy, ct), ct)));
+
+        foreach (var (row, wrapped) in keys)
+            await provider.UpdateMasterKey(connection, transaction, row with { WrappedKey = wrapped.Bytes, WrappedBy = wrapped.KeyVersion }, ct);
+        foreach (var (row, wrapped) in periods)
+            await provider.UpdatePseudonymKey(connection, transaction, row with { WrappedKey = wrapped.Bytes, WrappedBy = wrapped.KeyVersion }, ct);
+        var count = keys.Count + periods.Count;
 
         if (target is not DatabaseMasterKey && rows.Any(r => r.KeyVersion == 0))
             await provider.DeleteMasterKey(connection, transaction, "", 0, ct);
@@ -169,7 +168,7 @@ internal sealed class KeyRing(DeedboxProvider provider, IMasterKeyProvider maste
 }
 
 /// <summary>Subject keys for one operation: an append, a load, or a runner batch. Never shared across operations.</summary>
-internal sealed class SubjectKeys(KeyRing ring, DeedboxProvider provider, DbConnection connection, DbTransaction? transaction, string tenantId)
+internal sealed class SubjectKeys(KeyRing ring, DeedboxProvider provider, DbConnection connection, DbTransaction? transaction, string tenantId, int format = 1)
 {
     private readonly Dictionary<string, byte[]?> _byId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string KeyId, byte[] Key)> _bySubject = new(StringComparer.Ordinal);
@@ -187,7 +186,7 @@ internal sealed class SubjectKeys(KeyRing ring, DeedboxProvider provider, DbConn
             var (version, intermediate) = await ring.Current(tenantId, ct, verify: true);
             var keyId = Crypto.NewKeyId();
             await provider.InsertSubjectKey(connection, write,
-                new SubjectKeyRow(tenantId, subjectId, keyId, Crypto.WrapSubjectKey(intermediate, version, Crypto.NewKey(), tenantId, keyId)), ct);
+                new SubjectKeyRow(tenantId, subjectId, keyId, Crypto.WrapSubjectKey(intermediate, version, Crypto.NewKey(), tenantId, keyId, format)), ct);
             row = await provider.ReadSubjectKey(connection, write, tenantId, subjectId, ct)
                 ?? throw new InvalidOperationException($"The key for subject '{subjectId}' vanished while it was created.");
         }

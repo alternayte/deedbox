@@ -57,6 +57,8 @@ public abstract class PersonalDataTests(Databases databases, Db db) : RunnerTest
         Assert.Contains("$enc", payload, StringComparison.Ordinal);
         Assert.DoesNotContain("Ada", state, StringComparison.Ordinal);
         Assert.Contains("$state", state, StringComparison.Ordinal);
+        Assert.Contains("\"v2:", payload, StringComparison.Ordinal);
+        Assert.Contains("\"v2:", state, StringComparison.Ordinal);
 
         Assert.Equal(["Ada Lovelace", "Grace Hopper"], (await StoreOf(host).Load<Manuscript>("m-1")).State.Names);
         await Execute($"UPDATE {Table("streams")} SET state = NULL");
@@ -137,10 +139,10 @@ public abstract class PersonalDataTests(Databases databases, Db db) : RunnerTest
 
         // A crashed run erased one stream before stopping; the queued job finishes the other.
         await RuntimeOf(host).Keys!.LoadAll(Ct);
-        await SubjectErasure.DeleteKey(RuntimeOf(host), "", "person:1", Ct);
+        var started = await Admin.Erase(RuntimeOf(host).Provider, TimeProvider.System, "", ["person:1"], Ct);
         var scope = host.Services.CreateScope();
         await ((EventStore)scope.ServiceProvider.GetRequiredService<IEventStore>()).EraseFromStream("m-1", "person:1", Ct);
-        await WaitForJob(host, await Enqueue(host, Jobs.Erase, new JsonObject { ["tenantId"] = "", ["subjectId"] = "person:1" }));
+        await WaitForJob(host, started.JobIds[0]);
         await WaitForJob(host, await Enqueue(host, Jobs.Erase, new JsonObject { ["tenantId"] = "", ["subjectId"] = "person:1" }));
 
         Assert.Equal(["m-1", "m-2"], await Strings($"SELECT stream_id FROM {Table("events")} WHERE event_type = 'deedbox.subject_erased' ORDER BY stream_id"));
@@ -245,6 +247,189 @@ public abstract class PersonalDataTests(Databases databases, Db db) : RunnerTest
     }
 
     [Fact]
+    public async Task A_personal_field_is_encrypted_under_the_name_the_json_contract_gives_it()
+    {
+        // The contract renames the property, so a name derived from the naming policy would miss it and store plain text.
+        var resolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver
+        {
+            Modifiers =
+            {
+                info =>
+                {
+                    foreach (var property in info.Properties.Where(p => p.Name == "reviewerName"))
+                        property.Name = "n";
+                },
+            },
+        };
+        var host = await StartHost(NewProbe(), b => InDatabase()(b.ConfigureJson(o => o.TypeInfoResolver = resolver)));
+
+        await StoreOf(host).Append("m-1", ExpectedVersion.NoStream, [Ada]);
+
+        var payload = await Scalar<string>($"SELECT payload FROM {Table("events")} WHERE global_position = 1");
+        Assert.DoesNotContain("Ada", payload, StringComparison.Ordinal);
+        Assert.Equal(["Ada Lovelace"], (await StoreOf(host).Load<Manuscript>("m-1")).State.Names);
+    }
+
+    [Fact]
+    public async Task A_field_copied_to_another_event_or_property_does_not_verify()
+    {
+        var host = await StartHost(NewProbe(), InDatabase());
+        await StoreOf(host).Append("m-1", ExpectedVersion.NoStream, [Ada]);
+        await StoreOf(host).Append("m-2", ExpectedVersion.NoStream, [Ada with { ManuscriptId = "m-2", ReviewerName = "Countess of Lovelace" }]);
+
+        // Both fields are under the same subject key, so only the binding to the event and the property tells them apart.
+        var first = JsonNode.Parse(await Scalar<string>($"SELECT payload FROM {Table("events")} WHERE global_position = 1"))!.AsObject();
+        var second = JsonNode.Parse(await Scalar<string>($"SELECT payload FROM {Table("events")} WHERE global_position = 2"))!.AsObject();
+        var moved = second.DeepClone().AsObject();
+        moved["reviewerName"] = first["reviewerName"]!.DeepClone();
+        var swapped = second.DeepClone().AsObject();
+        swapped["reviewerName"] = second["reviewerEmail"]!.DeepClone();
+        await Execute($"UPDATE {Table("streams")} SET state = NULL");
+
+        await Execute($"UPDATE {Table("events")} SET payload = '{moved.ToJsonString()}' WHERE global_position = 2");
+        Assert.Equal("DBX030", (await Assert.ThrowsAsync<DeedboxException>(() => StoreOf(host).Load<Manuscript>("m-2"))).Code);
+
+        await Execute($"UPDATE {Table("events")} SET payload = '{swapped.ToJsonString()}' WHERE global_position = 2");
+        Assert.Equal("DBX030", (await Assert.ThrowsAsync<DeedboxException>(() => StoreOf(host).Load<Manuscript>("m-2"))).Code);
+
+        await Execute($"UPDATE {Table("events")} SET payload = '{second.ToJsonString()}' WHERE global_position = 2");
+        Assert.Equal(["Countess of Lovelace"], (await StoreOf(host).Load<Manuscript>("m-2")).State.Names);
+    }
+
+    [Fact]
+    public async Task Appends_write_the_older_format_while_an_instance_that_cannot_read_the_newer_one_has_a_heartbeat()
+    {
+        // A row from a version before the formats column reads as format 1, as during a rolling deploy from 0.4.
+        var host = await StartHost(NewProbe(), InDatabase());
+        var old = Guid.NewGuid();
+        await Execute($"INSERT INTO {Table("instances")} (instance_id, host, app, consumers, inline_projections, event_types) VALUES ('{old}', 'old', 'old', '[]', '[]', '[]')");
+        await WaitFor(() => Task.FromResult(RuntimeOf(host).Formats == 1), "the heartbeat to see the old instance");
+
+        await StoreOf(host).Append("m-1", ExpectedVersion.NoStream, [Ada]);
+        Assert.Contains("\"v1:", await Scalar<string>($"SELECT payload FROM {Table("events")} WHERE global_position = 1"), StringComparison.Ordinal);
+        Assert.Contains("\"v1:", await Scalar<string>($"SELECT state FROM {Table("streams")}"), StringComparison.Ordinal);
+
+        await Execute($"DELETE FROM {Table("instances")} WHERE instance_id = '{old}'");
+        await WaitFor(() => Task.FromResult(RuntimeOf(host).Formats == 2), "the heartbeat to see that the old instance is gone");
+        await StoreOf(host).Append("m-1", ExpectedVersion.Exact(1), [Grace]);
+
+        Assert.Contains("\"v2:", await Scalar<string>($"SELECT payload FROM {Table("events")} WHERE global_position = 2"), StringComparison.Ordinal);
+        Assert.Equal(["Ada Lovelace", "Grace Hopper"], (await StoreOf(host).Load<Manuscript>("m-1")).State.Names);
+    }
+
+    [Fact]
+    public async Task The_key_mode_changes_on_a_running_app_when_the_old_key_stays_for_unwrapping()
+    {
+        var ring = Keys.Ring($"{Schema}-new");
+        var first = await StartHost(NewProbe(), InDatabase());
+        await StoreOf(first).Append("m-1", ExpectedVersion.NoStream, [Ada]);
+        await StopHost(first);
+
+        // The new key wraps; the database key still unwraps what it wrapped.
+        var host = await StartHost(NewProbe(), b => { Keys.Streams(b); b.Keys(k => k.FromKeyRing(ring).AlsoUnwrapWith(o => o.StoreInDatabase())); });
+        Assert.Equal(["Ada Lovelace"], (await StoreOf(host).Load<Manuscript>("m-1")).State.Names);
+        Assert.Equal(1, await host.Services.GetRequiredService<IEventStoreAdmin>().RewrapKeysAsync(new KeyRingMasterKey(ring)));
+        Assert.Equal(0, await Scalar<int>($"SELECT COUNT(*) FROM {Table("master_keys")} WHERE key_version = 0 OR wrapped_by NOT LIKE 'env:%'"));
+
+        // The same instance goes on: an old stream, a new subject, a new tenant and a pseudonym, with no DBX029.
+        await StoreOf(host).Append("m-1", ExpectedVersion.Exact(1), [Grace]);
+        var (store, _) = Tenant(host, "acme");
+        await store.Append("m-9", ExpectedVersion.NoStream, [Ada]);
+        var scope = host.Services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<DeedboxContext>().TenantId = "acme";
+        Assert.StartsWith("person:", await scope.ServiceProvider.GetRequiredService<IPseudonyms>().SubjectForAsync("github:ada", "2026-Q4"), StringComparison.Ordinal);
+        await StopHost(host);
+
+        var after = await StartHost(NewProbe(), b => { Keys.Streams(b); b.Keys(k => k.FromKeyRing(ring)); });
+        Assert.Equal(["Ada Lovelace", "Grace Hopper"], (await StoreOf(after).Load<Manuscript>("m-1")).State.Names);
+        Assert.Equal(["Ada Lovelace"], (await Tenant(after, "acme").Store.Load<Manuscript>("m-9")).State.Names);
+    }
+
+    [Theory]
+    [InlineData(101, "")]
+    [InlineData(10, " ")]
+    public async Task A_subject_id_follows_the_stream_id_rules(int length, string suffix)
+    {
+        var host = await StartHost(NewProbe(), InDatabase());
+
+        var error = await Assert.ThrowsAsync<DeedboxException>(() =>
+            StoreOf(host).Append("m-1", ExpectedVersion.NoStream, [Ada with { ReviewerId = new string('p', length) + suffix }]));
+
+        Assert.Equal("DBX027", error.Code);
+        Assert.Equal(0, await Scalar<int>($"SELECT COUNT(*) FROM {Table("subject_keys")}"));
+    }
+
+    [Fact]
+    public async Task An_erasure_that_waits_for_an_open_append_leaves_no_stored_state_with_the_subjects_data()
+    {
+        var host = await StartHost(NewProbe(), InDatabase(), runner: o => o.Enabled = false);
+        await StoreOf(host).Append("m-1", ExpectedVersion.NoStream, [Ada]);
+
+        Task<Guid> erase;
+        await using (var connection = await OpenConnection())
+        await using (var transaction = await connection.BeginTransactionAsync(Ct))
+        {
+            // The subject is new to m-2, so the erasure cannot see this stream until the append commits.
+            await StoreOf(host).UseTransaction(transaction).Append("m-2", ExpectedVersion.NoStream, [Ada with { ManuscriptId = "m-2" }]);
+            erase = host.Services.CreateScope().ServiceProvider.GetRequiredService<ISubjectErasure>().EraseSubjectAsync("person:1");
+            await Task.Delay(500, Ct);
+            Assert.False(erase.IsCompleted);
+            await transaction.CommitAsync(Ct);
+        }
+
+        var job = await erase;
+
+        // No runner takes the job in this test, so only the call itself can have removed the state.
+        Assert.Equal(0, await Scalar<int>($"SELECT COUNT(*) FROM {Table("streams")} WHERE state IS NOT NULL"));
+        Assert.Equal([null], (await StoreOf(host).Load<Manuscript>("m-2")).State.Names);
+        Assert.Equal(1, await Scalar<int>($"SELECT COUNT(*) FROM {Table("jobs")} WHERE id = '{job}' AND status = 'queued'"));
+    }
+
+    [Fact]
+    public async Task A_subject_who_came_back_before_the_erasure_job_ran_is_erased_in_full_the_next_time()
+    {
+        var probe = NewProbe();
+        var host = await StartHost(probe, InDatabase(), runner: o => o.Enabled = false);
+        var erasure = host.Services.CreateScope().ServiceProvider.GetRequiredService<ISubjectErasure>();
+        await StoreOf(host).Append("m-1", ExpectedVersion.NoStream, [Ada]);
+
+        // The job has not run yet when the subject writes to the same stream again, under a new key.
+        var first = await erasure.EraseSubjectAsync("person:1");
+        await StoreOf(host).Append("m-1", ExpectedVersion.Exact(1), [Ada with { ReviewerName = "Ada, again" }]);
+        var runner = await StartHost(probe, InDatabase());
+        Assert.Equal("done", (await WaitForJob(runner, first)).Status);
+        await StopHost(runner);
+        Assert.Equal([null, "Ada, again"], (await StoreOf(host).Load<Manuscript>("m-1")).State.Names);
+
+        // No runner takes the second job here, so only the call itself can clear the stored state.
+        await erasure.EraseSubjectAsync("person:1");
+
+        Assert.Equal(0, await Scalar<int>($"SELECT COUNT(*) FROM {Table("streams")} WHERE state IS NOT NULL"));
+        Assert.Equal([null, null], (await StoreOf(host).Load<Manuscript>("m-1")).State.Names);
+    }
+
+    [Fact]
+    public async Task An_erasure_job_waits_for_an_instance_that_registers_the_stream_type()
+    {
+        // This instance runs jobs. It started before the store held a manuscript, so it does not know them and cannot
+        // append SubjectErased to m-1.
+        var probe = NewProbe();
+        var other = await StartHost(probe, _ => { });
+        var writer = await StartHost(probe, InDatabase(), runner: o => o.Enabled = false, defaultStreams: false);
+        await StoreOf(writer).Append("m-1", ExpectedVersion.NoStream, [Ada]);
+        var job = await writer.Services.CreateScope().ServiceProvider.GetRequiredService<ISubjectErasure>().EraseSubjectAsync("person:1");
+        await Task.Delay(TimeSpan.FromSeconds(1.5), Ct);
+        Assert.Equal(1, await Scalar<int>($"SELECT COUNT(*) FROM {Table("jobs")} WHERE id = '{job}' AND status = 'queued'"));
+        Assert.Equal(1, await Scalar<int>($"SELECT COUNT(*) FROM {Table("subject_streams")}"));
+
+        var runner = await StartHost(probe, InDatabase(), defaultStreams: false);
+
+        Assert.Equal("done", (await WaitForJob(runner, job)).Status);
+        Assert.Equal(1, await Scalar<int>($"SELECT COUNT(*) FROM {Table("events")} WHERE event_type = 'deedbox.subject_erased'"));
+        GC.KeepAlive(other);
+    }
+
+    [Fact]
     public void Startup_rules_reject_missing_key_modes_and_unerasable_types()
     {
         var noMode = Assert.Throws<DeedboxException>(() => new ServiceCollection().AddDeedbox(b => Keys.Streams(UseDatabase(b))));
@@ -253,7 +438,15 @@ public abstract class PersonalDataTests(Databases databases, Db db) : RunnerTest
         var noSubject = Assert.Throws<DeedboxException>(() => new ServiceCollection().AddDeedbox(b => UseDatabase(b)
             .Keys(k => k.StoreInDatabase()).Stream<Age>(s => s.Events<NoSubject>())));
 
+        var nested = Assert.Throws<DeedboxException>(() => new ServiceCollection().AddDeedbox(b => UseDatabase(b)
+            .Keys(k => k.StoreInDatabase()).Stream<Age>(s => s.Events<Moved>())));
+
         Assert.Equal(("DBX025", "DBX026", "DBX027"), (noMode.Code, notNullable.Code, noSubject.Code));
+        Assert.Equal("DBX026", nested.Code);
+
+        // A nested type inside a property that is encrypted whole is covered, so its own markers are no error.
+        new ServiceCollection().AddDeedbox(b => UseDatabase(b).Keys(k => k.StoreInDatabase()).Stream<Age>(s => s.Events<MovedWhole>()));
+        Assert.Contains("Address.Street", nested.Message, StringComparison.Ordinal);
         Assert.Contains("keys.StoreInDatabase()", noMode.Message, StringComparison.Ordinal);
         Assert.Contains("keys.FromEnvironment(\"DEEDBOX_MASTER_KEY\")", noMode.Message, StringComparison.Ordinal);
     }

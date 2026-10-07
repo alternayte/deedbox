@@ -239,7 +239,7 @@ internal sealed partial class EventRegistry
 
         _byEvent[e.ClrType] = e;
         e.Json = json.TypeInfo(e.ClrType);
-        e.PersonalFields = PersonalFields.Map(e.ClrType, e.Properties, json.Options);
+        e.PersonalFields = PersonalFields.Map(e.ClrType, e.Properties, e.Json);
     }
 
     public static void ValidateName(string name, string what)

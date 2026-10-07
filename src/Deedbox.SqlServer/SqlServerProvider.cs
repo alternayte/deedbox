@@ -184,10 +184,11 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
     }
 
     public override async Task<long> InsertEvents(
-        DbConnection connection, DbTransaction transaction, string tenantId, string streamId, string streamType,
+        DbConnection connection, DbTransaction transaction, Guid instanceId, string tenantId, string streamId, string streamType,
         DateTimeOffset occurredAt, IReadOnlyList<NewEvent> events, CancellationToken ct)
     {
         await using var command = Command(connection, transaction, Sql.InsertEvents);
+        Add(command, "instance", instanceId);
         Add(command, "n", (long)events.Count);
         AddKey(command, tenantId, streamId);
         AddText(command, "stream_type", streamType, 200);
@@ -242,23 +243,61 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         return rows;
     }
 
-    public override async Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<CheckpointSeed> checkpoints, CancellationToken ct)
+    public override async Task UpdateHandles(DbConnection connection, DbTransaction transaction, string name, string handles, CancellationToken ct)
     {
-        await using var command = Command(connection, null, Sql.EnsureCheckpoints);
-        AddJson(command, "checkpoints", checkpoints.Select(c => new[] { c.Name, c.Mode, c.Rebuild ? "1" : "0", c.Handles }).ToArray());
+        await using var command = Command(connection, transaction, Sql.UpdateHandles);
+        AddText(command, "name", name, 200);
+        AddText(command, "handles", handles, -1);
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    public override async Task Beat(DbConnection connection, InstanceRow instance, TimeSpan liveFor, CancellationToken ct)
+    public override async Task EnsureCheckpoints(DbConnection connection, DbTransaction transaction, IReadOnlyList<CheckpointSeed> checkpoints, CancellationToken ct)
+    {
+        // The read of existing rows takes no lock, so it never waits behind a batch. An instance of an older version
+        // does not hold the counter and can insert the same name at the same moment; the rows that are left are then
+        // inserted in a second try.
+        for (var attempt = 0; ; attempt++)
+        {
+            await using var command = Command(connection, transaction, Sql.EnsureCheckpoints);
+            AddJson(command, "checkpoints", checkpoints.Select(c => new[] { c.Name, c.Mode, c.Rebuild ? "1" : "0", c.Handles, c.AtHead ? "1" : "0" }).ToArray());
+            try
+            {
+                await command.ExecuteNonQueryAsync(ct);
+                return;
+            }
+            catch (SqlException ex) when (ex.Number is 2627 or 2601 && attempt == 0)
+            {
+            }
+        }
+    }
+
+    public override async Task<(bool Found, int Formats)> Beat(DbConnection connection, InstanceRow instance, TimeSpan liveFor, CancellationToken ct)
     {
         await using var command = Command(connection, null, Sql.Beat);
+        Add(command, "id", instance.Id);
+        Add(command, "stale_ms", (int)(liveFor * 10).TotalMilliseconds);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        return (reader.GetInt32(0) == 1, reader.GetInt32(1));
+    }
+
+    public override async Task WriteInstance(DbConnection connection, DbTransaction transaction, InstanceRow instance, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.WriteInstance);
         Add(command, "id", instance.Id);
         AddText(command, "host", instance.Host, 200);
         AddText(command, "app", instance.App, 200);
         AddText(command, "consumers", Instances.ListJson(instance.Consumers), -1);
         AddText(command, "inline", Instances.ListJson(instance.Inline), -1);
         AddText(command, "events", Instances.ListJson(instance.Events), -1);
-        Add(command, "stale_ms", (int)(liveFor * 10).TotalMilliseconds);
+        Add(command, "formats", instance.Formats);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task EvictInstances(DbConnection connection, DbTransaction transaction, IReadOnlyList<Guid> instanceIds, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.EvictInstances);
+        AddJson(command, "ids", instanceIds.Select(i => new[] { i.ToString("D") }).ToArray());
         await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -269,24 +308,24 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    public override async Task<List<InstanceRow>> ReadLiveInstances(DbConnection connection, DbTransaction? transaction, TimeSpan liveFor, CancellationToken ct)
+    public override async Task<List<InstanceRow>> ReadInstances(DbConnection connection, DbTransaction? transaction, TimeSpan liveFor, CancellationToken ct)
     {
-        await using var command = Command(connection, transaction, Sql.ReadLiveInstances);
+        await using var command = Command(connection, transaction, Sql.ReadInstances);
         Add(command, "live_ms", (int)liveFor.TotalMilliseconds);
         await using var reader = await command.ExecuteReaderAsync(ct);
         var rows = new List<InstanceRow>();
         while (await reader.ReadAsync(ct))
         {
             rows.Add(new InstanceRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Instances.ReadList(reader.GetString(3)),
-                Instances.ReadList(reader.GetString(4)), Instances.ReadList(reader.GetString(5)), reader.GetFieldValue<DateTimeOffset>(6)));
+                Instances.ReadList(reader.GetString(4)), Instances.ReadList(reader.GetString(5)), reader.GetFieldValue<DateTimeOffset>(6), reader.GetInt32(7) == 1, reader.GetInt32(8)));
         }
 
         return rows;
     }
 
-    public override async Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct)
+    public override async Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, DbTransaction? transaction, CancellationToken ct)
     {
-        await using var command = Command(connection, null, Sql.ReadCheckpoints);
+        await using var command = Command(connection, transaction, Sql.ReadCheckpoints);
         return await ReadCheckpointRows(command, ct);
     }
 
@@ -312,11 +351,11 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
     public override async Task<Dictionary<string, string>> ReadInlineStatuses(DbConnection connection, DbTransaction transaction, IReadOnlyList<string> names, CancellationToken ct)
     {
         var ordered = names.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
-        var sql = new StringBuilder();
+        var sql = new StringBuilder("DECLARE @gate int;\n");
         for (var i = 0; i < ordered.Count; i++)
         {
             sql.Append(System.Globalization.CultureInfo.InvariantCulture,
-                $"EXEC sp_getapplock @Resource = @r{i}, @LockMode = 'Shared', @LockOwner = 'Transaction', @LockTimeout = -1;\n");
+                $"EXEC @gate = sp_getapplock @Resource = @r{i}, @LockMode = 'Shared', @LockOwner = 'Transaction', @LockTimeout = -1; IF @gate < 0 THROW 51000, N'Deedbox could not take an inline gate lock.', 1;\n");
         }
 
         sql.Append(Sql.ReadStatuses);
@@ -334,7 +373,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
     public override async Task LockInlineGate(DbConnection connection, DbTransaction transaction, string name, CancellationToken ct)
     {
         await using var command = Command(connection, transaction,
-            "EXEC sp_getapplock @Resource = @resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = -1;");
+            "DECLARE @gate int; EXEC @gate = sp_getapplock @Resource = @resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = -1; IF @gate < 0 THROW 51000, N'Deedbox could not take an inline gate lock.', 1;");
         AddText(command, "resource", GateResource(name), 255);
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -475,6 +514,29 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         return await command.ExecuteNonQueryAsync(ct);
     }
 
+    public override async Task ClearSubjectState(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ClearSubjectState);
+        AddText(command, "tenant", tenantId, 100);
+        AddText(command, "subject", subjectId, 100);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    // SqlTransaction has savepoints but no release; a savepoint lasts until the transaction ends.
+    public override Task SaveWrite(DbTransaction transaction, CancellationToken ct)
+    {
+        ((SqlTransaction)transaction).Save(WriteSavepoint);
+        return Task.CompletedTask;
+    }
+
+    public override Task RollbackWrite(DbTransaction transaction)
+    {
+        ((SqlTransaction)transaction).Rollback(WriteSavepoint);
+        return Task.CompletedTask;
+    }
+
+    public override Task ReleaseWrite(DbTransaction transaction, CancellationToken ct) => Task.CompletedTask;
+
     public override async Task<PseudonymKeyRow?> ReadPseudonymKey(DbConnection connection, DbTransaction? transaction, string tenantId, string periodId, CancellationToken ct)
     {
         await using var command = Command(connection, transaction, Sql.ReadPseudonymKey);
@@ -551,15 +613,15 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    public override async Task<List<string>> ReadSubjectStreams(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct)
+    public override async Task<List<(string StreamId, string StreamType)>> ReadSubjectStreams(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct)
     {
         await using var command = Command(connection, transaction, Sql.ReadSubjectStreams);
         AddText(command, "tenant", tenantId, 100);
         AddText(command, "subject", subjectId, 100);
         await using var reader = await command.ExecuteReaderAsync(ct);
-        var streams = new List<string>();
+        var streams = new List<(string, string)>();
         while (await reader.ReadAsync(ct))
-            streams.Add(reader.GetString(0));
+            streams.Add((reader.GetString(0), reader.GetString(1)));
         return streams;
     }
 
@@ -739,9 +801,23 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             """;
 
         // The counter update and the insert are one batch, so the counter lock is held for as short a time as possible.
+        // The lock is taken in a statement of its own: the heartbeat check after it sees an eviction by the cut-over
+        // that held the counter. A first check comes before the lock. It decides nothing, but an instance that was
+        // evicted earlier then leaves without the counter, which a caller's transaction would keep until it ends.
         public readonly string InsertEvents = $"""
             SET NOCOUNT ON;
             DECLARE @end bigint;
+            IF NOT EXISTS (SELECT 1 FROM [{s}].[instances] WHERE instance_id = @instance)
+            BEGIN
+                SELECT CAST(-1 AS bigint);
+                RETURN;
+            END;
+            SELECT @end = value FROM [{s}].[position] WITH (UPDLOCK, HOLDLOCK);
+            IF NOT EXISTS (SELECT 1 FROM [{s}].[instances] WHERE instance_id = @instance)
+            BEGIN
+                SELECT CAST(-1 AS bigint);
+                RETURN;
+            END;
             UPDATE [{s}].[position] SET @end = value = value + @n;
             INSERT INTO [{s}].[events] (global_position, event_id, tenant_id, stream_id, version, stream_type, event_type, event_version, payload, metadata, occurred_at)
             SELECT @end - @n + e.o, e.i, @tenant, @stream, e.v, @stream_type, e.t, e.tv, e.p, e.m, @occurred_at
@@ -777,29 +853,40 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         private const string Now = "TODATETIMEOFFSET(SYSUTCDATETIME(), 0)";
 
         public readonly string EnsureCheckpoints = $"""
-            INSERT INTO [{s}].[checkpoints] (name, mode, status, handles)
-            SELECT c.n, c.m, CASE WHEN c.m = N'inline' AND (c.r = N'1' OR (SELECT value FROM [{s}].[position]) > 0) THEN N'rebuilding' ELSE N'running' END, c.h
-            FROM OPENJSON(@checkpoints) WITH (n nvarchar(200) '$[0]', m nvarchar(20) '$[1]', r nvarchar(1) '$[2]', h nvarchar(max) '$[3]') AS c
-            WHERE NOT EXISTS (SELECT 1 FROM [{s}].[checkpoints] WITH (UPDLOCK, HOLDLOCK) WHERE name = c.n);
-            UPDATE k SET handles = c.h
-            FROM [{s}].[checkpoints] AS k
-            JOIN OPENJSON(@checkpoints) WITH (n nvarchar(200) '$[0]', h nvarchar(max) '$[3]') AS c ON k.name = c.n;
+            INSERT INTO [{s}].[checkpoints] (name, mode, status, handles, position)
+            SELECT c.n, c.m, CASE WHEN c.m = N'inline' AND (c.r = N'1' OR (SELECT value FROM [{s}].[position]) > 0) THEN N'rebuilding' ELSE N'running' END, c.h,
+                CASE WHEN c.a = N'1' THEN (SELECT value FROM [{s}].[position]) ELSE 0 END
+            FROM OPENJSON(@checkpoints) WITH (n nvarchar(200) '$[0]', m nvarchar(20) '$[1]', r nvarchar(1) '$[2]', h nvarchar(max) '$[3]', a nvarchar(1) '$[4]') AS c
+            WHERE NOT EXISTS (SELECT 1 FROM [{s}].[checkpoints] WITH (NOLOCK) WHERE name = c.n);
             """;
 
+        public readonly string UpdateHandles = $"UPDATE [{s}].[checkpoints] SET handles = @handles WHERE name = @name";
+
         public string Beat => $"""
-            UPDATE [{s}].[instances] SET consumers = @consumers, inline_projections = @inline, event_types = @events, seen_at = {Now}
+            SET NOCOUNT ON;
+            DELETE FROM [{s}].[instances] WHERE seen_at < DATEADD(millisecond, -@stale_ms, {Now});
+            UPDATE [{s}].[instances] SET seen_at = {Now} WHERE instance_id = @id;
+            SELECT CAST(@@ROWCOUNT AS int), ISNULL((SELECT MIN(formats) FROM [{s}].[instances]), 1);
+            """;
+
+        public string WriteInstance => $"""
+            UPDATE [{s}].[instances] WITH (UPDLOCK, HOLDLOCK)
+            SET consumers = @consumers, inline_projections = @inline, event_types = @events, seen_at = {Now}, formats = @formats
             WHERE instance_id = @id;
             IF @@ROWCOUNT = 0
-                INSERT INTO [{s}].[instances] (instance_id, host, app, consumers, inline_projections, event_types)
-                VALUES (@id, @host, @app, @consumers, @inline, @events);
-            DELETE FROM [{s}].[instances] WHERE seen_at < DATEADD(millisecond, -@stale_ms, {Now});
+                INSERT INTO [{s}].[instances] (instance_id, host, app, consumers, inline_projections, event_types, formats)
+                VALUES (@id, @host, @app, @consumers, @inline, @events, @formats);
             """;
 
         public readonly string Leave = $"DELETE FROM [{s}].[instances] WHERE instance_id = @id";
 
-        public string ReadLiveInstances => $"""
-            SELECT instance_id, host, app, consumers, inline_projections, event_types, seen_at
-            FROM [{s}].[instances] WHERE seen_at > DATEADD(millisecond, -@live_ms, {Now}) ORDER BY started_at
+        public readonly string EvictInstances =
+            $"DELETE FROM [{s}].[instances] WHERE instance_id IN (SELECT CAST(i AS uniqueidentifier) FROM OPENJSON(@ids) WITH (i nvarchar(40) '$[0]'))";
+
+        public string ReadInstances => $"""
+            SELECT instance_id, host, app, consumers, inline_projections, event_types, seen_at,
+                CASE WHEN seen_at > DATEADD(millisecond, -@live_ms, {Now}) THEN 1 ELSE 0 END, formats
+            FROM [{s}].[instances] ORDER BY started_at
             """;
 
         public readonly string ReadCheckpoints = $"SELECT {CheckpointColumns} FROM [{s}].[checkpoints] ORDER BY name";
@@ -817,7 +904,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
 
         public readonly string ReadStatuses = $"""
             SELECT name, status FROM [{s}].[checkpoints]
-            WHERE name IN (SELECT n FROM OPENJSON(@names) WITH (n nvarchar(200) '$[0]'))
+            WHERE name IN (SELECT n FROM OPENJSON(@names) WITH (n nvarchar(200) '$[0]')) AND mode = N'inline'
             """;
 
         // The head is read first. Under locking READ COMMITTED it waits for an append in flight to commit or roll back,
@@ -934,10 +1021,11 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             WHERE tenant_id = @tenant AND key_id IN (SELECT i FROM OPENJSON(@ids) WITH (i nvarchar(100) '$[0]'))
             """;
 
-        public readonly string DeleteSubjectKey = $"""
+        public readonly string DeleteSubjectKey = $"DELETE FROM [{s}].[subject_keys] WHERE tenant_id = @tenant AND subject_id = @subject";
+
+        public readonly string ClearSubjectState = $"""
             UPDATE [{s}].[streams] SET state = NULL
-            WHERE tenant_id = @tenant AND stream_id IN (SELECT stream_id FROM [{s}].[subject_streams] WHERE tenant_id = @tenant AND subject_id = @subject);
-            DELETE FROM [{s}].[subject_keys] WHERE tenant_id = @tenant AND subject_id = @subject;
+            WHERE tenant_id = @tenant AND stream_id IN (SELECT stream_id FROM [{s}].[subject_streams] WHERE tenant_id = @tenant AND subject_id = @subject)
             """;
 
         public readonly string RecordSubjectStreams = $"""
@@ -948,8 +1036,11 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
                 WHERE tenant_id = @tenant AND subject_id = j.s COLLATE Latin1_General_100_BIN2 AND stream_id = @stream)
             """;
 
-        public readonly string ReadSubjectStreams =
-            $"SELECT stream_id FROM [{s}].[subject_streams] WHERE tenant_id = @tenant AND subject_id = @subject ORDER BY stream_id";
+        public readonly string ReadSubjectStreams = $"""
+            SELECT p.stream_id, s.stream_type FROM [{s}].[subject_streams] p
+            JOIN [{s}].[streams] s ON s.tenant_id = p.tenant_id AND s.stream_id = p.stream_id
+            WHERE p.tenant_id = @tenant AND p.subject_id = @subject ORDER BY p.stream_id
+            """;
 
         public readonly string DeleteSubjectStream =
             $"DELETE FROM [{s}].[subject_streams] WHERE {Key} AND subject_id = @subject";

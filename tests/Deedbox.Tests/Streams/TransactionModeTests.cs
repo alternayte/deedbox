@@ -8,8 +8,53 @@ public sealed class PostgresTransactionModeTests(Databases databases) : Transact
 
 public sealed class SqlServerTransactionModeTests(Databases databases) : TransactionModeTests(databases, Db.SqlServer);
 
+public sealed class FailsOnSku : IAppendingHook
+{
+    public Task OnAppending(AppendingContext context, CancellationToken ct) =>
+        context.Events.Any(e => e.Event is ItemAdded { Sku: "fail" }) ? throw new InvalidOperationException("The hook failed.") : Task.CompletedTask;
+}
+
 public abstract class TransactionModeTests(Databases databases, Db db) : StoreTest(databases, db)
 {
+    [Fact]
+    public async Task A_failed_append_in_a_caller_transaction_leaves_nothing_when_the_caller_commits()
+    {
+        var store = StoreFrom(await Services(b => DefaultStreams(b.OnAppending<FailsOnSku>())));
+        var id = NewStreamId();
+        await store.Append(id, ExpectedVersion.NoStream, [new ItemAdded("a", 1)]);
+
+        await using (var connection = await OpenConnection())
+        await using (var transaction = await connection.BeginTransactionAsync(Ct))
+        {
+            var inside = store.UseTransaction(transaction);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => inside.Append(id, ExpectedVersion.Any, [new ItemAdded("fail", 1)]));
+            await inside.Append(NewStreamId(), ExpectedVersion.NoStream, [new ItemAdded("b", 1)]);
+            await transaction.CommitAsync(Ct);
+        }
+
+        // The stream row moves before the hooks run; without the savepoint it would be at version 2 with one event.
+        var next = await store.Append(id, ExpectedVersion.Exact(1), [new ItemAdded("c", 1)]);
+        Assert.Equal(2, next.Version);
+        Assert.Equal(0, await Scalar<int>(
+            $"SELECT COUNT(*) FROM {Table("streams")} s WHERE s.version <> (SELECT COUNT(*) FROM {Table("events")} e WHERE e.tenant_id = s.tenant_id AND e.stream_id = s.stream_id)"));
+        Assert.Equal(2, (await store.Load<Cart>(id)).State.Changes);
+    }
+
+    [Theory]
+    [InlineData(System.Data.IsolationLevel.RepeatableRead)]
+    [InlineData(System.Data.IsolationLevel.Serializable)]
+    public async Task An_append_in_a_transaction_that_keeps_one_snapshot_is_refused(System.Data.IsolationLevel level)
+    {
+        var store = await Store();
+        await using var connection = await OpenConnection();
+        await using var transaction = await connection.BeginTransactionAsync(level, Ct);
+
+        var refused = await Assert.ThrowsAsync<DeedboxException>(() =>
+            store.UseTransaction(transaction).Append(NewStreamId(), ExpectedVersion.NoStream, [new ItemAdded("a", 1)]));
+
+        Assert.Equal("DBX040", refused.Code);
+    }
+
     [Fact]
     public async Task Caller_transaction_commit_keeps_the_events()
     {
@@ -55,6 +100,25 @@ public abstract class TransactionModeTests(Databases databases, Db db) : StoreTe
         await transaction.RollbackAsync(Ct);
 
         Assert.Equal(0, (await store.Load<Cart>(id)).Version);
+    }
+
+    [Fact]
+    public async Task DbContext_mode_works_with_a_retrying_execution_strategy()
+    {
+        // EnableRetryOnFailure makes EF Core refuse SaveChanges inside a transaction it did not start through the strategy.
+        var store = await Store();
+        var id = NewStreamId();
+        var options = new DbContextOptionsBuilder<OrdersDb>();
+        _ = Db == Db.Postgres
+            ? options.UseNpgsql(ConnectionString, o => o.EnableRetryOnFailure())
+            : options.UseSqlServer(ConnectionString, o => o.EnableRetryOnFailure());
+        await using var orders = new OrdersDb(options.Options);
+
+        orders.Orders.Add(new OrderRow { Id = id, Note = "placed" });
+        await store.UseDbContext(orders).Append(id, ExpectedVersion.NoStream, [new ItemAdded("a", 1)]);
+
+        Assert.Equal(1, (await store.Load<Cart>(id)).Version);
+        Assert.Equal(1, await CountEf("orders", id));
     }
 
     [Fact]

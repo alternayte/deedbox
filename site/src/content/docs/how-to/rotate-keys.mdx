@@ -5,16 +5,30 @@ description: Rotate the master key, or move it out of the database, without touc
 
 import KeysEnvironment from '../../../snippets/keys-environment.md';
 import KeysAzure from '../../../snippets/keys-azure.md';
+import KeysAlsoUnwrap from '../../../snippets/keys-also-unwrap.md';
 import ShredTenant from '../../../snippets/shred-tenant.md';
 
-This guide shows you how to rotate the master key or change where it lives. No event is re-encrypted: the master key only wraps one key per tenant.
+This guide shows you how to rotate the master key or change where it lives, while the app runs. No event is re-encrypted: the master key only wraps one key per tenant.
+
+## Follow this order
+
+A running instance wraps new tenant keys with its own key. An instance that lacks that key cannot unwrap them, and stops with [DBX029](/reference/errors/dbx029/). So every instance must hold both keys before any instance wraps with the new one, and until no row uses the old one:
+
+1. Deploy every instance with the old key as the key mode, and the new key for unwrap only.
+2. Deploy every instance with the new key as the key mode, and the old key for unwrap only.
+3. Run `deedbox keys rewrap --from <old> --to <new>`. Run it again until it reports 0.
+4. Deploy without the old key.
+
+Finish each deploy before you start the next step. Do not re-wrap before step 2 is complete: an instance that still wraps with the old key cannot read rows under the new one.
+
+`AlsoUnwrapWith` inside `Keys(...)` adds a key for unwrap only. It takes the same methods as the key mode, such as `k => k.StoreInDatabase()` or `k => k.FromEnvironment("DEEDBOX_NEW_MASTER_KEY")`. A key ring needs no `AlsoUnwrapWith` for its own versions: its first key wraps, and its other keys only unwrap.
 
 ## Rotate a key ring
 
 1. Generate a new 32-byte key: `openssl rand -base64 32`.
-2. Put it first in the ring, and keep the old key after it: `v2:<new key>,v1:<old key>`.
-3. Deploy. New tenant keys use `v2`; existing ones still unwrap with `v1`.
-4. Re-wrap the existing tenant keys:
+2. Add it after the old key: `v1:<old key>,v2:<new key>`. Deploy. Every instance still wraps with `v1`, and can now unwrap `v2`.
+3. Put the new key first: `v2:<new key>,v1:<old key>`. Deploy. New tenant keys use `v2`; existing ones still unwrap with `v1`.
+4. Re-wrap the existing tenant keys. Run the command again until it reports 0:
 
    ```sh
    deedbox keys rewrap --from env:DEEDBOX_MASTER_KEY --to env:DEEDBOX_MASTER_KEY --provider postgres
@@ -27,14 +41,24 @@ This guide shows you how to rotate the master key or change where it lives. No e
 ## Move out of the database
 
 1. Set the new key ring in `DEEDBOX_NEW_MASTER_KEY`.
-2. Run `deedbox keys rewrap --from database --to env:DEEDBOX_NEW_MASTER_KEY`. This also deletes the master key stored in the database.
-3. Change the app's key mode to `FromEnvironment` and deploy.
+2. Keep `StoreInDatabase()` as the key mode, and add `.AlsoUnwrapWith(k => k.FromEnvironment("DEEDBOX_NEW_MASTER_KEY"))`. Deploy.
+3. Change the key mode to `FromEnvironment("DEEDBOX_NEW_MASTER_KEY")`, and add `.AlsoUnwrapWith(k => k.StoreInDatabase())`. Deploy.
+4. Run `deedbox keys rewrap --from database --to env:DEEDBOX_NEW_MASTER_KEY`. This also deletes the master key stored in the database. Run it again until it reports 0.
+5. Remove the `AlsoUnwrapWith` call and deploy.
+
+Step 3 looks like this:
+
+<KeysAlsoUnwrap />
+
+In database mode, an instance reads the master key for each wrap. It keeps no copy that can outlive a re-wrap.
 
 ## Use Azure Key Vault
 
 <KeysAzure />
 
-`deedbox keys rewrap --to azure:https://my-vault.vault.azure.net/keys/deedbox` moves to Key Vault. The CLI signs in with `DefaultAzureCredential`.
+Follow the same order to move to Key Vault. In step 1, name the Key Vault key in `AlsoUnwrapWith`, as `k => k.UseAzureKeyVault(keyId, credential)`. In step 3, run `deedbox keys rewrap --from <old> --to azure:https://my-vault.vault.azure.net/keys/deedbox`. The CLI signs in with `DefaultAzureCredential`.
+
+Each wrapped key records the Key Vault key version that wrapped it. When the Key Vault key rotates, existing rows still unwrap with their recorded version.
 
 ## Shred a whole tenant
 

@@ -16,9 +16,9 @@ This page lists every public type. Each member has XML docs, so your editor show
 | `StreamBuilder<TState>` | `Event<T>`, `Events<T1..T6>`, `EventsNestedIn`, `StateVersion`, `Snapshots`. |
 | `EventBuilder<TEvent>` | `Name`, `Alias`, `From` (JSON upcaster), `Upcast<TOld, TNew>`. |
 | `IState<TSelf>` | `Initial` and `Evolve`: what a state type implements. |
-| `IEventStore` | `Load`, `Append`, `Execute`, `DeleteStream`, `UseTransaction`, `WithMetadata`. Scoped. |
+| `IEventStore` | `Load`, `Append`, `Execute`, `DeleteStream`, `UseTransaction`, `WithMetadata`. Scoped. Its members have no `Async` suffix. |
 | `ExpectedVersion` | `Any`, `NoStream`, `Exact(n)`. |
-| `LoadResult<T>`, `AppendResult`, `ExecuteResult<T>` | What the store returns. |
+| `LoadResult<T>`, `AppendResult`, `ExecuteResult<T>` | What the store returns, as properties. `var (state, version) = await store.Load<T>(id)` works. |
 | `EventEnvelope` | A stored event with its IDs, positions, metadata and erased subjects. |
 | `EventMetadata` | Correlation, causation, actor, trace context and string headers. |
 | `DeedboxContext` | The scope's tenant and metadata. Scoped. |
@@ -29,18 +29,31 @@ This page lists every public type. Each member has XML docs, so your editor show
 | `WriteContext` | Where a reset or a batch writes. |
 | `Run` | `Inline` or `Async`. |
 | `Subscription`, `SubscriptionContext` | A side-effect handler, delivered at least once. |
+| `SubscriptionStart` | `FirstEvent`, the default, or `Now`: where a new subscription starts. |
 | `IAppendingHook`, `AppendingContext`, `PendingEvent` | Code that runs inside every append's transaction. |
 | `RunnerOptions` | Background runner settings. |
 | `DataSubjectAttribute`, `PersonalDataAttribute` | Mark personal data. |
-| `KeysBuilder`, `IMasterKeyProvider` | Choose where the master key lives. |
+| `KeysBuilder`, `IMasterKeyProvider`, `WrappedKey` | Choose where the master key lives. `WrapAsync` returns a `WrappedKey`: the `Bytes` and the `KeyVersion` that wrapped them. |
 | `ISubjectErasure` | Erase a data subject in the scope's tenant. |
 | `IPseudonyms` | Compute a pseudonymous subject ID from an identity, and erase by identity, in the scope's tenant. Scoped. |
 | `PseudonymPeriod` | `Quarter(at)` and `Month(at)`: calendar period IDs in UTC. |
 | `SubjectErased`, `StreamDeleted` | Built-in events every handler can handle. |
-| `IEventStoreAdmin` | Status, jobs, rebuild, retire, skip, erase, erase by identity, pseudonym period destroy, snapshots, key re-wrap, tenant shred. |
-| `StoreStatus`, `ConsumerStatus`, `JobInfo` | What the admin API returns. |
+| `IEventStoreAdmin` | Status, jobs, rebuild, retire, skip, erase, erase by identity, pseudonym period destroy, snapshots, key re-wrap, tenant shred. Apps call it; they do not implement it. |
+| `StoreStatus`, `ConsumerStatus`, `JobInfo` | What the admin API returns, as properties. `JobInfo` has `CreatedAt`, `StartedAt` and `FinishedAt`. |
+| `ConsumerMode`, `ConsumerState`, `JobKind`, `JobState` | The enums of `ConsumerStatus.Mode`, `ConsumerStatus.Status`, `JobInfo.Kind` and `JobInfo.Status`. |
+| `ErasureResult` | `JobIds` and `KeysDeleted`: what `EraseSubjectAsync` and `EraseIdentityAsync` of the admin API return. |
 | `AddDeedboxHealthChecks()` | The health check. |
 | `DeedboxException`, `ConcurrencyException` | Errors, each with a DBX code. |
+| `DeedboxError` | Every DBX code as a constant, such as `DeedboxError.StreamDeleted`. |
+
+## Rules that hold across the API
+
+- The members of `IEventStore` and `IAppendingHook` have no `Async` suffix. The suffix separates async members from sync ones, and Deedbox has no sync members. Every other async member follows the .NET convention.
+- The result types have properties and no positional constructor, so a later release can add a property.
+- Compare an error code with a constant: `catch (DeedboxException e) when (e.Code == DeedboxError.StreamDeleted)`.
+- `IEventStoreAdmin.EraseSubjectAsync`, `EraseIdentityAsync` and `DestroyPseudonymPeriodAsync` take a required `tenantId`. Pass `""` when the app has no tenants.
+- A failed append in a transaction you own rolls back to a savepoint, so you can catch the error and commit the rest.
+- When Deedbox owns the transaction, the commit of an append does not take your cancellation token.
 
 ## Providers
 
@@ -53,7 +66,7 @@ This page lists every public type. Each member has XML docs, so your editor show
 
 | Package | Types |
 | --- | --- |
-| `Deedbox.EntityFrameworkCore` | `UseDbContext(context, others)`, `Projection<TDbContext>`, `ProjectionContext<TDbContext>`, `WriteContext<TDbContext>`. |
+| `Deedbox.EntityFrameworkCore` | `UseDbContext(context, others)`, `Projection<TDbContext>`, `ProjectionContext<TDbContext>`, `WriteContext<TDbContext>`. A context with `EnableRetryOnFailure` works; Deedbox retries nothing inside its transaction. |
 | `Deedbox.Testing` | `Decider.Given`, `DeciderScenario`, `DeciderOutcome`, `EventContracts.Verify`, `KeyProviderCompliance.VerifyAsync`. |
 | `Deedbox.Keys.AzureKeyVault` | `UseAzureKeyVault(keyId, credential)`, `UseAzureKeyVault(CryptographyClient)`. |
 | `Deedbox.QueueBox` | `UseQueueBox`, `QueueBoxBuilder`, `QueueBoxMessage`, `QueueBoxColumns`. |

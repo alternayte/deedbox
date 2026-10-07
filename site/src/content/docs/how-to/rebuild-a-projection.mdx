@@ -28,4 +28,6 @@ This guide shows you how to rebuild a projection after you change its logic.
 
 During the rebuild, the read model is empty or partial. The health check reports `rebuilding` as healthy, so Kubernetes does not restart the app. To keep the old read model serving reads during the change, [replace it without downtime](/how-to/replace-a-read-model/) instead.
 
-If appends arrive faster than the replay, the runner switches over anyway after 20 polls without progress. Appends then wait while it applies the rest.
+If appends arrive faster than the replay, the runner forces the switch after 20 polls without a smaller gap. Appends then wait while it applies the last events, for at most 2 seconds. If it does not reach the head in that time, it keeps what it applied and the projection stays `rebuilding`. After 5 such attempts in a row, the health check reports the projection as degraded, and `deedbox status` says that it cannot finish its catch-up. Make the handlers faster, or run the projection async.
+
+If a handler fails during the replay, the projection stalls on that event, as an async one does. A [skip](/operations/poison-event/) puts an inline projection back to `rebuilding`, so it applies every later event before it runs inline again.

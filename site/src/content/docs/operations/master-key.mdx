@@ -14,9 +14,11 @@ Deedbox stops instead of reading personal data as erased. Nothing is lost yet.
 1. Read the message. It names the tenant, the key version, and the master key version that wrapped it (for example `env:v1`).
 2. If you rotated the key ring and removed the old version too early, add the old version back to the ring after the new one: `v2:<new>,v1:<old>`. Deploy. Then run `deedbox keys rewrap` and remove the old version again. See [rotate keys](/how-to/rotate-keys/).
 3. If the app runs with the wrong key mode, for example `FromEnvironment` against a database still in database mode, configure the mode that wrapped the keys.
-4. If the key is truly lost, the personal data under it is lost. The events and all other data remain. Recover the key from your secret store's backup if you have one.
+4. If you changed the key mode or re-wrapped while old instances ran, some rows use one key and some the other. Deploy every instance with both keys: one as the key mode, the other in `AlsoUnwrapWith`. Then continue with the order in [rotate keys](/how-to/rotate-keys/#follow-this-order).
+5. If the key is truly lost, the personal data under it is lost. The events and all other data remain. Recover the key from your secret store's backup if you have one.
 
 ## Prevent it
 
 - Keep the master key in a secret store with its own backup, outside the cluster.
-- During rotation, keep the old version in the ring until `deedbox keys rewrap` reports that every tenant key is re-wrapped.
+- Deploy every instance with both keys before any instance wraps with the new one. Run `deedbox keys rewrap` only after that.
+- During rotation, keep the old key until `deedbox keys rewrap` reports 0.

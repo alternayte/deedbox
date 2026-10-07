@@ -22,6 +22,11 @@ internal abstract class DeedboxProvider : IAsyncDisposable
 
     public int LatestSchemaVersion => Migrations[^1].Version;
 
+    /// <summary>
+    /// True when stored JSON comes back with its object keys in the order they were written. Postgres jsonb sorts them.
+    /// </summary>
+    public virtual bool KeepsJsonKeyOrder => true;
+
     /// <summary>A new, closed connection.</summary>
     public abstract DbConnection CreateConnection();
 
@@ -63,9 +68,11 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// <summary>
     /// Advances the position counter by the event count and inserts the events at the new positions, in one
     /// round trip. This is the last statement of an append: the counter row stays locked until commit.
+    /// It first locks the counter, then checks in a later statement that <paramref name="instanceId"/> has a heartbeat
+    /// row. A cut-over deletes such rows while it holds the counter, so the check sees every eviction that came first.
     /// </summary>
-    /// <returns>The position of the last event.</returns>
-    public abstract Task<long> InsertEvents(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, string streamType, DateTimeOffset occurredAt, IReadOnlyList<NewEvent> events, CancellationToken ct);
+    /// <returns>The position of the last event, or -1 when the instance has no heartbeat row; nothing is written then.</returns>
+    public abstract Task<long> InsertEvents(DbConnection connection, DbTransaction transaction, Guid instanceId, string tenantId, string streamId, string streamType, DateTimeOffset occurredAt, IReadOnlyList<NewEvent> events, CancellationToken ct);
 
     /// <summary>The stream's events with <paramref name="afterVersion"/> &lt; version &lt;= <paramref name="toVersion"/>, in version order.</summary>
     public abstract IAsyncEnumerable<StoredEvent> ReadStreamEvents(DbConnection connection, DbTransaction? transaction, string tenantId, string streamId, long afterVersion, long toVersion, CancellationToken ct);
@@ -79,28 +86,67 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// <summary>Every (stream type, event type, event version) the store has ever held.</summary>
     public abstract Task<List<EventTypeRow>> ReadEventTypes(DbConnection connection, CancellationToken ct);
 
+    /// <summary>The name of the savepoint a write takes in a transaction that Deedbox does not own.</summary>
+    protected const string WriteSavepoint = "deedbox_write";
+
+    /// <summary>Marks the point a failed write in a caller's transaction rolls back to.</summary>
+    public virtual Task SaveWrite(DbTransaction transaction, CancellationToken ct) => transaction.SaveAsync(WriteSavepoint, ct);
+
+    /// <summary>Undoes everything the transaction did since <see cref="SaveWrite"/>; what came before it stays.</summary>
+    public virtual Task RollbackWrite(DbTransaction transaction) => transaction.RollbackAsync(WriteSavepoint, CancellationToken.None);
+
+    /// <summary>Forgets the savepoint after a write that succeeded.</summary>
+    public virtual Task ReleaseWrite(DbTransaction transaction, CancellationToken ct) => transaction.ReleaseAsync(WriteSavepoint, ct);
+
     // ---- Async runner ----
 
     /// <summary>
-    /// Adds checkpoint rows that do not exist yet, at position 0, and records what each one handles. A new inline
+    /// Adds checkpoint rows that do not exist yet, at position 0 or at the head when the seed asks for it, and records what each one handles. A new inline
     /// projection starts as rebuilding when the store already holds events or the seed asks for it, so the runner
     /// applies the earlier events before it cuts over; every other one starts running.
     /// </summary>
-    public abstract Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<CheckpointSeed> checkpoints, CancellationToken ct);
+    /// <remarks>
+    /// The caller holds the position counter, and every creator of a checkpoint does. So an inline projection is never
+    /// created as running next to an instance that joined in between and would skip it. Existing rows are not touched
+    /// and not waited for: a wait here would hold every append in the store.
+    /// </remarks>
+    public abstract Task EnsureCheckpoints(DbConnection connection, DbTransaction transaction, IReadOnlyList<CheckpointSeed> checkpoints, CancellationToken ct);
+
+    /// <summary>Replaces what a checkpoint records as handled.</summary>
+    public abstract Task UpdateHandles(DbConnection connection, DbTransaction transaction, string name, string handles, CancellationToken ct);
 
     // ---- Instances ----
 
-    /// <summary>Writes this instance's heartbeat with the database clock, and deletes rows unseen for ten liveness windows.</summary>
-    public abstract Task Beat(DbConnection connection, InstanceRow instance, TimeSpan liveFor, CancellationToken ct);
+    /// <summary>
+    /// Refreshes this instance's heartbeat with the database clock, and deletes rows unseen for ten liveness windows.
+    /// Found is false when the instance has no row: it never joined, or a cut-over evicted it. It never creates the row.
+    /// Formats is the lowest storage format among the rows, read in the same round trip.
+    /// </summary>
+    public abstract Task<(bool Found, int Formats)> Beat(DbConnection connection, InstanceRow instance, TimeSpan liveFor, CancellationToken ct);
+
+    /// <summary>Creates or refreshes this instance's heartbeat row in the transaction of its join.</summary>
+    public abstract Task WriteInstance(DbConnection connection, DbTransaction transaction, InstanceRow instance, CancellationToken ct);
 
     /// <summary>Deletes this instance's heartbeat row.</summary>
     public abstract Task Leave(DbConnection connection, Guid instanceId, CancellationToken ct);
 
-    /// <summary>The instances whose heartbeat, by the database clock, is younger than <paramref name="liveFor"/>.</summary>
-    public abstract Task<List<InstanceRow>> ReadLiveInstances(DbConnection connection, DbTransaction? transaction, TimeSpan liveFor, CancellationToken ct);
+    /// <summary>Deletes the heartbeat rows of instances that a cut-over does not count as live.</summary>
+    public abstract Task EvictInstances(DbConnection connection, DbTransaction transaction, IReadOnlyList<Guid> instanceIds, CancellationToken ct);
+
+    /// <summary>
+    /// Every heartbeat row. <see cref="InstanceRow.Live"/> is true while the heartbeat, by the database clock, is younger
+    /// than <paramref name="liveFor"/>.
+    /// </summary>
+    public abstract Task<List<InstanceRow>> ReadInstances(DbConnection connection, DbTransaction? transaction, TimeSpan liveFor, CancellationToken ct);
+
+    /// <summary>The instances whose heartbeat is younger than <paramref name="liveFor"/>.</summary>
+    public async Task<List<InstanceRow>> ReadLiveInstances(DbConnection connection, DbTransaction? transaction, TimeSpan liveFor, CancellationToken ct) =>
+        [.. (await ReadInstances(connection, transaction, liveFor, ct)).Where(i => i.Live)];
 
     /// <summary>Every checkpoint row.</summary>
-    public abstract Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct);
+    public abstract Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, DbTransaction? transaction, CancellationToken ct);
+
+    public Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct) => ReadCheckpoints(connection, null, ct);
 
     /// <summary>
     /// Locks one checkpoint row for the rest of the transaction. <see cref="CheckpointLock.Batch"/> skips a row another
@@ -114,8 +160,13 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// <summary>
     /// Takes the shared gate lock of each inline projection, then reads their statuses in a later statement, so the
     /// read sees any status change whose exclusive gate lock it waited for. The shared locks last until commit.
+    /// Only a checkpoint whose stored mode is inline is returned: a name with no row, or with a row that a rebuild
+    /// moved to another mode, is absent, and the caller must not apply it inline.
     /// </summary>
     public abstract Task<Dictionary<string, string>> ReadInlineStatuses(DbConnection connection, DbTransaction transaction, IReadOnlyList<string> names, CancellationToken ct);
+
+    /// <summary>The names in the order this provider takes their gate locks, for shared and for exclusive locks alike.</summary>
+    public virtual IReadOnlyList<string> GateOrder(IEnumerable<string> names) => [.. names.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
 
     /// <summary>
     /// Takes an inline projection's gate lock exclusively until commit. It waits for open appends that read the
@@ -175,15 +226,22 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     public abstract Task<Dictionary<string, byte[]>> ReadSubjectKeysById(DbConnection connection, DbTransaction? transaction, string tenantId, IReadOnlyList<string> keyIds, CancellationToken ct);
 
     /// <summary>
-    /// Deletes a subject's key and clears the stored state of every stream that holds their data, so nothing reads
-    /// their data after this commits: loads rebuild state from the now-redacted events.
+    /// Deletes a subject's key and returns how many rows it deleted, 0 or 1. It waits for open appends that hold the
+    /// key's share lock, so what they wrote under it is committed when this returns.
     /// </summary>
     public abstract Task<int> DeleteSubjectKey(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, CancellationToken ct);
+
+    /// <summary>
+    /// Clears the stored state of every stream that holds the subject's data, so loads rebuild it from the now-redacted
+    /// events. It waits for a write that holds such a stream's row.
+    /// </summary>
+    public abstract Task ClearSubjectState(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct);
 
     /// <summary>Records which streams hold each subject's data; existing pairs are left alone.</summary>
     public abstract Task RecordSubjectStreams(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, IReadOnlyList<string> subjectIds, CancellationToken ct);
 
-    public abstract Task<List<string>> ReadSubjectStreams(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct);
+    /// <summary>The streams that hold the subject's data, each with its stream type, in stream ID order.</summary>
+    public abstract Task<List<(string StreamId, string StreamType)>> ReadSubjectStreams(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct);
 
     /// <summary>Removes one pair, returning 0 when another runner already removed it.</summary>
     public abstract Task<int> DeleteSubjectStream(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, string streamId, CancellationToken ct);
@@ -298,8 +356,11 @@ internal static class CheckpointMode
 
 internal sealed record CheckpointRow(string Name, long Position, string Mode, string Status, string? Error, DateTimeOffset UpdatedAt, string? Handles = null);
 
-/// <summary>A checkpoint to create if it is missing. <paramref name="Rebuild"/> starts a new inline one in catch-up.</summary>
-internal sealed record CheckpointSeed(string Name, string Mode, string Handles, bool Rebuild);
+/// <summary>
+/// A checkpoint to create if it is missing. <paramref name="Rebuild"/> starts a new inline one in catch-up.
+/// <paramref name="AtHead"/> starts it at the head position instead of 0, so it never sees earlier events.
+/// </summary>
+internal sealed record CheckpointSeed(string Name, string Mode, string Handles, bool Rebuild, bool AtHead = false);
 
 internal sealed record JobRow(Guid Id, string Kind, string Args, string Status, string? Progress, DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? FinishedAt);
 

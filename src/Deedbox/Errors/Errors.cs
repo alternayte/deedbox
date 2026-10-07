@@ -40,6 +40,9 @@ internal static class Errors
     public const string ProjectionInUse = "DBX035";
     public const string PseudonymPeriodDestroyed = "DBX036";
     public const string PseudonymPrefixChanged = "DBX037";
+    public const string InstanceEvicted = "DBX038";
+    public const string JsonKeyOrder = "DBX039";
+    public const string IsolationLevel = "DBX040";
 
     /// <summary>The error catalogue: each code's page title. The docs build one page per entry; a test checks every code has one.</summary>
     public static readonly IReadOnlyDictionary<string, string> Titles = new Dictionary<string, string>
@@ -69,7 +72,7 @@ internal static class Errors
         [ResetNotImplemented] = "A projection cannot be rebuilt without ResetAsync",
         [InlineBatchProjection] = "A batch projection is registered inline",
         [NoKeyMode] = "Personal data needs a key mode",
-        [InvalidPersonalData] = "A personal-data property cannot hold null",
+        [InvalidPersonalData] = "A personal-data property cannot be encrypted",
         [MissingSubject] = "A personal-data property has no subject",
         [StreamDeleted] = "The stream was deleted",
         [MasterKeyUnusable] = "The master key cannot unwrap a key",
@@ -81,5 +84,8 @@ internal static class Errors
         [ProjectionInUse] = "A live instance still registers the projection",
         [PseudonymPeriodDestroyed] = "The pseudonym period's secret was destroyed",
         [PseudonymPrefixChanged] = "The pseudonym prefix differs from the period's prefix",
+        [InstanceEvicted] = "This instance was not counted as live",
+        [JsonKeyOrder] = "Polymorphic JSON cannot be read back on this database",
+        [IsolationLevel] = "The transaction's isolation level is not READ COMMITTED",
     };
 }

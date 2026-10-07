@@ -30,6 +30,8 @@ internal sealed partial class PostgresProvider : DeedboxProvider
 
     public override string Name => "postgres";
 
+    public override bool KeepsJsonKeyOrder => false;
+
     public override IReadOnlyList<Migration> Migrations => AllMigrations;
 
     private Statements Sql { get; }
@@ -116,10 +118,11 @@ internal sealed partial class PostgresProvider : DeedboxProvider
     }
 
     public override async Task<long> InsertEvents(
-        DbConnection connection, DbTransaction transaction, string tenantId, string streamId, string streamType,
+        DbConnection connection, DbTransaction transaction, Guid instanceId, string tenantId, string streamId, string streamType,
         DateTimeOffset occurredAt, IReadOnlyList<NewEvent> events, CancellationToken ct)
     {
         await using var command = Command(connection, transaction, Sql.InsertEvents);
+        Add(command, "instance", instanceId);
         Add(command, "n", (long)events.Count);
         Add(command, "tenant", tenantId);
         Add(command, "stream", streamId);
@@ -131,7 +134,11 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         Add(command, "type_versions", events.Select(e => e.EventVersion).ToArray());
         command.Parameters.Add(new NpgsqlParameter("payloads", NpgsqlDbType.Array | NpgsqlDbType.Jsonb) { Value = events.Select(e => e.Payload).ToArray() });
         command.Parameters.Add(new NpgsqlParameter("metadata", NpgsqlDbType.Array | NpgsqlDbType.Jsonb) { Value = events.Select(e => e.Metadata).ToArray() });
-        return (long)(await command.ExecuteScalarAsync(ct))!;
+
+        // The first statement only locks the counter; the second returns no row when the instance was evicted.
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        await reader.NextResultAsync(ct);
+        return await reader.ReadAsync(ct) ? reader.GetInt64(0) : -1;
     }
 
     public override async IAsyncEnumerable<StoredEvent> ReadStreamEvents(
@@ -181,26 +188,52 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         return rows;
     }
 
-    public override async Task EnsureCheckpoints(DbConnection connection, IReadOnlyList<CheckpointSeed> checkpoints, CancellationToken ct)
+    public override async Task UpdateHandles(DbConnection connection, DbTransaction transaction, string name, string handles, CancellationToken ct)
     {
-        await using var command = Command(connection, null, Sql.EnsureCheckpoints);
+        await using var command = Command(connection, transaction, Sql.UpdateHandles);
+        Add(command, "name", name);
+        command.Parameters.Add(new NpgsqlParameter("handles", NpgsqlDbType.Jsonb) { Value = handles });
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task EnsureCheckpoints(DbConnection connection, DbTransaction transaction, IReadOnlyList<CheckpointSeed> checkpoints, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.EnsureCheckpoints);
         Add(command, "names", checkpoints.Select(c => c.Name).ToArray());
         Add(command, "modes", checkpoints.Select(c => c.Mode).ToArray());
         Add(command, "rebuild", checkpoints.Select(c => c.Rebuild).ToArray());
+        Add(command, "at_head", checkpoints.Select(c => c.AtHead).ToArray());
         command.Parameters.Add(new NpgsqlParameter("handles", NpgsqlDbType.Array | NpgsqlDbType.Jsonb) { Value = checkpoints.Select(c => c.Handles).ToArray() });
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    public override async Task Beat(DbConnection connection, InstanceRow instance, TimeSpan liveFor, CancellationToken ct)
+    public override async Task<(bool Found, int Formats)> Beat(DbConnection connection, InstanceRow instance, TimeSpan liveFor, CancellationToken ct)
     {
         await using var command = Command(connection, null, Sql.Beat);
+        Add(command, "id", instance.Id);
+        Add(command, "stale", liveFor * 10);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        return (reader.GetBoolean(0), reader.GetInt32(1));
+    }
+
+    public override async Task WriteInstance(DbConnection connection, DbTransaction transaction, InstanceRow instance, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.WriteInstance);
         Add(command, "id", instance.Id);
         Add(command, "host", instance.Host);
         Add(command, "app", instance.App);
         command.Parameters.Add(new NpgsqlParameter("consumers", NpgsqlDbType.Jsonb) { Value = Instances.ListJson(instance.Consumers) });
         command.Parameters.Add(new NpgsqlParameter("inline", NpgsqlDbType.Jsonb) { Value = Instances.ListJson(instance.Inline) });
         command.Parameters.Add(new NpgsqlParameter("events", NpgsqlDbType.Jsonb) { Value = Instances.ListJson(instance.Events) });
-        Add(command, "stale", liveFor * 10);
+        Add(command, "formats", instance.Formats);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public override async Task EvictInstances(DbConnection connection, DbTransaction transaction, IReadOnlyList<Guid> instanceIds, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.EvictInstances);
+        Add(command, "ids", instanceIds.ToArray());
         await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -211,24 +244,24 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    public override async Task<List<InstanceRow>> ReadLiveInstances(DbConnection connection, DbTransaction? transaction, TimeSpan liveFor, CancellationToken ct)
+    public override async Task<List<InstanceRow>> ReadInstances(DbConnection connection, DbTransaction? transaction, TimeSpan liveFor, CancellationToken ct)
     {
-        await using var command = Command(connection, transaction, Sql.ReadLiveInstances);
+        await using var command = Command(connection, transaction, Sql.ReadInstances);
         Add(command, "live", liveFor);
         await using var reader = await command.ExecuteReaderAsync(ct);
         var rows = new List<InstanceRow>();
         while (await reader.ReadAsync(ct))
         {
             rows.Add(new InstanceRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Instances.ReadList(reader.GetString(3)),
-                Instances.ReadList(reader.GetString(4)), Instances.ReadList(reader.GetString(5)), reader.GetFieldValue<DateTimeOffset>(6)));
+                Instances.ReadList(reader.GetString(4)), Instances.ReadList(reader.GetString(5)), reader.GetFieldValue<DateTimeOffset>(6), reader.GetBoolean(7), reader.GetInt32(8)));
         }
 
         return rows;
     }
 
-    public override async Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct)
+    public override async Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, DbTransaction? transaction, CancellationToken ct)
     {
-        await using var command = Command(connection, null, Sql.ReadCheckpoints);
+        await using var command = Command(connection, transaction, Sql.ReadCheckpoints);
         return await ReadCheckpointRows(command, ct);
     }
 
@@ -274,6 +307,9 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         Add(command, "key", GateKey(name));
         await command.ExecuteNonQueryAsync(ct);
     }
+
+    // An append locks its gates in key order, in one statement.
+    public override IReadOnlyList<string> GateOrder(IEnumerable<string> names) => [.. names.Distinct(StringComparer.Ordinal).OrderBy(GateKey)];
 
     private static int GateKey(string name) => BitConverter.ToInt32(SHA256.HashData(Encoding.UTF8.GetBytes(name)), 0);
 
@@ -423,6 +459,14 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         return await command.ExecuteNonQueryAsync(ct);
     }
 
+    public override async Task ClearSubjectState(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ClearSubjectState);
+        Add(command, "tenant", tenantId);
+        Add(command, "subject", subjectId);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     public override async Task<PseudonymKeyRow?> ReadPseudonymKey(DbConnection connection, DbTransaction? transaction, string tenantId, string periodId, CancellationToken ct)
     {
         await using var command = Command(connection, transaction, Sql.ReadPseudonymKey);
@@ -500,15 +544,15 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    public override async Task<List<string>> ReadSubjectStreams(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct)
+    public override async Task<List<(string StreamId, string StreamType)>> ReadSubjectStreams(DbConnection connection, DbTransaction? transaction, string tenantId, string subjectId, CancellationToken ct)
     {
         await using var command = Command(connection, transaction, Sql.ReadSubjectStreams);
         Add(command, "tenant", tenantId);
         Add(command, "subject", subjectId);
         await using var reader = await command.ExecuteReaderAsync(ct);
-        var streams = new List<string>();
+        var streams = new List<(string, string)>();
         while (await reader.ReadAsync(ct))
-            streams.Add(reader.GetString(0));
+            streams.Add((reader.GetString(0), reader.GetString(1)));
         return streams;
     }
 
@@ -653,9 +697,13 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             """;
 
         // The counter update and the insert are one statement, so the counter lock is held for as short a time as possible.
+        // The lock comes in a statement of its own before them: the heartbeat check then reads with a snapshot taken
+        // after the lock, so it sees an eviction by the cut-over that held the counter. In one statement it would not.
         public readonly string InsertEvents = $"""
+            SELECT value FROM {s}.position FOR UPDATE;
             WITH counter AS (
-                UPDATE {s}.position SET value = value + @n RETURNING value
+                UPDATE {s}.position SET value = value + @n
+                WHERE EXISTS (SELECT 1 FROM {s}.instances WHERE instance_id = @instance) RETURNING value
             ), inserted AS (
                 INSERT INTO {s}.events (global_position, event_id, tenant_id, stream_id, version, stream_type, event_type, event_version, payload, metadata, occurred_at)
                 SELECT counter.value - @n + e.ord, e.event_id, @tenant, @stream, e.version, @stream_type, e.event_type, e.event_version, e.payload, e.metadata, @occurred_at
@@ -688,26 +736,37 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         private const string EventColumns = "global_position, event_id, tenant_id, stream_id, version, stream_type, event_type, event_version";
 
         public readonly string EnsureCheckpoints = $"""
-            INSERT INTO {s}.checkpoints (name, mode, status, handles)
-            SELECT n, m, CASE WHEN m = 'inline' AND (r OR (SELECT value FROM {s}.position) > 0) THEN 'rebuilding' ELSE 'running' END, h
-            FROM unnest(@names, @modes, @rebuild, @handles) AS c(n, m, r, h)
-            ON CONFLICT (name) DO UPDATE SET handles = EXCLUDED.handles
+            INSERT INTO {s}.checkpoints (name, mode, status, handles, position)
+            SELECT n, m, CASE WHEN m = 'inline' AND (r OR (SELECT value FROM {s}.position) > 0) THEN 'rebuilding' ELSE 'running' END, h,
+                CASE WHEN a THEN (SELECT value FROM {s}.position) ELSE 0 END
+            FROM unnest(@names, @modes, @rebuild, @handles, @at_head) AS c(n, m, r, h, a)
+            ON CONFLICT (name) DO NOTHING
             """;
 
+        public readonly string UpdateHandles = $"UPDATE {s}.checkpoints SET handles = @handles WHERE name = @name";
+
         public readonly string Beat = $"""
-            INSERT INTO {s}.instances (instance_id, host, app, consumers, inline_projections, event_types)
-            VALUES (@id, @host, @app, @consumers, @inline, @events)
+            DELETE FROM {s}.instances WHERE seen_at < clock_timestamp() - @stale;
+            WITH beat AS (UPDATE {s}.instances SET seen_at = clock_timestamp() WHERE instance_id = @id RETURNING 1)
+            SELECT EXISTS (SELECT 1 FROM beat), coalesce((SELECT min(formats) FROM {s}.instances), 1);
+            """;
+
+        public readonly string WriteInstance = $"""
+            INSERT INTO {s}.instances (instance_id, host, app, consumers, inline_projections, event_types, seen_at, formats)
+            VALUES (@id, @host, @app, @consumers, @inline, @events, clock_timestamp(), @formats)
             ON CONFLICT (instance_id) DO UPDATE SET
                 consumers = EXCLUDED.consumers, inline_projections = EXCLUDED.inline_projections,
-                event_types = EXCLUDED.event_types, seen_at = clock_timestamp();
-            DELETE FROM {s}.instances WHERE seen_at < clock_timestamp() - @stale;
+                event_types = EXCLUDED.event_types, seen_at = clock_timestamp(), formats = EXCLUDED.formats
             """;
 
         public readonly string Leave = $"DELETE FROM {s}.instances WHERE instance_id = @id";
 
-        public readonly string ReadLiveInstances = $"""
-            SELECT instance_id, host, app, consumers::text, inline_projections::text, event_types::text, seen_at
-            FROM {s}.instances WHERE seen_at > clock_timestamp() - @live ORDER BY started_at
+        public readonly string EvictInstances = $"DELETE FROM {s}.instances WHERE instance_id = ANY(@ids)";
+
+        public readonly string ReadInstances = $"""
+            SELECT instance_id, host, app, consumers::text, inline_projections::text, event_types::text, seen_at,
+                seen_at > clock_timestamp() - @live, formats
+            FROM {s}.instances ORDER BY started_at
             """;
 
         public readonly string ReadCheckpoints = $"SELECT {CheckpointColumns} FROM {s}.checkpoints ORDER BY name";
@@ -719,7 +778,7 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             WHERE name = @name
             """;
 
-        public readonly string ReadStatuses = $"SELECT name, status FROM {s}.checkpoints WHERE name = ANY(@names)";
+        public readonly string ReadStatuses = $"SELECT name, status FROM {s}.checkpoints WHERE name = ANY(@names) AND mode = 'inline'";
 
         public readonly string ReadEventsAfter = $"""
             SELECT {EventColumns}, payload::text, metadata::text, occurred_at
@@ -822,10 +881,11 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         public readonly string ReadSubjectKeysById =
             $"SELECT key_id, wrapped_key FROM {s}.subject_keys WHERE tenant_id = @tenant AND key_id = ANY(@ids)";
 
-        public readonly string DeleteSubjectKey = $"""
+        public readonly string DeleteSubjectKey = $"DELETE FROM {s}.subject_keys WHERE tenant_id = @tenant AND subject_id = @subject";
+
+        public readonly string ClearSubjectState = $"""
             UPDATE {s}.streams SET state = NULL
-            WHERE tenant_id = @tenant AND stream_id IN (SELECT stream_id FROM {s}.subject_streams WHERE tenant_id = @tenant AND subject_id = @subject);
-            DELETE FROM {s}.subject_keys WHERE tenant_id = @tenant AND subject_id = @subject;
+            WHERE tenant_id = @tenant AND stream_id IN (SELECT stream_id FROM {s}.subject_streams WHERE tenant_id = @tenant AND subject_id = @subject)
             """;
 
         public readonly string RecordSubjectStreams = $"""
@@ -834,8 +894,11 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             ON CONFLICT DO NOTHING
             """;
 
-        public readonly string ReadSubjectStreams =
-            $"SELECT stream_id FROM {s}.subject_streams WHERE tenant_id = @tenant AND subject_id = @subject ORDER BY stream_id";
+        public readonly string ReadSubjectStreams = $"""
+            SELECT p.stream_id, s.stream_type FROM {s}.subject_streams p
+            JOIN {s}.streams s ON s.tenant_id = p.tenant_id AND s.stream_id = p.stream_id
+            WHERE p.tenant_id = @tenant AND p.subject_id = @subject ORDER BY p.stream_id
+            """;
 
         public readonly string DeleteSubjectStream =
             $"DELETE FROM {s}.subject_streams WHERE tenant_id = @tenant AND subject_id = @subject AND stream_id = @stream";

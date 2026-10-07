@@ -1,19 +1,26 @@
 ---
 title: Known limits
-description: What Deedbox does not do in 0.1, stated plainly.
+description: What Deedbox does not do in 0.5, stated plainly.
 sidebar:
   order: 8
 ---
 
-This page lists the limits of Deedbox 0.1, so you can plan around them.
+This page lists the limits of Deedbox 0.5, so you can plan around them.
 
 - **Appends take turns.** One counter orders all appends. See [the benchmarks](/operations/benchmarks/) for the ceiling.
-- **Two streams in one transaction can deadlock.** A transaction that appends to two streams can deadlock with a concurrent append; the database aborts one. Nothing is lost. Append to one stream per transaction, or retry.
+- **One append per transaction you own.** A second append in the same transaction can deadlock with a concurrent append or with a cut-over; the database aborts one. Nothing is lost. Make one append per transaction, or run the transaction again; see [use Dapper or plain ADO.NET](/how-to/use-dapper/).
+- **An append in your transaction can fail during a deploy.** When Deedbox did not count the instance as live, the append fails with [DBX038](/reference/errors/dbx038/), and you run the transaction again. Deedbox repeats an append in a transaction that it owns.
 - **One message per event.** Deedbox.QueueBox writes at most one message for each event, to one topic. To move consumers to a new contract, see [change a message's contract](/how-to/wire-queuebox/#move-consumers-to-a-new-contract).
 - **One database per store.** Database-per-tenant comes in a later release.
 - **Rebuilds are in place.** The read model is empty or partial during a rebuild. To keep serving reads, build the new read model under a new name; see [replace a read model without downtime](/how-to/replace-a-read-model/).
 - **A crashed instance holds back inline switches for 30 seconds.** Deedbox counts an instance as live until its heartbeat is 30 seconds old, and a new inline projection stays in catch-up while a live instance can skip it; see [inline or async projections](/concepts/inline-or-async/#deploy-inline-projections-safely).
 - **Projections run one event at a time, in order.**
-- **Only top-level properties hold personal data.**
+- **Only top-level properties hold personal data.** `[PersonalData]` on a type nested in an event fails start-up ([DBX026](/reference/errors/dbx026/)).
+- **Erasure covers what Deedbox stores.** Deedbox does not erase outbox rows, your read models or your other tables. Scrub them when you handle `SubjectErased`.
+- **A polymorphic member needs .NET 9 on Postgres.** An event or state with a `[JsonDerivedType]` member works on .NET 9 and later. On .NET 8 with Postgres, start-up fails with [DBX039](/reference/errors/dbx039/).
+- **A rollback from 0.5 can need a restore.** After 0.5.0 writes storage format 2, an older version cannot read that data; see [erasure and the key hierarchy](/concepts/erasure-and-keys/#storage-formats).
 - **Start-up needs the database.** Deedbox checks the schema when the host starts. Build-time OpenAPI generation starts the host too; skip hosted services when `Assembly.GetEntryAssembly()?.GetName().Name` is `GetDocument.Insider`.
 - **Metadata is set through `DeedboxContext`.** There is no ASP.NET Core helper; use the [middleware](/how-to/use-tenants/) shown in the tenants guide.
+- **Isolation levels.** An append in your own transaction needs READ COMMITTED. REPEATABLE READ, SERIALIZABLE and SNAPSHOT fail with [DBX040](/reference/errors/dbx040/).
+- **Two versions of one projection.** During a rolling deploy, the runner of either version can apply a batch. When you change which events a projection handles, finish the deploy, then rebuild the projection.
+- **A projection handler that ignores its cancellation token.** After `HandlerTimeout` the runner cancels the token and waits. It cannot stop a handler that writes in the batch's transaction.

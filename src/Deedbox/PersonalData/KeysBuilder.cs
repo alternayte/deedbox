@@ -7,7 +7,12 @@ public sealed class KeysBuilder
     {
     }
 
-    internal Func<DeedboxProvider, IMasterKeyProvider>? Factory { get; private set; }
+    private readonly List<Func<DeedboxProvider, IMasterKeyProvider>> _unwrapOnly = [];
+    private Func<DeedboxProvider, IMasterKeyProvider>? _current;
+
+    internal Func<DeedboxProvider, IMasterKeyProvider>? Factory => _current is not { } current
+        ? null
+        : _unwrapOnly.Count == 0 ? current : provider => new MasterKeys(current(provider), [.. _unwrapOnly.Select(create => create(provider))]);
 
     internal string? Placeholder { get; private set; }
 
@@ -62,9 +67,24 @@ public sealed class KeysBuilder
         return this;
     }
 
+    /// <summary>
+    /// Adds a master key that only unwraps. Use it to change the key mode, or the key, while the app runs: first deploy
+    /// every instance with the new key here, then deploy with the new key as the mode and the old key here, then run
+    /// <c>deedbox keys rewrap</c>, then remove the old key. At each step every instance can read every row.
+    /// </summary>
+    /// <param name="other">Chooses the other key with the same methods as the key mode, such as <c>k => k.StoreInDatabase()</c>.</param>
+    public KeysBuilder AlsoUnwrapWith(Action<KeysBuilder> other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        var builder = new KeysBuilder();
+        other(builder);
+        _unwrapOnly.Add(builder.Factory ?? throw new ArgumentException("Choose a key inside AlsoUnwrapWith, such as k => k.StoreInDatabase().", nameof(other)));
+        return this;
+    }
+
     private KeysBuilder Set(Func<DeedboxProvider, IMasterKeyProvider> factory)
     {
-        Factory = factory;
+        _current = factory;
         return this;
     }
 }

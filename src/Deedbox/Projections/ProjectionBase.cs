@@ -173,7 +173,8 @@ internal sealed class TransactionWork(DbConnection connection, DbTransaction tra
     public DbConnection Connection { get; } = connection;
     public DbTransaction Transaction { get; } = transaction;
     public IServiceProvider Services { get; } = services;
-    public CancellationToken CancellationToken { get; } = ct;
+    /// <summary>The token handlers see. The runner replaces it for each handler call with one that the handler timeout cancels.</summary>
+    public CancellationToken CancellationToken { get; set; } = ct;
 
     /// <summary>Objects that already take part in the transaction, such as the DbContexts passed to UseDbContext.</summary>
     public IReadOnlyList<object> Participants { get; } = participants;

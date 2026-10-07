@@ -36,7 +36,7 @@ internal static class EventDecoding
                 var payload = e.Payload;
                 IReadOnlyList<string> erased = [];
                 if (keys.TryGetValue(e.TenantId, out var tenantKeys) && FieldCipher.HasMarkers(payload))
-                    (payload, erased) = FieldCipher.Reveal(payload, runtime.Registry.FindStoredName(e.EventType), tenantKeys, runtime.Options.RedactedPlaceholder);
+                    (payload, erased) = FieldCipher.Reveal(payload, e.EventId, runtime.Registry.FindStoredName(e.EventType), tenantKeys, runtime.Options.RedactedPlaceholder);
                 decoded.Add(new DecodedEvent(e, runtime.Registry.Decode(e.EventType, e.EventVersion, payload), erased));
             }
             catch (Exception ex) when (ex is not DeedboxException { Code: Errors.KeyMaterialCorrupt or Errors.MasterKeyUnusable or Errors.NoKeyMode })

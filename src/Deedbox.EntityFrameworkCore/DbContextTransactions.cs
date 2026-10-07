@@ -19,12 +19,22 @@ internal sealed class DbContextTransactions(DbContext primary, IReadOnlyList<DbC
         var transaction = efTransaction.GetDbTransaction();
 
         var enlisted = new List<DbContext>();
-        foreach (var other in others)
+        try
         {
-            if (other.Database.CurrentTransaction?.GetDbTransaction() == transaction)
-                continue;
-            await other.Database.UseTransactionAsync(transaction, ct);
-            enlisted.Add(other);
+            foreach (var other in others)
+            {
+                if (other.Database.CurrentTransaction?.GetDbTransaction() == transaction)
+                    continue;
+                await other.Database.UseTransactionAsync(transaction, ct);
+                enlisted.Add(other);
+            }
+        }
+        catch when (existing is null)
+        {
+            foreach (var context in enlisted)
+                await context.Database.UseTransactionAsync(null, CancellationToken.None);
+            await efTransaction.DisposeAsync();
+            throw;
         }
 
         return new DbContextLease(connection, transaction, existing is null ? efTransaction : null, primary, others, enlisted);
@@ -67,16 +77,16 @@ internal sealed class DbContextTransactions(DbContext primary, IReadOnlyList<DbC
 
         public override async Task BeforeCounter(CancellationToken ct)
         {
-            await primary.SaveChangesAsync(ct);
+            await InTransaction.Run(primary, () => primary.SaveChangesAsync(ct), ct);
             foreach (var other in others)
-                await other.SaveChangesAsync(ct);
+                await InTransaction.Run(other, () => other.SaveChangesAsync(ct), ct);
         }
 
         public override bool Commits => owned is not null;
 
         public override IReadOnlyList<object> Participants { get; } = [primary, .. others];
 
-        public override Task Complete(CancellationToken ct) => owned?.CommitAsync(ct) ?? Task.CompletedTask;
+        public override Task Complete(CancellationToken ct) => owned?.CommitAsync(CancellationToken.None) ?? Task.CompletedTask;
 
         public override async ValueTask DisposeAsync()
         {

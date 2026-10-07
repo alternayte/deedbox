@@ -34,7 +34,7 @@ public abstract class PseudonymPrivacyTests(Databases databases, Db db) : Runner
         await Store(host, "acme").Append("m-2", ExpectedVersion.NoStream, [Invite(q2, "Alice")]);
         await WaitForCaughtUp(host, "mail");
 
-        foreach (var job in await AdminOf(host).EraseIdentityAsync(identity, "acme"))
+        foreach (var job in (await AdminOf(host).EraseIdentityAsync(identity, "acme")).JobIds)
             Assert.Equal("done", (await WaitForJob(host, job)).Status);
         await AdminOf(host).DestroyPseudonymPeriodAsync("2026-Q1", "acme");
         await WaitForCaughtUp(host, "mail");

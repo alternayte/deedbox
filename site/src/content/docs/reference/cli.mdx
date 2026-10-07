@@ -17,16 +17,18 @@ Every command that reaches the database takes `--provider postgres|sqlserver`, `
 | --- | --- | --- |
 | `deedbox schema script --from <n>` | Prints the migration SQL after version n. `--native-json` adds the SQL Server `json` conversion. | CLI |
 | `deedbox schema apply` | Applies pending migrations under a lock. `--native-json` also converts SQL Server JSON columns to `json`. | CLI |
-| `deedbox status [--json]` | Checkpoints, lag, stalled consumers with their poison event, recent jobs. | CLI |
-| `deedbox keys rewrap --from <key> --to <key>` | Re-wraps tenant keys and pseudonym secrets. A key is `database`, `env:<VARIABLE>` or `azure:<key URL>`. | CLI |
+| `deedbox status [--json]` | Checkpoints, lag, stalled consumers with their poison event and exception type, recent jobs. The exception's message is in the app's log only. | CLI |
+| `deedbox keys rewrap --from <key> --to <key>` | Re-wraps tenant keys and pseudonym secrets, and prints how many. A key is `database`, `env:<VARIABLE>` or `azure:<key URL>`. Follow the order in [rotate keys](/how-to/rotate-keys/#follow-this-order). | CLI |
 | `deedbox tenant shred <tenant> --yes` | Crypto-shreds a tenant, including its pseudonym secrets. | CLI |
 | `deedbox pseudonyms destroy <period> [--tenant t] --yes` | Destroys a period's pseudonym secret; the jobs table records it. | CLI |
 | `deedbox lockfile diff <old> <new>` | Shows event-contract changes; exits 1 on a break. | CLI |
 | `deedbox rebuild <projection> [--wait]` | Queues a rebuild. | App |
 | `deedbox retire <projection>` | Retires a projection that no live instance registers. Runs at once. | CLI |
 | `deedbox skip <consumer> --event <id> [--wait]` | Queues an audited skip of a poison event. | App |
-| `deedbox erase <subject> [--tenant t] [--wait]` | Deletes the subject's key now; queues the rest. | CLI, then app |
+| `deedbox erase <subject> [--tenant t] [--wait]` | Deletes the subject's key now; queues the rest. Exits 1 when it deleted no key: the subject ID or the tenant is wrong, or the subject was erased before. | CLI, then app |
 | `deedbox erase --identity <id> --master-key <key> [--tenant t] [--wait]` | Erases the identity's subject in every period with a pseudonym secret. Never prints the identity. | CLI, then app |
 | `deedbox snapshots rebuild <streamType> [--wait]` | Queues a rebuild of stored state. | App |
 
 "App" means a running app instance with the runner on takes the queued job. `--wait` follows the job and exits 1 if it fails.
+
+In `deedbox status --json`, the `error` of a stalled consumer holds `exception`, the exception type, and `stack`, the stack frames. It holds no `message` and no `stackTrace`.

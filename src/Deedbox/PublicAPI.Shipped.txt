@@ -1,8 +1,7 @@
 #nullable enable
 Deedbox.AppendResult
 Deedbox.AppendResult.<Clone>$() -> Deedbox.AppendResult!
-Deedbox.AppendResult.AppendResult(long Version, System.Collections.Generic.IReadOnlyList<Deedbox.EventEnvelope!>! Events) -> void
-Deedbox.AppendResult.Deconstruct(out long Version, out System.Collections.Generic.IReadOnlyList<Deedbox.EventEnvelope!>! Events) -> void
+Deedbox.AppendResult.AppendResult() -> void
 Deedbox.AppendResult.Equals(Deedbox.AppendResult? other) -> bool
 Deedbox.AppendResult.Events.get -> System.Collections.Generic.IReadOnlyList<Deedbox.EventEnvelope!>!
 Deedbox.AppendResult.Events.init -> void
@@ -23,22 +22,32 @@ Deedbox.ConcurrencyException
 Deedbox.ConcurrencyException.Actual.get -> long
 Deedbox.ConcurrencyException.Expected.get -> Deedbox.ExpectedVersion
 Deedbox.ConcurrencyException.StreamId.get -> string!
+Deedbox.ConsumerMode
+Deedbox.ConsumerMode.Async = 2 -> Deedbox.ConsumerMode
+Deedbox.ConsumerMode.Inline = 1 -> Deedbox.ConsumerMode
+Deedbox.ConsumerMode.Subscription = 3 -> Deedbox.ConsumerMode
+Deedbox.ConsumerMode.Unknown = 0 -> Deedbox.ConsumerMode
+Deedbox.ConsumerState
+Deedbox.ConsumerState.Rebuilding = 2 -> Deedbox.ConsumerState
+Deedbox.ConsumerState.Retired = 4 -> Deedbox.ConsumerState
+Deedbox.ConsumerState.Running = 1 -> Deedbox.ConsumerState
+Deedbox.ConsumerState.Stalled = 3 -> Deedbox.ConsumerState
+Deedbox.ConsumerState.Unknown = 0 -> Deedbox.ConsumerState
 Deedbox.ConsumerStatus
 Deedbox.ConsumerStatus.<Clone>$() -> Deedbox.ConsumerStatus!
-Deedbox.ConsumerStatus.ConsumerStatus(string! Name, string! Mode, string! Status, long Position, long Lag, System.DateTimeOffset UpdatedAt, string? Error) -> void
-Deedbox.ConsumerStatus.Deconstruct(out string! Name, out string! Mode, out string! Status, out long Position, out long Lag, out System.DateTimeOffset UpdatedAt, out string? Error) -> void
+Deedbox.ConsumerStatus.ConsumerStatus() -> void
 Deedbox.ConsumerStatus.Equals(Deedbox.ConsumerStatus? other) -> bool
 Deedbox.ConsumerStatus.Error.get -> string?
 Deedbox.ConsumerStatus.Error.init -> void
 Deedbox.ConsumerStatus.Lag.get -> long
 Deedbox.ConsumerStatus.Lag.init -> void
-Deedbox.ConsumerStatus.Mode.get -> string!
+Deedbox.ConsumerStatus.Mode.get -> Deedbox.ConsumerMode
 Deedbox.ConsumerStatus.Mode.init -> void
 Deedbox.ConsumerStatus.Name.get -> string!
 Deedbox.ConsumerStatus.Name.init -> void
 Deedbox.ConsumerStatus.Position.get -> long
 Deedbox.ConsumerStatus.Position.init -> void
-Deedbox.ConsumerStatus.Status.get -> string!
+Deedbox.ConsumerStatus.Status.get -> Deedbox.ConsumerState
 Deedbox.ConsumerStatus.Status.init -> void
 Deedbox.ConsumerStatus.UpdatedAt.get -> System.DateTimeOffset
 Deedbox.ConsumerStatus.UpdatedAt.init -> void
@@ -51,11 +60,13 @@ Deedbox.DeedboxBuilder.ExecuteRetries(int retries) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Keys(System.Action<Deedbox.KeysBuilder!>! configure) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.OnAppending<THook>() -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Projection<TProjection>(string! name, Deedbox.Run run) -> Deedbox.DeedboxBuilder!
+Deedbox.DeedboxBuilder.PseudonymPrefix(string! prefix) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Runner(System.Action<Deedbox.RunnerOptions!>! configure) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Schema(string! name) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Stream<TState>(System.Action<Deedbox.StreamBuilder<TState>!>! configure) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Stream<TState>(string! name, System.Action<Deedbox.StreamBuilder<TState>!>! configure) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.Subscription<TSubscription>(string! name) -> Deedbox.DeedboxBuilder!
+Deedbox.DeedboxBuilder.Subscription<TSubscription>(string! name, Deedbox.SubscriptionStart start) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxBuilder.UseJsonContext(System.Text.Json.Serialization.JsonSerializerContext! context) -> Deedbox.DeedboxBuilder!
 Deedbox.DeedboxContext
 Deedbox.DeedboxContext.CausedBy(Deedbox.EventEnvelope! envelope) -> void
@@ -64,9 +75,18 @@ Deedbox.DeedboxContext.Metadata.get -> Deedbox.EventMetadata!
 Deedbox.DeedboxContext.Metadata.set -> void
 Deedbox.DeedboxContext.TenantId.get -> string!
 Deedbox.DeedboxContext.TenantId.set -> void
+Deedbox.DeedboxError
 Deedbox.DeedboxException
 Deedbox.DeedboxException.Code.get -> string!
 Deedbox.DeedboxException.DeedboxException(string! code, string! message, System.Exception? innerException = null) -> void
+Deedbox.ErasureResult
+Deedbox.ErasureResult.<Clone>$() -> Deedbox.ErasureResult!
+Deedbox.ErasureResult.Equals(Deedbox.ErasureResult? other) -> bool
+Deedbox.ErasureResult.ErasureResult() -> void
+Deedbox.ErasureResult.JobIds.get -> System.Collections.Generic.IReadOnlyList<System.Guid>!
+Deedbox.ErasureResult.JobIds.init -> void
+Deedbox.ErasureResult.KeysDeleted.get -> int
+Deedbox.ErasureResult.KeysDeleted.init -> void
 Deedbox.EventBuilder<TEvent>
 Deedbox.EventBuilder<TEvent>.Alias(string! oldName) -> Deedbox.EventBuilder<TEvent>!
 Deedbox.EventBuilder<TEvent>.From(int version, System.Action<System.Text.Json.Nodes.JsonObject!>! upcast) -> Deedbox.EventBuilder<TEvent>!
@@ -101,11 +121,10 @@ Deedbox.EventMetadata.TraceParent.get -> string?
 Deedbox.EventMetadata.TraceParent.init -> void
 Deedbox.ExecuteResult<TState>
 Deedbox.ExecuteResult<TState>.<Clone>$() -> Deedbox.ExecuteResult<TState>!
-Deedbox.ExecuteResult<TState>.Deconstruct(out TState State, out long Version, out System.Collections.Generic.IReadOnlyList<Deedbox.EventEnvelope!>! Events) -> void
 Deedbox.ExecuteResult<TState>.Equals(Deedbox.ExecuteResult<TState>? other) -> bool
 Deedbox.ExecuteResult<TState>.Events.get -> System.Collections.Generic.IReadOnlyList<Deedbox.EventEnvelope!>!
 Deedbox.ExecuteResult<TState>.Events.init -> void
-Deedbox.ExecuteResult<TState>.ExecuteResult(TState State, long Version, System.Collections.Generic.IReadOnlyList<Deedbox.EventEnvelope!>! Events) -> void
+Deedbox.ExecuteResult<TState>.ExecuteResult() -> void
 Deedbox.ExecuteResult<TState>.State.get -> TState
 Deedbox.ExecuteResult<TState>.State.init -> void
 Deedbox.ExecuteResult<TState>.Version.get -> long
@@ -123,7 +142,9 @@ Deedbox.IEventStore.Load<TState>(string! streamId, System.Threading.Cancellation
 Deedbox.IEventStore.UseTransaction(System.Data.Common.DbTransaction! transaction) -> Deedbox.IEventStore!
 Deedbox.IEventStore.WithMetadata(System.Func<Deedbox.EventMetadata!, Deedbox.EventMetadata!>! change) -> Deedbox.IEventStore!
 Deedbox.IEventStoreAdmin
-Deedbox.IEventStoreAdmin.EraseSubjectAsync(string! subjectId, string! tenantId = "", System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
+Deedbox.IEventStoreAdmin.DestroyPseudonymPeriodAsync(string! periodId, string! tenantId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
+Deedbox.IEventStoreAdmin.EraseIdentityAsync(string! identity, string! tenantId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Deedbox.ErasureResult!>!
+Deedbox.IEventStoreAdmin.EraseSubjectAsync(string! subjectId, string! tenantId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Deedbox.ErasureResult!>!
 Deedbox.IEventStoreAdmin.GetJobAsync(System.Guid jobId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Deedbox.JobInfo?>!
 Deedbox.IEventStoreAdmin.GetStatusAsync(System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Deedbox.StoreStatus!>!
 Deedbox.IEventStoreAdmin.RebuildAsync(string! projection, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
@@ -135,7 +156,10 @@ Deedbox.IEventStoreAdmin.SkipAsync(string! consumer, System.Guid eventId, System
 Deedbox.IMasterKeyProvider
 Deedbox.IMasterKeyProvider.KeyVersion.get -> string!
 Deedbox.IMasterKeyProvider.UnwrapAsync(byte[]! wrappedKey, string! keyVersion, System.Threading.CancellationToken ct) -> System.Threading.Tasks.Task<byte[]!>!
-Deedbox.IMasterKeyProvider.WrapAsync(byte[]! key, System.Threading.CancellationToken ct) -> System.Threading.Tasks.Task<byte[]!>!
+Deedbox.IMasterKeyProvider.WrapAsync(byte[]! key, System.Threading.CancellationToken ct) -> System.Threading.Tasks.Task<Deedbox.WrappedKey!>!
+Deedbox.IPseudonyms
+Deedbox.IPseudonyms.EraseIdentityAsync(string! identity, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<System.Guid>!>!
+Deedbox.IPseudonyms.SubjectForAsync(string! identity, string! periodId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
 Deedbox.IState<TSelf>
 Deedbox.IState<TSelf>.Evolve(TSelf state, object! event) -> TSelf
 Deedbox.IState<TSelf>.Initial.get -> TSelf
@@ -147,30 +171,43 @@ Deedbox.JobInfo.Args.get -> string!
 Deedbox.JobInfo.Args.init -> void
 Deedbox.JobInfo.CreatedAt.get -> System.DateTimeOffset
 Deedbox.JobInfo.CreatedAt.init -> void
-Deedbox.JobInfo.Deconstruct(out System.Guid Id, out string! Kind, out string! Args, out string! Status, out string? Progress, out System.DateTimeOffset CreatedAt, out System.DateTimeOffset? FinishedAt) -> void
 Deedbox.JobInfo.Equals(Deedbox.JobInfo? other) -> bool
 Deedbox.JobInfo.FinishedAt.get -> System.DateTimeOffset?
 Deedbox.JobInfo.FinishedAt.init -> void
 Deedbox.JobInfo.Id.get -> System.Guid
 Deedbox.JobInfo.Id.init -> void
-Deedbox.JobInfo.JobInfo(System.Guid Id, string! Kind, string! Args, string! Status, string? Progress, System.DateTimeOffset CreatedAt, System.DateTimeOffset? FinishedAt) -> void
-Deedbox.JobInfo.Kind.get -> string!
+Deedbox.JobInfo.JobInfo() -> void
+Deedbox.JobInfo.Kind.get -> Deedbox.JobKind
 Deedbox.JobInfo.Kind.init -> void
 Deedbox.JobInfo.Progress.get -> string?
 Deedbox.JobInfo.Progress.init -> void
-Deedbox.JobInfo.Status.get -> string!
+Deedbox.JobInfo.StartedAt.get -> System.DateTimeOffset?
+Deedbox.JobInfo.StartedAt.init -> void
+Deedbox.JobInfo.Status.get -> Deedbox.JobState
 Deedbox.JobInfo.Status.init -> void
+Deedbox.JobKind
+Deedbox.JobKind.Erase = 3 -> Deedbox.JobKind
+Deedbox.JobKind.PseudonymsDestroyed = 5 -> Deedbox.JobKind
+Deedbox.JobKind.Rebuild = 1 -> Deedbox.JobKind
+Deedbox.JobKind.Skip = 2 -> Deedbox.JobKind
+Deedbox.JobKind.Snapshots = 4 -> Deedbox.JobKind
+Deedbox.JobKind.Unknown = 0 -> Deedbox.JobKind
+Deedbox.JobState
+Deedbox.JobState.Done = 2 -> Deedbox.JobState
+Deedbox.JobState.Failed = 3 -> Deedbox.JobState
+Deedbox.JobState.Queued = 1 -> Deedbox.JobState
+Deedbox.JobState.Unknown = 0 -> Deedbox.JobState
 Deedbox.KeysBuilder
+Deedbox.KeysBuilder.AlsoUnwrapWith(System.Action<Deedbox.KeysBuilder!>! other) -> Deedbox.KeysBuilder!
 Deedbox.KeysBuilder.FromEnvironment(string! variable = "DEEDBOX_MASTER_KEY") -> Deedbox.KeysBuilder!
 Deedbox.KeysBuilder.FromKeyRing(string! keyRing) -> Deedbox.KeysBuilder!
 Deedbox.KeysBuilder.RedactWith(string! placeholder) -> Deedbox.KeysBuilder!
 Deedbox.KeysBuilder.StoreInDatabase() -> Deedbox.KeysBuilder!
 Deedbox.KeysBuilder.Use(Deedbox.IMasterKeyProvider! provider) -> Deedbox.KeysBuilder!
 Deedbox.LoadResult<TState>
-Deedbox.LoadResult<TState>.Deconstruct(out TState State, out long Version) -> void
+Deedbox.LoadResult<TState>.Deconstruct(out TState state, out long version) -> void
 Deedbox.LoadResult<TState>.Equals(Deedbox.LoadResult<TState> other) -> bool
 Deedbox.LoadResult<TState>.LoadResult() -> void
-Deedbox.LoadResult<TState>.LoadResult(TState State, long Version) -> void
 Deedbox.LoadResult<TState>.State.get -> TState
 Deedbox.LoadResult<TState>.State.init -> void
 Deedbox.LoadResult<TState>.Version.get -> long
@@ -205,6 +242,7 @@ Deedbox.ProjectionContext.StreamType.get -> string!
 Deedbox.ProjectionContext.TenantId.get -> string!
 Deedbox.ProjectionContext.Transaction.get -> System.Data.Common.DbTransaction!
 Deedbox.ProjectionContext.Version.get -> long
+Deedbox.PseudonymPeriod
 Deedbox.Run
 Deedbox.Run.Async = 1 -> Deedbox.Run
 Deedbox.Run.Inline = 0 -> Deedbox.Run
@@ -215,6 +253,8 @@ Deedbox.RunnerOptions.Enabled.get -> bool
 Deedbox.RunnerOptions.Enabled.set -> void
 Deedbox.RunnerOptions.HandlerRetries.get -> int
 Deedbox.RunnerOptions.HandlerRetries.set -> void
+Deedbox.RunnerOptions.HandlerTimeout.get -> System.TimeSpan
+Deedbox.RunnerOptions.HandlerTimeout.set -> void
 Deedbox.RunnerOptions.MaxPollDelay.get -> System.TimeSpan
 Deedbox.RunnerOptions.MaxPollDelay.set -> void
 Deedbox.RunnerOptions.MinPollDelay.get -> System.TimeSpan
@@ -229,13 +269,12 @@ Deedbox.StoreStatus
 Deedbox.StoreStatus.<Clone>$() -> Deedbox.StoreStatus!
 Deedbox.StoreStatus.Consumers.get -> System.Collections.Generic.IReadOnlyList<Deedbox.ConsumerStatus!>!
 Deedbox.StoreStatus.Consumers.init -> void
-Deedbox.StoreStatus.Deconstruct(out long Head, out System.Collections.Generic.IReadOnlyList<Deedbox.ConsumerStatus!>! Consumers, out System.Collections.Generic.IReadOnlyList<Deedbox.JobInfo!>! Jobs) -> void
 Deedbox.StoreStatus.Equals(Deedbox.StoreStatus? other) -> bool
 Deedbox.StoreStatus.Head.get -> long
 Deedbox.StoreStatus.Head.init -> void
 Deedbox.StoreStatus.Jobs.get -> System.Collections.Generic.IReadOnlyList<Deedbox.JobInfo!>!
 Deedbox.StoreStatus.Jobs.init -> void
-Deedbox.StoreStatus.StoreStatus(long Head, System.Collections.Generic.IReadOnlyList<Deedbox.ConsumerStatus!>! Consumers, System.Collections.Generic.IReadOnlyList<Deedbox.JobInfo!>! Jobs) -> void
+Deedbox.StoreStatus.StoreStatus() -> void
 Deedbox.StreamBuilder<TState>
 Deedbox.StreamBuilder<TState>.Event<TEvent>() -> Deedbox.StreamBuilder<TState>!
 Deedbox.StreamBuilder<TState>.Event<TEvent>(System.Action<Deedbox.EventBuilder<TEvent>!>! configure) -> Deedbox.StreamBuilder<TState>!
@@ -269,6 +308,17 @@ Deedbox.SubscriptionContext
 Deedbox.SubscriptionContext.CancellationToken.get -> System.Threading.CancellationToken
 Deedbox.SubscriptionContext.Envelope.get -> Deedbox.EventEnvelope!
 Deedbox.SubscriptionContext.Services.get -> System.IServiceProvider!
+Deedbox.SubscriptionStart
+Deedbox.SubscriptionStart.FirstEvent = 0 -> Deedbox.SubscriptionStart
+Deedbox.SubscriptionStart.Now = 1 -> Deedbox.SubscriptionStart
+Deedbox.WrappedKey
+Deedbox.WrappedKey.<Clone>$() -> Deedbox.WrappedKey!
+Deedbox.WrappedKey.Bytes.get -> byte[]!
+Deedbox.WrappedKey.Bytes.init -> void
+Deedbox.WrappedKey.Equals(Deedbox.WrappedKey? other) -> bool
+Deedbox.WrappedKey.KeyVersion.get -> string!
+Deedbox.WrappedKey.KeyVersion.init -> void
+Deedbox.WrappedKey.WrappedKey() -> void
 Deedbox.WriteContext
 Deedbox.WriteContext.CancellationToken.get -> System.Threading.CancellationToken
 Deedbox.WriteContext.Connection.get -> System.Data.Common.DbConnection!
@@ -277,12 +327,55 @@ Deedbox.WriteContext.Transaction.get -> System.Data.Common.DbTransaction!
 Microsoft.Extensions.DependencyInjection.DeedboxHealthCheckExtensions
 Microsoft.Extensions.DependencyInjection.DeedboxServiceCollectionExtensions
 abstract Deedbox.BatchProjection.ApplyAsync(System.Collections.Generic.IReadOnlyList<Deedbox.EventEnvelope!>! events, Deedbox.WriteContext! context) -> System.Threading.Tasks.Task!
+const Deedbox.DeedboxError.BuiltInEvent = "DBX031" -> string!
+const Deedbox.DeedboxError.Conflict = "DBX014" -> string!
+const Deedbox.DeedboxError.DbContextConnectionMismatch = "DBX012" -> string!
+const Deedbox.DeedboxError.DuplicateEvent = "DBX005" -> string!
+const Deedbox.DeedboxError.DuplicateProjection = "DBX020" -> string!
+const Deedbox.DeedboxError.DuplicateStream = "DBX004" -> string!
+const Deedbox.DeedboxError.InlineBatchProjection = "DBX024" -> string!
+const Deedbox.DeedboxError.InstanceEvicted = "DBX038" -> string!
+const Deedbox.DeedboxError.InvalidName = "DBX015" -> string!
+const Deedbox.DeedboxError.InvalidPersonalData = "DBX026" -> string!
+const Deedbox.DeedboxError.InvalidSchemaName = "DBX003" -> string!
+const Deedbox.DeedboxError.InvalidTenant = "DBX022" -> string!
+const Deedbox.DeedboxError.IsolationLevel = "DBX040" -> string!
+const Deedbox.DeedboxError.JsonKeyOrder = "DBX039" -> string!
+const Deedbox.DeedboxError.JsonReflectionDisabled = "DBX011" -> string!
+const Deedbox.DeedboxError.KeyMaterialCorrupt = "DBX030" -> string!
+const Deedbox.DeedboxError.MasterKeyUnusable = "DBX029" -> string!
+const Deedbox.DeedboxError.MissingSubject = "DBX027" -> string!
+const Deedbox.DeedboxError.MissingUpcaster = "DBX018" -> string!
+const Deedbox.DeedboxError.MixedStreamTypes = "DBX010" -> string!
+const Deedbox.DeedboxError.NoKeyMode = "DBX025" -> string!
+const Deedbox.DeedboxError.NoProvider = "DBX002" -> string!
+const Deedbox.DeedboxError.ProjectionHandlesUnregistered = "DBX021" -> string!
+const Deedbox.DeedboxError.ProjectionInUse = "DBX035" -> string!
+const Deedbox.DeedboxError.ProviderAlreadySet = "DBX013" -> string!
+const Deedbox.DeedboxError.PseudonymPeriodDestroyed = "DBX036" -> string!
+const Deedbox.DeedboxError.PseudonymPrefixChanged = "DBX037" -> string!
+const Deedbox.DeedboxError.QueueBoxMapping = "DBX032" -> string!
+const Deedbox.DeedboxError.ResetNotImplemented = "DBX023" -> string!
+const Deedbox.DeedboxError.SchemaBehind = "DBX001" -> string!
+const Deedbox.DeedboxError.StorageOptions = "DBX034" -> string!
+const Deedbox.DeedboxError.StoredStreamTypeMismatch = "DBX019" -> string!
+const Deedbox.DeedboxError.StoredVersionAhead = "DBX017" -> string!
+const Deedbox.DeedboxError.StreamDeleted = "DBX028" -> string!
+const Deedbox.DeedboxError.StreamTypeMismatch = "DBX008" -> string!
+const Deedbox.DeedboxError.UnknownConsumer = "DBX033" -> string!
+const Deedbox.DeedboxError.UnknownStoredEvent = "DBX007" -> string!
+const Deedbox.DeedboxError.UnmappedStoredEvent = "DBX016" -> string!
+const Deedbox.DeedboxError.UnregisteredEvent = "DBX006" -> string!
+const Deedbox.DeedboxError.UnregisteredState = "DBX009" -> string!
 override Deedbox.AppendResult.Equals(object? obj) -> bool
 override Deedbox.AppendResult.GetHashCode() -> int
 override Deedbox.AppendResult.ToString() -> string!
 override Deedbox.ConsumerStatus.Equals(object? obj) -> bool
 override Deedbox.ConsumerStatus.GetHashCode() -> int
 override Deedbox.ConsumerStatus.ToString() -> string!
+override Deedbox.ErasureResult.Equals(object? obj) -> bool
+override Deedbox.ErasureResult.GetHashCode() -> int
+override Deedbox.ErasureResult.ToString() -> string!
 override Deedbox.EventMetadata.Equals(object? obj) -> bool
 override Deedbox.EventMetadata.GetHashCode() -> int
 override Deedbox.EventMetadata.ToString() -> string!
@@ -304,10 +397,15 @@ override Deedbox.StreamDeleted.ToString() -> string!
 override Deedbox.SubjectErased.Equals(object? obj) -> bool
 override Deedbox.SubjectErased.GetHashCode() -> int
 override Deedbox.SubjectErased.ToString() -> string!
+override Deedbox.WrappedKey.Equals(object? obj) -> bool
+override Deedbox.WrappedKey.GetHashCode() -> int
+override Deedbox.WrappedKey.ToString() -> string!
 static Deedbox.AppendResult.operator !=(Deedbox.AppendResult? left, Deedbox.AppendResult? right) -> bool
 static Deedbox.AppendResult.operator ==(Deedbox.AppendResult? left, Deedbox.AppendResult? right) -> bool
 static Deedbox.ConsumerStatus.operator !=(Deedbox.ConsumerStatus? left, Deedbox.ConsumerStatus? right) -> bool
 static Deedbox.ConsumerStatus.operator ==(Deedbox.ConsumerStatus? left, Deedbox.ConsumerStatus? right) -> bool
+static Deedbox.ErasureResult.operator !=(Deedbox.ErasureResult? left, Deedbox.ErasureResult? right) -> bool
+static Deedbox.ErasureResult.operator ==(Deedbox.ErasureResult? left, Deedbox.ErasureResult? right) -> bool
 static Deedbox.EventMetadata.Empty.get -> Deedbox.EventMetadata!
 static Deedbox.EventMetadata.operator !=(Deedbox.EventMetadata? left, Deedbox.EventMetadata? right) -> bool
 static Deedbox.EventMetadata.operator ==(Deedbox.EventMetadata? left, Deedbox.EventMetadata? right) -> bool
@@ -322,6 +420,8 @@ static Deedbox.JobInfo.operator !=(Deedbox.JobInfo? left, Deedbox.JobInfo? right
 static Deedbox.JobInfo.operator ==(Deedbox.JobInfo? left, Deedbox.JobInfo? right) -> bool
 static Deedbox.LoadResult<TState>.operator !=(Deedbox.LoadResult<TState> left, Deedbox.LoadResult<TState> right) -> bool
 static Deedbox.LoadResult<TState>.operator ==(Deedbox.LoadResult<TState> left, Deedbox.LoadResult<TState> right) -> bool
+static Deedbox.PseudonymPeriod.Month(System.DateTimeOffset at) -> string!
+static Deedbox.PseudonymPeriod.Quarter(System.DateTimeOffset at) -> string!
 static Deedbox.SnapshotPolicy.Every(int events) -> Deedbox.SnapshotPolicy!
 static Deedbox.SnapshotPolicy.EveryAppend.get -> Deedbox.SnapshotPolicy!
 static Deedbox.SnapshotPolicy.Never.get -> Deedbox.SnapshotPolicy!
@@ -333,6 +433,8 @@ static Deedbox.StreamId.Deterministic(System.Guid namespaceId, params string![]!
 static Deedbox.StreamId.From(System.Guid id) -> string!
 static Deedbox.SubjectErased.operator !=(Deedbox.SubjectErased? left, Deedbox.SubjectErased? right) -> bool
 static Deedbox.SubjectErased.operator ==(Deedbox.SubjectErased? left, Deedbox.SubjectErased? right) -> bool
+static Deedbox.WrappedKey.operator !=(Deedbox.WrappedKey? left, Deedbox.WrappedKey? right) -> bool
+static Deedbox.WrappedKey.operator ==(Deedbox.WrappedKey? left, Deedbox.WrappedKey? right) -> bool
 static Microsoft.Extensions.DependencyInjection.DeedboxHealthCheckExtensions.AddDeedboxHealthChecks(this Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder! builder, string! name = "deedbox") -> Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder!
 static Microsoft.Extensions.DependencyInjection.DeedboxServiceCollectionExtensions.AddDeedbox(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Deedbox.DeedboxBuilder!>! configure) -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 virtual Deedbox.BatchProjection.ResetAsync(Deedbox.WriteContext! context) -> System.Threading.Tasks.Task!
@@ -340,12 +442,3 @@ virtual Deedbox.Projection.ResetAsync(Deedbox.WriteContext! context) -> System.T
 ~override Deedbox.ExpectedVersion.Equals(object obj) -> bool
 ~override Deedbox.LoadResult<TState>.Equals(object obj) -> bool
 ~override Deedbox.LoadResult<TState>.ToString() -> string
-Deedbox.DeedboxBuilder.PseudonymPrefix(string! prefix) -> Deedbox.DeedboxBuilder!
-Deedbox.IEventStoreAdmin.DestroyPseudonymPeriodAsync(string! periodId, string! tenantId = "", System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
-Deedbox.IEventStoreAdmin.EraseIdentityAsync(string! identity, string! tenantId = "", System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<System.Guid>!>!
-Deedbox.IPseudonyms
-Deedbox.IPseudonyms.EraseIdentityAsync(string! identity, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<System.Guid>!>!
-Deedbox.IPseudonyms.SubjectForAsync(string! identity, string! periodId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
-Deedbox.PseudonymPeriod
-static Deedbox.PseudonymPeriod.Month(System.DateTimeOffset at) -> string!
-static Deedbox.PseudonymPeriod.Quarter(System.DateTimeOffset at) -> string!

@@ -34,7 +34,8 @@ public sealed class KeyRingAndAzureProviderTests
 
         await KeyProviderCompliance.VerifyAsync(ring, TestContext.Current.CancellationToken);
         Assert.Equal("env:ring-b", ring.KeyVersion);
-        Assert.Equal(32, (await ring.UnwrapAsync(wrapped, "env:ring-a", TestContext.Current.CancellationToken)).Length);
+        Assert.Equal(32, (await ring.UnwrapAsync(wrapped.Bytes, wrapped.KeyVersion, TestContext.Current.CancellationToken)).Length);
+        Assert.Equal("env:ring-a", wrapped.KeyVersion);
     }
 
     [Theory]
@@ -108,7 +109,8 @@ public sealed class KeyRingAndAzureProviderTests
     {
         public string KeyVersion => "careless:1";
 
-        public Task<byte[]> WrapAsync(byte[] key, CancellationToken ct) => Task.FromResult(key.Select(b => (byte)(b ^ 0x5A)).ToArray());
+        public Task<WrappedKey> WrapAsync(byte[] key, CancellationToken ct) =>
+            Task.FromResult(new WrappedKey { Bytes = key.Select(b => (byte)(b ^ 0x5A)).ToArray(), KeyVersion = KeyVersion });
 
         public Task<byte[]> UnwrapAsync(byte[] wrappedKey, string keyVersion, CancellationToken ct) =>
             keyVersion == KeyVersion ? Task.FromResult(wrappedKey.Select(b => (byte)(b ^ 0x5A)).ToArray()) : throw new CryptographicException("unknown version");

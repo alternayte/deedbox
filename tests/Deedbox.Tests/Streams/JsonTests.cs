@@ -27,8 +27,61 @@ public sealed class PostgresJsonTests(Databases databases) : JsonTests(databases
 
 public sealed class SqlServerJsonTests(Databases databases) : JsonTests(databases, Db.SqlServer);
 
+[JsonDerivedType(typeof(Card), "card")]
+[JsonDerivedType(typeof(Cash), "cash")]
+public abstract record Payment(int Id);
+
+public sealed record Card(int Id, string Last4) : Payment(Id);
+
+public sealed record Cash(int Id) : Payment(Id);
+
+public record Paid(Payment Payment);
+
+public record Wallet(Payment? Last) : IState<Wallet>
+{
+    public static Wallet Initial { get; } = new((Payment?)null);
+
+    public static Wallet Evolve(Wallet s, object e) => e is Paid paid ? new Wallet(paid.Payment) : s;
+}
+
 public abstract class JsonTests(Databases databases, Db db) : StoreTest(databases, db)
 {
+    [Fact]
+    public async Task IgnoreCycles_writes_no_metadata_and_is_accepted_on_every_database()
+    {
+        var store = await Store(b => b
+            .ConfigureJson(o => o.ReferenceHandler = ReferenceHandler.IgnoreCycles)
+            .Stream<Counter>(s => s.Events<Incremented>()));
+        var id = NewStreamId();
+
+        await store.Append(id, ExpectedVersion.NoStream, [new Incremented(4)]);
+
+        Assert.Equal(1, (await store.Load<Counter>(id)).Version);
+    }
+
+    [Fact]
+    public async Task A_polymorphic_member_reads_back_from_the_event_and_from_the_stored_state()
+    {
+        // Postgres jsonb reorders object keys, so "$type" comes back behind "id". .NET 9 and later read it anywhere;
+        // on .NET 8 the store refuses the registration instead of failing every later load.
+#if !NET9_0_OR_GREATER
+        if (Db == Db.Postgres)
+        {
+            var refused = await Assert.ThrowsAsync<DeedboxException>(() => Store(b => b.Stream<Wallet>(s => s.Events<Paid>())));
+            Assert.Equal("DBX039", refused.Code);
+            return;
+        }
+#endif
+        var store = await Store(b => b.Stream<Wallet>(s => s.Events<Paid>()));
+        var id = NewStreamId();
+
+        await store.Append(id, ExpectedVersion.NoStream, [new Paid(new Card(7, "4242"))]);
+
+        Assert.Equal(new Card(7, "4242"), (await store.Load<Wallet>(id)).State.Last);
+        await Scalar<int>($"UPDATE {Table("streams")} SET state = NULL; SELECT 1");
+        Assert.Equal(new Card(7, "4242"), (await store.Load<Wallet>(id)).State.Last);
+    }
+
     [Fact]
     public async Task A_connection_string_from_the_services_is_read_when_the_store_is_first_resolved()
     {

@@ -55,6 +55,8 @@ The example app has a `ShopDb` DbContext. You event-source its cart and keep a `
 
    <TransactionEfcore />
 
+   A context that uses `EnableRetryOnFailure` works here. Deedbox retries nothing inside its transaction. If you want retries, wrap the whole call in the context's execution strategy.
+
 </Steps>
 
 ## What changed

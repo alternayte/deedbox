@@ -155,7 +155,7 @@ public abstract class PseudonymTests(Databases databases, Db db) : RunnerTest(da
         var alice = await Pseudonyms(host).SubjectForAsync("github:alice", "2026-Q1");
         var bob = await Pseudonyms(host).SubjectForAsync("github:bob", "2026-Q1");
         await Store(host).Append("m-1", ExpectedVersion.NoStream, [Invite(alice, "Alice"), Invite(bob, "Bob")]);
-        await AdminOf(host).DestroyPseudonymPeriodAsync("2026-Q1");
+        await AdminOf(host).DestroyPseudonymPeriodAsync("2026-Q1", "");
         await StopHost(host);
 
         var later = await StartHost(probe, b => { InDatabase(b); b.Subscription<ReviewerMail>("mail"); });
@@ -164,7 +164,7 @@ public abstract class PseudonymTests(Databases databases, Db db) : RunnerTest(da
         Assert.Equal(["Alice", "Bob"], probe.Delivered.Where(d => d.Consumer == "mail").Select(d => ((ReviewerInvited)d.Envelope.Event).ReviewerName));
         Assert.Equal("done", (await WaitForJob(later, await AdminOf(later).RebuildSnapshotsAsync("manuscript"))).Status);
 
-        await WaitForJob(later, await AdminOf(later).EraseSubjectAsync(alice));
+        await WaitForJob(later, (await AdminOf(later).EraseSubjectAsync(alice, "")).JobIds[0]);
         Assert.Equal([null, "Bob"], (await Store(later).Load<Manuscript>("m-1")).State.Names);
     }
 
@@ -196,7 +196,7 @@ public abstract class PseudonymTests(Databases databases, Db db) : RunnerTest(da
         var error = await Assert.ThrowsAsync<DeedboxException>(() => Pseudonyms(host).SubjectForAsync("github:alice", "2026-Q1"));
 
         Assert.Equal(Errors.NoKeyMode, error.Code);
-        Assert.Equal(Errors.NoKeyMode, (await Assert.ThrowsAsync<DeedboxException>(() => AdminOf(host).EraseIdentityAsync("github:alice"))).Code);
+        Assert.Equal(Errors.NoKeyMode, (await Assert.ThrowsAsync<DeedboxException>(() => AdminOf(host).EraseIdentityAsync("github:alice", ""))).Code);
     }
 
     internal static ReviewerInvited Invite(string subject, string name) => new("m", subject, name, null);
@@ -285,8 +285,8 @@ public sealed class PseudonymTokenTests
     {
         IEventStoreAdmin admin = new OlderAdmin();
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => admin.EraseIdentityAsync("github:alice"));
-        await Assert.ThrowsAsync<NotSupportedException>(() => admin.DestroyPseudonymPeriodAsync("2026-Q1"));
+        await Assert.ThrowsAsync<NotSupportedException>(() => admin.EraseIdentityAsync("github:alice", ""));
+        await Assert.ThrowsAsync<NotSupportedException>(() => admin.DestroyPseudonymPeriodAsync("2026-Q1", ""));
     }
 
     private sealed class OlderAdmin : IEventStoreAdmin
@@ -299,7 +299,7 @@ public sealed class PseudonymTokenTests
 
         public Task<Guid> SkipAsync(string consumer, Guid eventId, CancellationToken ct = default) => throw new InvalidOperationException();
 
-        public Task<Guid> EraseSubjectAsync(string subjectId, string tenantId = "", CancellationToken ct = default) => throw new InvalidOperationException();
+        public Task<ErasureResult> EraseSubjectAsync(string subjectId, string tenantId, CancellationToken ct = default) => throw new InvalidOperationException();
 
         public Task<Guid> RebuildSnapshotsAsync(string streamType, CancellationToken ct = default) => throw new InvalidOperationException();
 

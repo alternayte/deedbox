@@ -7,7 +7,7 @@ namespace Deedbox
     /// <summary>
     /// Healthy while every consumer progresses, including while it is behind or rebuilding. Unhealthy when a consumer
     /// is stalled, or events are waiting and its checkpoint has not moved for <see cref="RunnerOptions.StallAfter"/>.
-    /// Degraded when the app registers a retired projection.
+    /// Degraded when the app registers a retired projection, or an inline projection's catch-up cannot keep up with appends.
     /// Behind is not unhealthy, so Kubernetes does not restart an app during a rebuild.
     /// </summary>
     internal sealed class DeedboxHealthCheck(DeedboxRuntime runtime, ProjectionSet projections) : IHealthCheck
@@ -43,6 +43,8 @@ namespace Deedbox
 
                 if (row.Status == CheckpointStatus.Stalled)
                     problems.Add($"'{row.Name}' is stalled");
+                else if (row.Status == CheckpointStatus.Rebuilding && ConsumerLoop.StallReason(row.Error) == ConsumerLoop.SlowCatchUpReason)
+                    degraded.Add($"'{row.Name}' cannot finish its catch-up with {lag} events left: its handlers are too slow for the append rate");
                 else if (!inlineRunning && lag > 0 && now - row.UpdatedAt > runtime.Options.Runner.StallAfter)
                     problems.Add($"'{row.Name}' has not moved for {(now - row.UpdatedAt).TotalMinutes:F0} minutes with {lag} events waiting");
             }

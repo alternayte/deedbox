@@ -9,6 +9,8 @@ This runbook helps you when every append waits.
 
 Appends take turns on one counter row, from the counter update to the commit. A transaction you own, through `UseTransaction` or `UseDbContext`, holds the counter from its append until you commit. If it stays open, every other append waits.
 
+Deedbox itself holds the counter for longer than one append only in a forced cut-over of an inline projection. That hold lasts at most 2 seconds, and log event 25 names the projection. If it repeats, see step 4 of the [stalled projection runbook](/operations/stalled-projection/).
+
 ## Symptoms
 
 - `deedbox.counter.duration` and `deedbox.append.duration` rise together.

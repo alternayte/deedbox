@@ -14,12 +14,19 @@ internal static class Admin
         await connection.OpenAsync(ct);
         var head = await provider.ReadHead(connection, null, ct);
         var consumers = (await provider.ReadCheckpoints(connection, ct))
-            .Select(r => new ConsumerStatus(r.Name, r.Mode, r.Status, r.Position,
-                (r.Mode == CheckpointMode.Inline && r.Status == CheckpointStatus.Running) || r.Status == CheckpointStatus.Retired ? 0 : Math.Max(0, head - r.Position),
-                r.UpdatedAt, r.Error))
+            .Select(r => new ConsumerStatus
+            {
+                Name = r.Name,
+                Mode = Wire.Mode(r.Mode),
+                Status = Wire.State(r.Status),
+                Position = r.Position,
+                Lag = (r.Mode == CheckpointMode.Inline && r.Status == CheckpointStatus.Running) || r.Status == CheckpointStatus.Retired ? 0 : Math.Max(0, head - r.Position),
+                UpdatedAt = r.UpdatedAt,
+                Error = r.Error,
+            })
             .ToList();
         var jobs = (await provider.ReadJobs(connection, 20, ct)).Select(Info).ToList();
-        return new StoreStatus(head, consumers, jobs);
+        return new StoreStatus { Head = head, Consumers = consumers, Jobs = jobs };
     }
 
     public static async Task<JobInfo?> Job(DeedboxProvider provider, Guid id, CancellationToken ct)
@@ -29,41 +36,54 @@ internal static class Admin
         return await provider.ReadJob(connection, id, ct) is { } job ? Info(job) : null;
     }
 
-    /// <summary>Deletes a subject's key and clears their streams' stored state: the immediate part of an erasure.</summary>
-    public static async Task DeleteSubjectKey(DeedboxProvider provider, string tenantId, string subjectId, CancellationToken ct)
+    /// <summary>
+    /// The immediate part of an erasure, for one or more subjects of a tenant. One transaction clears the stored state of
+    /// the streams that hold their data, deletes their keys and queues one erasure job per subject, so a crash never
+    /// leaves a key deleted with no job. An append that held a key's share lock commits before the key goes; it may have
+    /// stored state for a stream the subject was new to, so that state is cleared again after the commit. When this
+    /// returns, nothing reads the subjects' data.
+    /// </summary>
+    public static async Task<ErasureResult> Erase(DeedboxProvider provider, TimeProvider clock, string tenantId, IReadOnlyList<string> subjects, CancellationToken ct)
     {
+        DeedboxContext.ValidTenant(tenantId);
+        // No rule on the ID's shape here: a store written before 0.5.0 can hold IDs that an append now refuses, and
+        // those subjects must stay erasable.
+        foreach (var subject in subjects)
+            ArgumentException.ThrowIfNullOrEmpty(subject, nameof(subjects));
+
+        var jobs = new List<Guid>();
+        var deleted = 0;
         await using var connection = provider.CreateConnection();
         await connection.OpenAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
-        await provider.DeleteSubjectKey(connection, transaction, tenantId, subjectId, ct);
-        await transaction.CommitAsync(ct);
+        await using (var transaction = await connection.BeginTransactionAsync(ct))
+        {
+            foreach (var subject in subjects)
+            {
+                await provider.ClearSubjectState(connection, transaction, tenantId, subject, ct);
+                deleted += await provider.DeleteSubjectKey(connection, transaction, tenantId, subject, ct);
+                var job = new JobRow(Uuid7.New(), Jobs.Erase, EraseArgs(tenantId, subject).ToJsonString(), JobStatus.Queued, null, clock.GetUtcNow(), null, null);
+                await provider.InsertJob(connection, transaction, job, ct);
+                jobs.Add(job.Id);
+            }
+
+            await transaction.CommitAsync(CancellationToken.None);
+        }
+
+        // The keys are gone, so this part must finish even when the caller gave up.
+        foreach (var subject in subjects)
+            await provider.ClearSubjectState(connection, null, tenantId, subject, CancellationToken.None);
+        return new ErasureResult { JobIds = jobs, KeysDeleted = deleted };
     }
 
     /// <summary>
     /// Erases an identity in a tenant: its subject in every period with a secret. The subject keys go in one
     /// transaction, so every period's data reads as erased at once; then one erasure job per period finishes the rest.
     /// </summary>
-    public static async Task<IReadOnlyList<Guid>> EraseIdentity(DeedboxProvider provider, Pseudonymizer pseudonyms, TimeProvider clock, string tenantId, string identity, CancellationToken ct)
+    public static async Task<ErasureResult> EraseIdentity(DeedboxProvider provider, Pseudonymizer pseudonyms, TimeProvider clock, string tenantId, string identity, CancellationToken ct)
     {
         Pseudonymizer.ValidateIdentity(identity);
         DeedboxContext.ValidTenant(tenantId);
-        var subjects = await pseudonyms.SubjectsInEveryPeriod(tenantId, identity, ct);
-        if (subjects.Count == 0)
-            return [];
-
-        await using (var connection = provider.CreateConnection())
-        {
-            await connection.OpenAsync(ct);
-            await using var transaction = await connection.BeginTransactionAsync(ct);
-            foreach (var subject in subjects)
-                await provider.DeleteSubjectKey(connection, transaction, tenantId, subject, ct);
-            await transaction.CommitAsync(ct);
-        }
-
-        var jobs = new List<Guid>();
-        foreach (var subject in subjects)
-            jobs.Add(await Jobs.Enqueue(provider, clock, Jobs.Erase, EraseArgs(tenantId, subject), ct));
-        return jobs;
+        return await Erase(provider, clock, tenantId, await pseudonyms.SubjectsInEveryPeriod(tenantId, identity, ct), ct);
     }
 
     /// <summary>
@@ -141,7 +161,17 @@ internal static class Admin
         return value;
     }
 
-    private static JobInfo Info(JobRow job) => new(job.Id, job.Kind, job.Args, job.Status, job.Progress, job.CreatedAt, job.FinishedAt);
+    private static JobInfo Info(JobRow job) => new()
+    {
+        Id = job.Id,
+        Kind = Wire.Kind(job.Kind),
+        Args = job.Args,
+        Status = Wire.JobState(job.Status),
+        Progress = job.Progress,
+        CreatedAt = job.CreatedAt,
+        StartedAt = job.StartedAt,
+        FinishedAt = job.FinishedAt,
+    };
 }
 
 internal sealed class EventStoreAdmin(DeedboxRuntime runtime) : IEventStoreAdmin
@@ -166,12 +196,11 @@ internal sealed class EventStoreAdmin(DeedboxRuntime runtime) : IEventStoreAdmin
         return Queue(Jobs.Skip, args, ct);
     }
 
-    public async Task<Guid> EraseSubjectAsync(string subjectId, string tenantId = "", CancellationToken ct = default)
+    public Task<ErasureResult> EraseSubjectAsync(string subjectId, string tenantId, CancellationToken ct = default)
     {
-        var args = Admin.EraseArgs(tenantId, subjectId);
+        ArgumentNullException.ThrowIfNull(tenantId);
         runtime.RequireKeys();
-        await SubjectErasure.DeleteKey(runtime, tenantId, subjectId, ct);
-        return await Queue(Jobs.Erase, args, ct);
+        return Admin.Erase(runtime.Provider, runtime.Clock, tenantId, [subjectId], ct);
     }
 
     public Task RetireAsync(string projection, CancellationToken ct = default) =>
@@ -194,14 +223,16 @@ internal sealed class EventStoreAdmin(DeedboxRuntime runtime) : IEventStoreAdmin
     public Task ShredTenantAsync(string tenantId, CancellationToken ct = default) =>
         runtime.RequireKeys().Shred(DeedboxContext.ValidTenant(tenantId), ct);
 
-    public Task<IReadOnlyList<Guid>> EraseIdentityAsync(string identity, string tenantId = "", CancellationToken ct = default)
+    public Task<ErasureResult> EraseIdentityAsync(string identity, string tenantId, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(tenantId);
         Pseudonymizer.ValidateIdentity(identity);
         return Admin.EraseIdentity(runtime.Provider, runtime.RequirePseudonyms(), runtime.Clock, tenantId, identity, ct);
     }
 
-    public async Task<bool> DestroyPseudonymPeriodAsync(string periodId, string tenantId = "", CancellationToken ct = default)
+    public async Task<bool> DestroyPseudonymPeriodAsync(string periodId, string tenantId, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(tenantId);
         var destroyed = await Admin.DestroyPseudonymPeriod(runtime.Provider, runtime.Clock, tenantId, periodId, ct);
         runtime.Pseudonyms?.Forget(tenantId, periodId);
         return destroyed;

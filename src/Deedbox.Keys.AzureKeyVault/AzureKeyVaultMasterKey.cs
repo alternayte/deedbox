@@ -41,16 +41,18 @@ public static class DeedboxAzureKeyVaultExtensions
 internal sealed class AzureKeyVaultMasterKey(CryptographyClient client, Func<Uri, CryptographyClient>? versionClient, KeyWrapAlgorithm algorithm) : IMasterKeyProvider
 {
     private const string Prefix = "azure:";
-    private string? _keyVersion;
+    private volatile string? _keyVersion;
 
     /// <summary>The versioned key ID after the first wrap; before it, the configured key ID.</summary>
     public string KeyVersion => _keyVersion ?? Prefix + client.KeyId;
 
-    public async Task<byte[]> WrapAsync(byte[] key, CancellationToken ct)
+    public async Task<WrappedKey> WrapAsync(byte[] key, CancellationToken ct)
     {
+        // The version comes from this call's own result: Key Vault can rotate the key between two wraps.
         var result = await client.WrapKeyAsync(algorithm, key, ct);
-        _keyVersion = Prefix + result.KeyId;
-        return result.EncryptedKey;
+        var version = Prefix + result.KeyId;
+        _keyVersion = version;
+        return new WrappedKey { Bytes = result.EncryptedKey, KeyVersion = version };
     }
 
     public async Task<byte[]> UnwrapAsync(byte[] wrappedKey, string keyVersion, CancellationToken ct)
@@ -58,14 +60,19 @@ internal sealed class AzureKeyVaultMasterKey(CryptographyClient client, Func<Uri
         if (!keyVersion.StartsWith(Prefix, StringComparison.Ordinal))
             throw new DeedboxException(Errors.MasterKeyUnusable, $"Key {keyVersion} was not wrapped by Azure Key Vault. Configure the key mode that wrapped it.");
 
+        // A row names the versioned key ID. A client built for the key without a version unwraps with the key's current
+        // version, so it serves any version of its own key; Key Vault refuses when the key was rotated since.
         var id = keyVersion[Prefix.Length..];
+        var configured = client.KeyId.TrimEnd('/');
         CryptographyClient unwrapper;
-        if (keyVersion == KeyVersion)
+        if (id == configured || keyVersion == KeyVersion)
             unwrapper = client;
         else if (versionClient is not null)
             unwrapper = versionClient(new Uri(id));
+        else if (id.StartsWith(configured + "/", StringComparison.Ordinal))
+            unwrapper = client;
         else
-            throw new DeedboxException(Errors.MasterKeyUnusable, $"Key {keyVersion} was wrapped by another Key Vault key version, and no client for other versions is configured.");
+            throw new DeedboxException(Errors.MasterKeyUnusable, $"Key {keyVersion} was wrapped by another Key Vault key, and no client for other key versions is configured.");
         var result = await unwrapper.UnwrapKeyAsync(algorithm, wrappedKey, ct);
         return result.Key;
     }

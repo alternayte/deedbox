@@ -19,6 +19,10 @@ An erasure deletes a subject key from the live database. A backup taken before t
 - Keep backups only as long as your privacy duties allow. When the oldest backup from before an erasure ages out, the subject is gone everywhere.
 - After you restore an older backup, run every erasure that happened after the backup again. Keep a record of erasures outside the database, for example from the `deedbox.jobs` rows or your own audit log.
 
+## Roll back to an older version
+
+From 0.5.0, Deedbox writes storage format 2 once every instance with a heartbeat row can read it. Versions before 0.5.0 cannot read that data. To go back to an older version after that, restore a backup from before the upgrade. Take one before you deploy 0.5.0.
+
 ## Database mode
 
 In database mode, the master key sits in the same backup as the data. A copy of the backup exposes all personal data in it. Move to a key ring or Key Vault before production.

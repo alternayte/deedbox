@@ -34,7 +34,7 @@ This page lists every Deedbox error. Each error message starts with its code and
 | [DBX023](/reference/errors/dbx023/) | A projection cannot be rebuilt without ResetAsync |
 | [DBX024](/reference/errors/dbx024/) | A batch projection is registered inline |
 | [DBX025](/reference/errors/dbx025/) | Personal data needs a key mode |
-| [DBX026](/reference/errors/dbx026/) | A personal-data property cannot hold null |
+| [DBX026](/reference/errors/dbx026/) | A personal-data property cannot be encrypted |
 | [DBX027](/reference/errors/dbx027/) | A personal-data property has no subject |
 | [DBX028](/reference/errors/dbx028/) | The stream was deleted |
 | [DBX029](/reference/errors/dbx029/) | The master key cannot unwrap a key |
@@ -44,3 +44,8 @@ This page lists every Deedbox error. Each error message starts with its code and
 | [DBX033](/reference/errors/dbx033/) | A projection or subscription name is not registered |
 | [DBX034](/reference/errors/dbx034/) | Native json columns are not available or not applied |
 | [DBX035](/reference/errors/dbx035/) | A live instance still registers the projection |
+| [DBX036](/reference/errors/dbx036/) | The pseudonym period's secret was destroyed |
+| [DBX037](/reference/errors/dbx037/) | The pseudonym prefix differs from the period's prefix |
+| [DBX038](/reference/errors/dbx038/) | This instance was not counted as live |
+| [DBX039](/reference/errors/dbx039/) | Polymorphic JSON cannot be read back on this database |
+| [DBX040](/reference/errors/dbx040/) | The transaction's isolation level is not READ COMMITTED |

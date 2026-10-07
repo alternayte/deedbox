@@ -10,12 +10,15 @@ This runbook helps you get a stalled projection or subscription moving again.
 ## Symptoms
 
 - The health check is unhealthy and names the consumer.
-- `deedbox.consumer.status` is 2, or `deedbox.consumer.lag` grows.
+- `deedbox status` shows the consumer as `stalled`.
 - Log event 23 says "stalled on stream ...".
+
+Alert on the [health check path](/how-to/run-on-kubernetes/) and on `deedbox status`. Do not alert on `deedbox.consumer.lag`: each instance reports the gauge, and updates it only after that instance commits a batch. The gauge does not grow for a stalled consumer.
 
 ## Steps
 
 1. Run `deedbox status`. Find the consumer and its reason.
 2. If the reason is `poison`, follow the [poison event runbook](/operations/poison-event/).
 3. If the reason is `mode_changed`, the projection's run mode changed between deploys. Its old checkpoint belongs to the other mode. Rebuild it: `deedbox rebuild <projection> --wait`.
-4. If the consumer is `running` but the health check says it "has not moved", no instance is running its batches. Check that at least one instance has the runner on and can reach the database. Look for log event 21.
+4. If the health check is degraded and says the projection "cannot finish its catch-up", an inline projection's handlers are too slow for the append rate. Its note has the reason `slow_catch_up`, and log event 45 records it. The projection keeps trying. Make the handlers faster, or run it async.
+5. If the consumer is `running` but the health check says it "has not moved", no instance is running its batches. Check that at least one instance has the runner on and can reach the database. Look for log event 21. Log event 29 means a transient database error, such as a failover; the runner retries it and counts no attempt.

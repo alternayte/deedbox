@@ -37,8 +37,9 @@ internal sealed class EventStore(
         var tenantId = TenantId;
         using var activity = StartActivity("deedbox.load", stream.Name, streamId);
         await using var lease = await transactions.BeginRead(Provider, ct);
-        var loaded = await LoadCore(lease.Connection, lease.Transaction, tenantId, stream, streamId, forUpdate: false, ct);
-        return new LoadResult<TState>((TState)loaded.State, loaded.Version);
+        var loaded = await LoadCore(lease.Connection, lease.Transaction, tenantId, stream, streamId, forUpdate: false, ct)
+            ?? await LoadAndSnapshot(lease, tenantId, stream, streamId, ct);
+        return new LoadResult<TState> { State = (TState)loaded.State, Version = loaded.Version };
     }
 
     public async Task<AppendResult> Append(string streamId, ExpectedVersion expected, IEnumerable<object> events, CancellationToken ct = default)
@@ -57,18 +58,20 @@ internal sealed class EventStore(
 
         try
         {
-            await using var lease = await transactions.BeginWrite(Provider, ct);
-            while (true)
+            return await Fenced(async lease =>
             {
-                var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: stream.Snapshots.Enabled, ct);
-                var written = await Write(lease, tenantId, stream, streamId, expected, row, known: null, list, ct);
-                if (written is null)
-                    continue; // Lost a stream-creation race under ExpectedVersion.Any; the row now exists.
+                while (true)
+                {
+                    var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: stream.Snapshots.Enabled, ct);
+                    var written = await Write(lease, tenantId, stream, streamId, expected, row, known: null, list, ct);
+                    if (written is null)
+                        continue; // Lost a stream-creation race under ExpectedVersion.Any; the row now exists.
 
-                await Commit(lease, written, ct);
-                Appended(stream, written, started);
-                return new AppendResult(written.Version, written.Envelopes);
-            }
+                    await Commit(lease, written, ct);
+                    Appended(stream, written, started);
+                    return new AppendResult { Version = written.Version, Events = written.Envelopes };
+                }
+            }, ct);
         }
         catch (ConcurrencyException)
         {
@@ -87,35 +90,37 @@ internal sealed class EventStore(
         using var activity = StartActivity("deedbox.execute", stream.Name, streamId);
         var started = Stopwatch.GetTimestamp();
 
-        await using var lease = await transactions.BeginWrite(Provider, ct);
-        for (var attempt = 0; ; attempt++)
+        return await Fenced(async lease =>
         {
-            var loaded = await LoadCore(lease.Connection, lease.Transaction, tenantId, stream, streamId, forUpdate: true, ct);
-            var events = decide((TState)loaded.State).ToList();
-            if (events.Count == 0)
+            for (var attempt = 0; ; attempt++)
             {
-                await lease.Complete(ct);
-                return new ExecuteResult<TState>((TState)loaded.State, loaded.Version, []);
-            }
+                var loaded = (await LoadCore(lease.Connection, lease.Transaction, tenantId, stream, streamId, forUpdate: true, ct))!;
+                var events = decide((TState)loaded.State).ToList();
+                if (events.Count == 0)
+                {
+                    await lease.Complete(ct);
+                    return new ExecuteResult<TState> { State = (TState)loaded.State, Version = loaded.Version, Events = [] };
+                }
 
-            StreamOf(events, stream);
-            try
-            {
-                var written = (await Write(lease, tenantId, stream, streamId, ExpectedVersion.Exact(loaded.Version), loaded.Row, loaded.State, events, ct))!;
-                await Commit(lease, written, ct);
-                Appended(stream, written, started);
-                return new ExecuteResult<TState>((TState)written.State!, written.Version, written.Envelopes);
-            }
-            catch (ConcurrencyException)
-            {
-                DeedboxDiagnostics.Conflicts.Add(1, DeedboxDiagnostics.Tag("deedbox.stream_type", stream.Name));
-                if (attempt >= runtime.Options.ExecuteRetries)
-                    throw;
+                StreamOf(events, stream);
+                try
+                {
+                    var written = (await Write(lease, tenantId, stream, streamId, ExpectedVersion.Exact(loaded.Version), loaded.Row, loaded.State, events, ct))!;
+                    await Commit(lease, written, ct);
+                    Appended(stream, written, started);
+                    return new ExecuteResult<TState> { State = (TState)written.State!, Version = written.Version, Events = written.Envelopes };
+                }
+                catch (ConcurrencyException)
+                {
+                    DeedboxDiagnostics.Conflicts.Add(1, DeedboxDiagnostics.Tag("deedbox.stream_type", stream.Name));
+                    if (attempt >= runtime.Options.ExecuteRetries)
+                        throw;
 
-                // Only stream creation can race here: an existing row is locked from load to commit.
-                DeedboxDiagnostics.ExecuteRetries.Add(1, DeedboxDiagnostics.Tag("deedbox.stream_type", stream.Name));
+                    // Only stream creation can race here: an existing row is locked from load to commit.
+                    DeedboxDiagnostics.ExecuteRetries.Add(1, DeedboxDiagnostics.Tag("deedbox.stream_type", stream.Name));
+                }
             }
-        }
+        }, ct);
     }
 
     public async Task DeleteStream(string streamId, CancellationToken ct = default)
@@ -124,20 +129,77 @@ internal sealed class EventStore(
         var tenantId = TenantId;
         using var activity = StartActivity("deedbox.delete_stream", null, streamId);
 
-        await using var lease = await transactions.BeginWrite(Provider, ct);
-        var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: false, ct);
-        if (row is null || row.DeletedAt is not null)
+        await Fenced(async lease =>
         {
-            await lease.Complete(ct);
-            return;
-        }
+            var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: false, ct);
+            if (row is null || row.DeletedAt is not null)
+            {
+                await lease.Complete(ct);
+                return true;
+            }
 
-        var stream = RegisteredStream(row.StreamType);
-        var tombstone = row.Version + 1;
-        var written = await Write(lease, tenantId, stream, streamId, ExpectedVersion.Exact(row.Version), row, known: null, [new StreamDeleted()], ct,
-            beforeCounter: () => Provider.DeleteStreamData(lease.Connection, lease.WriteTransaction, tenantId, streamId, tombstone, ct),
-            skipSnapshot: true);
-        await Commit(lease, written!, ct);
+            var stream = RegisteredStream(row.StreamType);
+            var tombstone = row.Version + 1;
+            var written = await Write(lease, tenantId, stream, streamId, ExpectedVersion.Exact(row.Version), row, known: null, [new StreamDeleted()], ct,
+                beforeCounter: () => Provider.DeleteStreamData(lease.Connection, lease.WriteTransaction, tenantId, streamId, tombstone, ct),
+                skipSnapshot: true);
+            await Commit(lease, written!, ct);
+            return true;
+        }, ct);
+    }
+
+    /// <summary>
+    /// The position counter, the stream lock and the heartbeat check each rely on a statement that sees what committed
+    /// before its lock was granted. A transaction that reads one snapshot for its whole life does not: its append
+    /// could pass a fence that was closed, or apply an inline projection that moved to catch-up, with no error.
+    /// </summary>
+    private static void RequireReadCommitted(DbTransaction transaction)
+    {
+        if (transaction.IsolationLevel is System.Data.IsolationLevel.RepeatableRead or System.Data.IsolationLevel.Serializable or System.Data.IsolationLevel.Snapshot)
+        {
+            throw new DeedboxException(Errors.IsolationLevel,
+                $"The transaction runs at isolation level {transaction.IsolationLevel}. Deedbox appends need READ COMMITTED, the default of both databases: " +
+                "its locks give the order, and a transaction that keeps one snapshot would read a state from before a lock it waited for. Open the transaction at READ COMMITTED.");
+        }
+    }
+
+    /// <summary>
+    /// Runs one write in a lease of its own. An append whose instance has no heartbeat row writes nothing: a cut-over
+    /// did not count the instance as live, so the append would skip a projection that went inline without it. When
+    /// Deedbox owns the transaction and nothing of the caller's is in it, the instance joins again and the write runs
+    /// once more. A caller's transaction, or a DbContext passed to UseDbContext, holds work that Deedbox cannot replay,
+    /// so that write fails with DBX038 and the caller runs it again.
+    /// </summary>
+    private async Task<T> Fenced<T>(Func<Lease, Task<T>> write, CancellationToken ct)
+    {
+        var membership = services.GetRequiredService<Membership>();
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                // A write of Deedbox's own joins before it takes a connection, so a burst of writes after an eviction
+                // does not hold the whole pool while the join waits for one.
+                if (transactions is OwnedTransactions)
+                    await membership.Ensure(owned: true, ct);
+                await using var lease = await transactions.BeginWrite(Provider, ct);
+                RequireReadCommitted(lease.WriteTransaction);
+                if (transactions is not OwnedTransactions)
+                    await membership.Ensure(lease.Commits, ct);
+                return await write(lease);
+            }
+            catch (InstanceEvicted evicted)
+            {
+                membership.Evicted();
+                if (!evicted.Replayable || attempt > 0)
+                {
+                    throw new DeedboxException(Errors.InstanceEvicted,
+                        "This instance was not counted as live, because its heartbeat was late, so Deedbox did not write the append: it would have skipped an inline projection. " +
+                        "The instance joins again now. Roll the transaction back and run it again.");
+                }
+
+                await membership.Join(ct);
+            }
+        }
     }
 
     /// <summary>
@@ -148,25 +210,32 @@ internal sealed class EventStore(
     {
         var tenantId = TenantId;
         using var activity = StartActivity("deedbox.erase_stream", null, streamId);
-        await using var lease = await transactions.BeginWrite(Provider, ct);
-        if (await Provider.DeleteSubjectStream(lease.Connection, lease.WriteTransaction, tenantId, subjectId, streamId, ct) == 0)
+        await Fenced(async lease =>
         {
-            await lease.Complete(ct);
-            return;
-        }
+            // The stream row first, then the pair: an append takes them in that order too.
+            var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: false, ct);
+            var stream = row is null ? null : runtime.Registry.FindStream(row.StreamType);
+            if (row is not null && row.DeletedAt is null && stream is null)
+                throw new JobRejected($"Stream type '{row.StreamType}' is not registered in this app, so stream '{streamId}' cannot get its SubjectErased here.");
 
-        var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: true, withState: false, ct);
-        var stream = row is null ? null : runtime.Registry.FindStream(row.StreamType);
-        if (row is null || row.DeletedAt is not null || stream is null)
-        {
-            await lease.Complete(ct);
-            return;
-        }
+            if (await Provider.DeleteSubjectStream(lease.Connection, lease.WriteTransaction, tenantId, subjectId, streamId, ct) == 0
+                || row is null || row.DeletedAt is not null || stream is null)
+            {
+                await lease.Complete(ct);
+                return true;
+            }
 
-        var unsnapshotted = row with { State = null };
-        var state = await Replay(lease.Connection, lease.Transaction, tenantId, stream, streamId, unsnapshotted, ct);
-        var written = await Write(lease, tenantId, stream, streamId, ExpectedVersion.Exact(row.Version), unsnapshotted, state, [new SubjectErased(subjectId)], ct);
-        await Commit(lease, written!, ct);
+            var unsnapshotted = row with { State = null };
+            var state = await Replay(lease.Connection, lease.Transaction, tenantId, stream, streamId, unsnapshotted, ct);
+            var written = await Write(lease, tenantId, stream, streamId, ExpectedVersion.Exact(row.Version), unsnapshotted, state, [new SubjectErased(subjectId)], ct);
+
+            // A subject who came back since the erasure has a new key, and may have written to this stream under it.
+            // The pair stays then, so a later erasure clears this stream's stored state and visits it again.
+            if (await Provider.ReadSubjectKey(lease.Connection, lease.WriteTransaction, tenantId, subjectId, ct) is not null)
+                await Provider.RecordSubjectStreams(lease.Connection, lease.WriteTransaction, tenantId, streamId, [subjectId], ct);
+            await Commit(lease, written!, ct);
+            return true;
+        }, ct);
     }
 
     /// <summary>Replaces a stream's stored state with one rebuilt from all of its events.</summary>
@@ -209,9 +278,46 @@ internal sealed class EventStore(
     /// Writes one append after the stream row was read with a lock. Returns null when a new stream lost a
     /// creation race and <paramref name="expected"/> is Any, so the caller reads again.
     /// </summary>
+    /// <remarks>
+    /// The stream row moves to its new version before the hooks, the projections and the events are written. When
+    /// Deedbox owns the transaction, a failure rolls all of it back. In a caller's transaction the write runs inside a
+    /// savepoint instead: a caller that catches the failure and commits must not keep a stream version with no events.
+    /// </remarks>
     private async Task<Written?> Write(
         Lease lease, string tenantId, StreamRegistration stream, string streamId, ExpectedVersion expected, StreamRow? row,
         object? known, List<object> events, CancellationToken ct, Func<Task>? beforeCounter = null, bool skipSnapshot = false)
+    {
+        if (lease.Commits)
+            return await WriteCore(lease, tenantId, stream, streamId, expected, row, known, events, ct, beforeCounter, skipSnapshot);
+
+        var transaction = lease.WriteTransaction;
+        await Provider.SaveWrite(transaction, ct);
+        Written? written;
+        try
+        {
+            written = await WriteCore(lease, tenantId, stream, streamId, expected, row, known, events, ct, beforeCounter, skipSnapshot);
+        }
+        catch
+        {
+            try
+            {
+                await Provider.RollbackWrite(transaction);
+            }
+            catch (Exception ex) when (ex is DbException or InvalidOperationException)
+            {
+                // The failure ended the whole transaction, so nothing of the write is left to undo.
+            }
+
+            throw;
+        }
+
+        await Provider.ReleaseWrite(transaction, ct);
+        return written;
+    }
+
+    private async Task<Written?> WriteCore(
+        Lease lease, string tenantId, StreamRegistration stream, string streamId, ExpectedVersion expected, StreamRow? row,
+        object? known, List<object> events, CancellationToken ct, Func<Task>? beforeCounter, bool skipSnapshot)
     {
         var connection = lease.Connection;
         var transaction = lease.WriteTransaction;
@@ -265,11 +371,12 @@ internal sealed class EventStore(
         {
             var registration = runtime.Registry.ForEvent(events[i].GetType());
             registrations.Add(registration);
+            var eventId = Uuid7.New();
             string payload;
             if (registration.PersonalFields.Count > 0)
             {
-                keys ??= new SubjectKeys(runtime.RequireKeys(), Provider, connection, transaction, tenantId);
-                (payload, var eventSubjects) = await FieldCipher.Protect(events[i], registration, keys, ct);
+                keys ??= new SubjectKeys(runtime.RequireKeys(), Provider, connection, transaction, tenantId, runtime.Formats);
+                (payload, var eventSubjects) = await FieldCipher.Protect(events[i], eventId, registration, keys, runtime.Formats, ct);
                 subjects.UnionWith(eventSubjects);
             }
             else
@@ -277,7 +384,7 @@ internal sealed class EventStore(
                 payload = DeedboxJson.Serialize(events[i], registration.Json);
             }
 
-            rows.Add(new NewEvent(Uuid7.New(), current + i + 1, registration.Name, registration.Version, payload, metadataJson));
+            rows.Add(new NewEvent(eventId, current + i + 1, registration.Name, registration.Version, payload, metadataJson));
         }
 
         if (subjects.Count > 0)
@@ -303,7 +410,9 @@ internal sealed class EventStore(
             await Provider.RecordEventTypes(connection, transaction, newTypes, ct);
 
         var counterStarted = Stopwatch.GetTimestamp();
-        var last = await Provider.InsertEvents(connection, transaction, tenantId, streamId, stream.Name, occurredAt, rows, ct);
+        var last = await Provider.InsertEvents(connection, transaction, runtime.InstanceId, tenantId, streamId, stream.Name, occurredAt, rows, ct);
+        if (last < 0)
+            throw new InstanceEvicted(lease.Replayable);
 
         var envelopes = new EventEnvelope[rows.Count];
         for (var i = 0; i < rows.Count; i++)
@@ -341,7 +450,9 @@ internal sealed class EventStore(
         // A projection that is rebuilding or stalled catches up in the runner instead. The shared gate lock keeps a
         // rebuild from starting or finishing while this append is open.
         var statuses = await Provider.ReadInlineStatuses(work.Connection, work.Transaction, projections.Select(p => p.Name).ToList(), work.CancellationToken);
-        projections.RemoveAll(p => statuses.GetValueOrDefault(p.Name, CheckpointStatus.Running) != CheckpointStatus.Running);
+        // A projection with no inline checkpoint is not applied: its row is created in catch-up or running under the
+        // position counter, and until then nothing says that this append may apply it.
+        projections.RemoveAll(p => statuses.GetValueOrDefault(p.Name) != CheckpointStatus.Running);
 
         foreach (var projection in projections)
         {
@@ -389,7 +500,11 @@ internal sealed class EventStore(
         return current;
     }
 
-    private async Task<Loaded> LoadCore(DbConnection connection, DbTransaction? transaction, string tenantId, StreamRegistration stream, string streamId, bool forUpdate, CancellationToken ct)
+    /// <summary>
+    /// The stream's state and version. A plain load returns null when the stored state is missing or outdated: the
+    /// caller then loads through <see cref="LoadAndSnapshot"/>, which stores the rebuilt state under the stream's lock.
+    /// </summary>
+    private async Task<Loaded?> LoadCore(DbConnection connection, DbTransaction? transaction, string tenantId, StreamRegistration stream, string streamId, bool forUpdate, CancellationToken ct)
     {
         var row = await Provider.ReadStream(connection, transaction, tenantId, streamId, forUpdate, withState: stream.Snapshots.Enabled, ct);
         if (row is null)
@@ -397,16 +512,34 @@ internal sealed class EventStore(
 
         CheckStreamType(row, stream, streamId);
         CheckNotDeleted(row, streamId);
-        var state = await Replay(connection, transaction, tenantId, stream, streamId, row, ct);
-
-        // A missing or outdated snapshot is rebuilt lazily. A write rebuilds it anyway, so only a plain load saves it here.
         if (!forUpdate && stream.Snapshots.Enabled && !SnapshotUsable(row, stream))
+            return null;
+
+        return new Loaded(await Replay(connection, transaction, tenantId, stream, streamId, row, ct), row.Version, row);
+    }
+
+    /// <summary>
+    /// Loads a stream whose stored state is missing or outdated, and stores the rebuilt state. A write rebuilds it anyway,
+    /// so only a plain load comes here. The stream stays locked from the read of its events to the save. An erasure clears
+    /// the state of the subject's streams before it deletes the key, and waits for this lock to do it. So this load either
+    /// reads no key, or its save is cleared by the erasure it raced; a state saved without the lock could outlive one.
+    /// </summary>
+    private async Task<Loaded> LoadAndSnapshot(Lease lease, string tenantId, StreamRegistration stream, string streamId, CancellationToken ct)
+    {
+        var connection = lease.Connection;
+        await using var own = lease.Transaction is null ? await connection.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct) : null;
+        var transaction = lease.Transaction ?? own!;
+
+        var loaded = (await LoadCore(connection, transaction, tenantId, stream, streamId, forUpdate: true, ct))!;
+        if (loaded.Row is { } row && !SnapshotUsable(row, stream))
         {
-            var snapshot = new Snapshot(await SealState(tenantId, streamId, stream, state, ct), stream.StateVersion, row.Version);
+            var snapshot = new Snapshot(await SealState(tenantId, streamId, stream, loaded.State, ct), stream.StateVersion, row.Version);
             await Provider.SaveSnapshot(connection, transaction, tenantId, streamId, snapshot, ct);
         }
 
-        return new Loaded(state, row.Version, row);
+        if (own is not null)
+            await own.CommitAsync(CancellationToken.None);
+        return loaded;
     }
 
     /// <summary>The state at the row's version: the snapshot plus the events after it, or every event.</summary>
@@ -448,7 +581,7 @@ internal sealed class EventStore(
             return json;
 
         var (version, key) = await runtime.RequireKeys().Current(tenantId, ct);
-        return new System.Text.Json.Nodes.JsonObject { [Crypto.StateMarker] = Crypto.SealState(key, version, tenantId, streamId, json) }.ToJsonString();
+        return new System.Text.Json.Nodes.JsonObject { [Crypto.StateMarker] = Crypto.SealState(key, version, tenantId, streamId, json, runtime.Formats) }.ToJsonString();
     }
 
     /// <summary>The stored state's JSON, or null when it is sealed with a tenant key that was deleted; the state is then rebuilt from events.</summary>
@@ -457,12 +590,16 @@ internal sealed class EventStore(
         if (!stored.Contains("\"$state\"", StringComparison.Ordinal) || System.Text.Json.Nodes.JsonNode.Parse(stored)?[Crypto.StateMarker]?.GetValue<string>() is not { } marker)
             return stored;
 
-        var key = await runtime.RequireKeys().Find(tenantId, Crypto.StateKeyVersion(marker), ct);
+        // A state that a newer version of Deedbox sealed is rebuilt from the events, like one whose key is gone.
+        if (Crypto.StateHeader(marker) is not var (format, keyVersion))
+            return null;
+
+        var key = await runtime.RequireKeys().Find(tenantId, keyVersion, ct);
         if (key is null)
             return null;
         try
         {
-            return Crypto.OpenState(key, tenantId, streamId, marker);
+            return Crypto.OpenState(key, format, tenantId, streamId, marker);
         }
         catch (System.Security.Cryptography.CryptographicException ex)
         {

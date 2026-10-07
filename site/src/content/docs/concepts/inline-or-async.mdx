@@ -13,7 +13,7 @@ This page helps you choose a run mode for each projection. Each projection has e
 | --- | --- | --- |
 | Runs | In the append's transaction, before the commit | In the background runner, after the commit |
 | A read after a command | Sees the command's effect | Can be behind by the lag, often milliseconds |
-| A failing handler | Fails the append; the command sees the exception | Retries, then stalls the projection; appends go on |
+| A failing handler | Fails the append; the command sees the exception. In catch-up, it retries and stalls as an async one does | Retries, then stalls the projection; appends go on |
 | Cost to the append | The handler's time, inside the stream lock | None |
 | Reads events | One append at a time | In batches of up to `BatchSize`; a `BatchProjection` gets the whole batch |
 | Guarantee | Exactly once: the writes commit with the events | Exactly once: the writes commit with the checkpoint |
@@ -51,3 +51,18 @@ An instance that does not run an inline projection cannot apply it to its own ap
 - **An instance that starts without a running inline projection**, but can append its events, first moves that projection back to catch-up from the current head. The instances that run the projection then apply the old instance's appends by position, and switch it back to inline when the old instances stop.
 
 While a projection waits, `deedbox status` shows it as `rebuilding` with a small lag, and the log names the instances it waits for. An instance that stops cleanly leaves at once. One that crashes counts as live for 30 seconds after its last heartbeat, so the switch to inline waits that long.
+
+### An instance whose heartbeat is late
+
+A paused process, or one whose connection pool is exhausted, can miss its heartbeat for 30 seconds and then append again. Deedbox stops such an append from skipping an inline projection:
+
+- The switch to inline, called the cut-over, removes the heartbeat row of each instance that is not live. Log event 44 names them.
+- Every append checks its own heartbeat row in the statement that takes the position counter. An append without a row writes nothing.
+- Deedbox then joins the instance again, which moves the projection back to catch-up, and repeats an append in a transaction that it owns.
+- An append in your transaction, through `UseTransaction` or `UseDbContext` with an open transaction, fails with [DBX038](/reference/errors/dbx038/). Run the transaction again.
+
+The check covers instances on 0.5.0 or later. An older instance is covered only while its heartbeat is live. A process that appends without a started host joins on its first write.
+
+### A catch-up that cannot keep up
+
+When appends arrive faster than the catch-up applies them, the runner forces the cut-over after 20 polls without a smaller gap. A forced cut-over holds the position counter for at most 2 seconds. If it does not reach the head in that time, it keeps what it applied and the projection stays in catch-up. After 5 such attempts in a row, the health check reports the projection as degraded, and log event 45 records it. Make the handlers faster, or run the projection async.

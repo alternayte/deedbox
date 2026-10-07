@@ -30,6 +30,22 @@ public abstract class Subscription
     }
 }
 
+/// <summary>Where a subscription starts when the app registers it for the first time.</summary>
+public enum SubscriptionStart
+{
+    /// <summary>
+    /// At the first event in the store. A new subscription on a store that already holds events handles all of them,
+    /// so its side effects run for the whole history. This is the default: no event is skipped.
+    /// </summary>
+    FirstEvent,
+
+    /// <summary>
+    /// After the newest event in the store at the moment the subscription's checkpoint is created. Earlier events are
+    /// never delivered. The choice has no effect once the checkpoint exists.
+    /// </summary>
+    Now,
+}
+
 /// <summary>The event a subscription handles, and the scope it runs in.</summary>
 public sealed class SubscriptionContext
 {
@@ -49,6 +65,6 @@ public sealed class SubscriptionContext
     /// </summary>
     public IServiceProvider Services { get; }
 
-    /// <summary>Cancels the handler when the host stops.</summary>
+    /// <summary>Cancels the handler when the host stops, or when the call passes <see cref="RunnerOptions.HandlerTimeout"/>.</summary>
     public CancellationToken CancellationToken { get; }
 }

@@ -25,8 +25,11 @@ public abstract class Projection<TDbContext> : ProjectionBase where TDbContext :
     /// <param name="context">The rebuild's DbContext, connection and transaction.</param>
     protected virtual Task ResetAsync(WriteContext<TDbContext> context) => throw ResetMissing();
 
-    internal override async Task Reset(TransactionWork work) =>
-        await ResetAsync(new WriteContext<TDbContext>(work, await Enlistment.Get<TDbContext>(work)));
+    internal override async Task Reset(TransactionWork work)
+    {
+        var db = await Enlistment.Get<TDbContext>(work);
+        await InTransaction.Run(db, () => ResetAsync(new WriteContext<TDbContext>(work, db)), work.CancellationToken);
+    }
 
     /// <summary>Handles one event type. Events of types the projection does not handle are skipped.</summary>
     /// <param name="handler">Changes entities through <see cref="ProjectionContext{TDbContext}.Db"/>.</param>
@@ -37,7 +40,7 @@ public abstract class Projection<TDbContext> : ProjectionBase where TDbContext :
         AddHandler(typeof(TEvent), async (e, invocation) =>
         {
             var db = await Enlistment.Get<TDbContext>(invocation.Work);
-            await handler((TEvent)e, new ProjectionContext<TDbContext>(invocation, db));
+            await InTransaction.Run(db, () => handler((TEvent)e, new ProjectionContext<TDbContext>(invocation, db)), invocation.Work.CancellationToken);
         });
     }
 }

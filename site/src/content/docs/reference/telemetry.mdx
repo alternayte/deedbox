@@ -32,13 +32,28 @@ This page lists every span and instrument. Both the ActivitySource and the Meter
 | `deedbox.counter.duration` | ms | none. Counter wait plus hold time. |
 | `deedbox.consumer.lag` | positions | `deedbox.consumer`, `deedbox.schema` |
 | `deedbox.consumer.lag.seconds` | s | `deedbox.consumer`, `deedbox.schema` |
-| `deedbox.consumer.status` | 0 running, 1 rebuilding, 2 stalled | `deedbox.consumer`, `deedbox.schema` |
+| `deedbox.consumer.status` | 0 running, 1 rebuilding, 2 stalled. A retired consumer reports 0. | `deedbox.consumer`, `deedbox.schema` |
 | `deedbox.consumer.batch.duration` | ms | `deedbox.consumer` |
 | `deedbox.consumer.failures`, `deedbox.consumer.stalls` | count | `deedbox.consumer` |
 | `deedbox.jobs` | jobs | `deedbox.job.kind`, `deedbox.job.status` |
 | `deedbox.erasure.streams` | streams | none |
 | `deedbox.personal_data.decrypts`, `deedbox.personal_data.redactions` | fields | none |
 
+Each instance reports the consumer gauges for the consumers it runs. An instance updates `deedbox.consumer.lag` only after it commits a batch, so the gauge does not grow for a stalled consumer. Alert on the health check and on `deedbox status` instead; see [stalled projection](/operations/stalled-projection/).
+
 ## Logs
 
-Log events have stable IDs: 1 to 4 at start-up, 20 to 28 in the runner, 30 to 34 for jobs, 40 and 41 for the heartbeat. Every start-up error is a `DeedboxException` with a [DBX code](/reference/errors/).
+Log events have stable IDs: 1 to 5 at start-up, 20 to 29 in the runner, and 30 to 34 for jobs. IDs 40 to 45 are for the heartbeat and the cut-over of an inline projection. Every start-up error is a `DeedboxException` with a [DBX code](/reference/errors/).
+
+Events added in 0.5.0:
+
+| ID | Level | Says |
+| --- | --- | --- |
+| 5 | Warning | A new subscription starts at the first event and handles the events that the store already holds; the event gives the count. |
+| 29 | Warning | A consumer met a transient database error. The runner runs the batch again and counts no attempt. |
+| 42 | Warning | Deedbox did not count this instance as live and refused an append. The instance joins again. |
+| 43 | Error | This instance could not join again; it retries. Appends fail with DBX038 until it does. |
+| 44 | Warning | A cut-over removed the heartbeat rows of the instances it names, because their heartbeat was late. |
+| 45 | Warning | An inline projection cannot finish its catch-up: forced cut-overs ran out of time. |
+
+A stall record and a failed job hold the exception type and stack frames. The exception's message is only in these logs.

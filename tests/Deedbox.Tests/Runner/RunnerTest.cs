@@ -23,6 +23,8 @@ public sealed class Probe(string schema, Db db)
 
     public int PoisonAttempts;
 
+    public int FlakyAttempts;
+
     public int Resets;
 
     public ConcurrentDictionary<Guid, int> Deliveries { get; } = new();
@@ -73,6 +75,20 @@ public abstract class Applied : Projection
 public sealed class AsyncApplied(Probe probe) : Applied(probe, "async");
 
 public sealed class InlineApplied(Probe probe) : Applied(probe, "inline");
+
+/// <summary>The next version of <see cref="InlineApplied"/>: it also handles orders. Same label, so one row per event.</summary>
+public sealed class InlineAppliedWithOrders : Projection
+{
+    public InlineAppliedWithOrders(Probe probe)
+    {
+        On<ItemAdded>((_, ctx) => Insert(probe, ctx));
+        On<OrderPlaced>((_, ctx) => Insert(probe, ctx));
+    }
+
+    private static Task Insert(Probe probe, ProjectionContext ctx) => TestTables.Insert(ctx.Connection, ctx.Transaction,
+        $"INSERT INTO {probe.Table("applied")} (event_id, projection, position) VALUES (@id, @projection, @position)",
+        ("id", ctx.EventId.ToString()), ("projection", "inline"), ("position", ctx.GlobalPosition ?? -1));
+}
 
 public sealed class OrdersOnly : Projection
 {
@@ -126,6 +142,18 @@ public sealed class Receipts : Subscription
                 throw new InvalidOperationException($"poison {e.Sku}");
             }
 
+            // Never finishes and ignores its token, as a call to a service that hangs does.
+            if (e.Sku == "hang")
+                await new TaskCompletionSource().Task;
+            if (e.Sku == "flaky" && Interlocked.Increment(ref probe.FlakyAttempts) <= 6)
+                throw new FailoverException();
+            if (e.Sku == "never-ends")
+                throw new FailoverException();
+
+            // Blocks its thread before its first await, as a synchronous call to a service that hangs does.
+            if (e.Sku == "blocks")
+                Thread.Sleep(Timeout.Infinite);
+
             probe.Delivered.Enqueue(("receipts", ctx.Envelope));
             if (e.Sku == "follow-up")
             {
@@ -134,6 +162,12 @@ public sealed class Receipts : Subscription
             }
         });
     }
+}
+
+/// <summary>What a driver throws while the database fails over.</summary>
+public sealed class FailoverException() : DbException("The database is failing over.")
+{
+    public override bool IsTransient => true;
 }
 
 public sealed class Bulk : BatchProjection
@@ -160,7 +194,7 @@ public abstract class RunnerTest(Databases databases, Db db) : DatabaseTest(data
     protected Probe NewProbe() => new(Schema, Db);
 
     protected async Task<IHost> StartHost(Probe probe, Action<DeedboxBuilder> configure, Action<RunnerOptions>? runner = null, string? applicationName = null, bool defaultStreams = true,
-        Action<IServiceCollection>? services = null)
+        Action<IServiceCollection>? services = null, bool start = true)
     {
         var connectionString = applicationName is null ? ConnectionString : $"{ConnectionString};Application Name={applicationName}";
         var builder = Host.CreateApplicationBuilder();
@@ -188,7 +222,8 @@ public abstract class RunnerTest(Databases databases, Db db) : DatabaseTest(data
         var host = builder.Build();
         _hosts.Add(host);
         await EnsureTables();
-        await host.StartAsync(Ct);
+        if (start)
+            await host.StartAsync(Ct);
         return host;
     }
 

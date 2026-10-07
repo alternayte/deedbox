@@ -33,6 +33,39 @@ internal static class Jobs
 /// <summary>A job that cannot run as asked; it fails at once instead of being retried.</summary>
 internal sealed class JobRejected(string message) : Exception(message);
 
+/// <summary>A job this instance did its part of; the rest needs code that another live instance has, so the job stays queued.</summary>
+internal sealed class JobLeft() : Exception("The job waits for another instance.");
+
+/// <summary>
+/// What Deedbox stores about an exception in a checkpoint or job row. Message text can hold personal data that a
+/// handler or the database put there, and these rows outlive an erasure, so only the types and stack frames are kept.
+/// Deedbox's own messages name no data and stay. The full exception goes to the log.
+/// </summary>
+internal static class Failure
+{
+    public static JsonObject Describe(Exception ex)
+    {
+        var described = new JsonObject { ["exception"] = ex.GetType().FullName, ["stack"] = Stack(ex) };
+        if (ex is JobRejected or DeedboxException)
+            described["error"] = ex.Message;
+        return described;
+    }
+
+    /// <summary>The type and stack frames of the exception and of each inner exception, without any message.</summary>
+    public static string Stack(Exception ex)
+    {
+        var text = new System.Text.StringBuilder();
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (text.Length > 0)
+                text.Append("\n--- caused ---\n");
+            text.Append(e.GetType().FullName).Append('\n').Append(e.StackTrace);
+        }
+
+        return text.ToString();
+    }
+}
+
 internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider services, AsyncRunner runner, WakeSignal wake, ILogger logger)
 {
     private const int InterruptionRetries = 10;
@@ -108,6 +141,12 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
                 runner.Wake();
                 return true;
             }
+            catch (JobLeft)
+            {
+                _leftForOthers[job.Id] = now + runtime.Options.Runner.HeartbeatInterval * Instances.LiveIntervals;
+                LogJobLeft(job.Kind, job.Id);
+                return false;
+            }
             catch (Exception ex) when (!ct.IsCancellationRequested && ex is not (JobRejected or DeedboxException) && Retry(job.Id))
             {
                 // Jobs are idempotent, so anything but a rejection, such as a lost connection or a killed session, is
@@ -120,7 +159,7 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
             {
                 await TryRollback(transaction);
                 Finished(job.Kind, JobStatus.Failed);
-                activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.Message);
+                activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.GetType().Name);
                 LogJobFailed(ex, job.Kind, job.Id);
                 await MarkFailed(job, started, ex, ct);
                 return true;
@@ -177,7 +216,7 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         await using var connection = Provider.CreateConnection();
         await connection.OpenAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
-        var progress = new JsonObject { ["error"] = ex.Message, ["exception"] = ex.GetType().FullName };
+        var progress = Failure.Describe(ex);
         await Provider.UpdateJob(connection, transaction, job with { Status = JobStatus.Failed, Progress = progress.ToJsonString(), StartedAt = started, FinishedAt = runtime.Clock.GetUtcNow() }, ct);
         await transaction.CommitAsync(ct);
     }
@@ -189,7 +228,7 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         {
             Jobs.Rebuild => Rebuild(args["projection"]!.GetValue<string>(), connection, transaction, ct),
             Jobs.Skip => Skip(args["projection"]!.GetValue<string>(), Guid.Parse(args["eventId"]!.GetValue<string>()), connection, transaction, ct),
-            Jobs.Erase => Erase(args["tenantId"]!.GetValue<string>(), args["subjectId"]!.GetValue<string>(), ct),
+            Jobs.Erase => Erase(args["tenantId"]!.GetValue<string>(), args["subjectId"]!.GetValue<string>(), connection, transaction, ct),
             Jobs.Snapshots => RebuildSnapshots(args["streamType"]!.GetValue<string>(), ct),
             _ => throw new JobRejected($"Unknown job kind '{job.Kind}'."),
         };
@@ -205,7 +244,10 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         var projection = services.GetRequiredService<ProjectionSet>().All.FirstOrDefault(p => p.Name == name)
             ?? throw new JobRejected($"'{name}' is not a registered projection. Subscriptions cannot be rebuilt.");
 
-        if (projection.Run == Deedbox.Run.Inline)
+        // The gate is taken when the projection is inline here or in its checkpoint: the instances of the other mode
+        // may still apply it inline, and the reset must wait for their open appends.
+        var stored = (await Provider.ReadCheckpoints(connection, transaction, ct)).FirstOrDefault(r => r.Name == name);
+        if (projection.Run == Deedbox.Run.Inline || stored?.Mode == CheckpointMode.Inline)
             await Provider.LockInlineGate(connection, transaction, name, ct);
         var row = await Provider.LockCheckpoint(connection, transaction, name, CheckpointLock.Exclusive, ct)
             ?? throw new JobRejected($"Projection '{name}' has no checkpoint row yet; start the app once first.");
@@ -219,35 +261,55 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
 
         var mode = projection.Run == Deedbox.Run.Inline ? CheckpointMode.Inline : CheckpointMode.Async;
         await Provider.UpdateCheckpoint(connection, transaction, row with { Position = 0, Status = CheckpointStatus.Rebuilding, Mode = mode, Error = null }, ct);
+
+        // A rebuild starts the record of what the projection handles again, from this version.
+        var consumer = AsyncRunner.Consumers(runtime, services.GetRequiredService<ProjectionSet>()).First(c => c.Name == name);
+        await Provider.UpdateHandles(connection, transaction, name, consumer.Handles.ToJson(), ct);
         return new JsonObject { ["projection"] = name, ["previousPosition"] = row.Position, ["previousStatus"] = row.Status };
     }
 
     /// <summary>
-    /// Erases a subject: deletes the key again (a no-op after the first time), then handles each stream that held their
-    /// data in its own transaction. Each stream's pair is removed as it is handled, so a crash resumes where it stopped.
-    /// This job's row stays locked by the claiming transaction until it finishes, so no other runner takes it meanwhile.
+    /// Finishes an erasure whose key is already deleted: handles each stream that held the subject's data in its own
+    /// transaction. Each stream's pair is removed as it is handled, so a crash resumes where it stopped. The job deletes
+    /// no key itself, so a subject who came back since then keeps the new key. This job's row stays locked by the
+    /// claiming transaction until it finishes, so no other runner takes it meanwhile.
     /// </summary>
-    private async Task<JsonObject> Erase(string tenantId, string subjectId, CancellationToken ct)
+    private async Task<JsonObject> Erase(string tenantId, string subjectId, DbConnection claim, DbTransaction claimTransaction, CancellationToken ct)
     {
-        await SubjectErasure.DeleteKey(runtime, tenantId, subjectId, ct);
+        var streams = await Provider.ReadSubjectStreams(claim, claimTransaction, tenantId, subjectId, ct);
 
-        List<string> streams;
-        await using (var connection = Provider.CreateConnection())
+        var erased = 0;
+        var unregistered = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var (streamId, streamType) in streams)
         {
-            await connection.OpenAsync(ct);
-            streams = await Provider.ReadSubjectStreams(connection, null, tenantId, subjectId, ct);
-        }
+            // Left in place with its pair: an instance that registers the type can still append SubjectErased to it.
+            if (runtime.Registry.FindStream(streamType) is null)
+            {
+                unregistered.Add(streamType);
+                continue;
+            }
 
-        foreach (var stream in streams)
-        {
             await using var scope = services.CreateAsyncScope();
             scope.ServiceProvider.GetRequiredService<DeedboxContext>().TenantId = tenantId;
             var store = (EventStore)scope.ServiceProvider.GetRequiredService<IEventStore>();
-            await store.EraseFromStream(stream, subjectId, ct);
+            await store.EraseFromStream(streamId, subjectId, ct);
             DeedboxDiagnostics.ErasedStreams.Add(1);
+            erased++;
         }
 
-        return new JsonObject { ["tenantId"] = tenantId, ["subjectId"] = subjectId, ["streams"] = streams.Count };
+        if (unregistered.Count > 0)
+        {
+            // Another instance finishes the streams this one cannot; each instance does the stream types it registers.
+            var live = await Provider.ReadLiveInstances(claim, claimTransaction, runtime.Options.Runner.HeartbeatInterval * Instances.LiveIntervals, ct);
+            if (live.Any(i => i.Id != runtime.InstanceId && unregistered.Any(t => i.Events.Any(e => Instances.StreamOf(e) == t))))
+                throw new JobLeft();
+
+            throw new JobRejected(
+                $"No live instance registers stream type {string.Join(", ", unregistered.Select(t => $"'{t}'"))}, so {streams.Count - erased} streams of the subject " +
+                "have no SubjectErased yet. Their personal data is unreadable already. Start an app that registers the type, then erase the subject again.");
+        }
+
+        return new JsonObject { ["tenantId"] = tenantId, ["subjectId"] = subjectId, ["streams"] = erased };
     }
 
     /// <summary>
@@ -296,8 +358,11 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         if (next.Count == 0 || next[0].EventId != eventId)
             throw new JobRejected($"'{name}' is stalled on another event, not {eventId}. Check the stalled event with deedbox status.");
 
+        // An inline projection only stalls in catch-up, so it goes back to catch-up: running at this position would
+        // drop every event between it and the head.
         var skipped = next[0];
-        await Provider.UpdateCheckpoint(connection, transaction, row with { Position = skipped.GlobalPosition, Status = CheckpointStatus.Running, Error = null }, ct);
+        var status = row.Mode == CheckpointMode.Inline ? CheckpointStatus.Rebuilding : CheckpointStatus.Running;
+        await Provider.UpdateCheckpoint(connection, transaction, row with { Position = skipped.GlobalPosition, Status = status, Error = null }, ct);
         return new JsonObject
         {
             ["consumer"] = name,

@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Text.Json.Nodes;
 using Deedbox.Tests.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
@@ -103,7 +105,10 @@ public abstract class RunnerTests(Databases databases, Db db) : RunnerTest(datab
         Assert.Equal(("poison", "cart-2", 1L, "cart.item_added", poison.EventId.ToString("D"), 3L),
             (error["reason"]!.GetValue<string>(), error["streamId"]!.GetValue<string>(), error["version"]!.GetValue<long>(),
              error["eventType"]!.GetValue<string>(), error["eventId"]!.GetValue<string>(), error["globalPosition"]!.GetValue<long>()));
-        Assert.Contains("poison poison", error["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        // The stall names the exception type and its frames, never its message: a message can hold personal data.
+        Assert.Equal("System.InvalidOperationException", error["exception"]!.GetValue<string>());
+        Assert.Contains("Applied", error["stack"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.DoesNotContain("poison poison", stalled.Error, StringComparison.Ordinal);
         Assert.Equal(2, await AppliedCount("async"));
         Assert.Equal(HealthStatus.Unhealthy, (await Health(host)).Status);
 
@@ -145,8 +150,11 @@ public abstract class RunnerTests(Databases databases, Db db) : RunnerTest(datab
         var host = await StartHost(probe, b => b.Subscription<Receipts>("receipts"), o => o.MaxRetryDelay = TimeSpan.FromSeconds(1));
         await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 1), new ItemAdded("poison", 1), new ItemAdded("b", 1)]);
 
-        await WaitForCheckpoint(host, "receipts", r => r.Status == "stalled");
-        var first = JsonNode.Parse((await Checkpoint(host, "receipts")).Error!)!;
+        // The row is taken from the read that first saw the stall: a second read can come after the first scheduled
+        // retry, one second later, which adds an attempt.
+        CheckpointRow? stalled = null;
+        await WaitForCheckpoint(host, "receipts", r => (stalled = r).Status == "stalled");
+        var first = JsonNode.Parse(stalled!.Error!)!;
         Assert.Equal(3, first["attempts"]!.GetValue<int>());
         Assert.NotNull(first["retryAt"]);
 
@@ -176,12 +184,146 @@ public abstract class RunnerTests(Databases databases, Db db) : RunnerTest(datab
         await StoreOf(first).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("poison", 1)]);
         await WaitForCheckpoint(first, "receipts", r => r.Status == "stalled");
         var before = Volatile.Read(ref probe.PoisonAttempts);
-        await Task.Delay(TimeSpan.FromSeconds(5), Ct);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        await WaitFor(() => Task.FromResult(Volatile.Read(ref probe.PoisonAttempts) - before >= 3), "three scheduled retries");
         var retries = Volatile.Read(ref probe.PoisonAttempts) - before;
 
-        // One instance alone makes about 5 attempts in 5 seconds; two without a shared schedule make about 10.
-        Assert.InRange(retries, 3, 6);
+        // The guarantee is the upper bound: one attempt per interval between both instances. Two instances without a
+        // shared schedule make two per interval, and reach three attempts in half the time. A slow database only makes
+        // the retries later, so the bound comes from the time that passed, not from a fixed window.
+        Assert.InRange(retries, 3, (int)(watch.Elapsed / interval) + 1);
         Assert.Equal("stalled", (await Checkpoint(second, "receipts")).Status);
+    }
+
+    [Fact]
+    public async Task A_new_subscription_starts_at_the_first_event_unless_it_asks_for_now()
+    {
+        var probe = NewProbe();
+        var before = await StartHost(probe, _ => { });
+        await StoreOf(before).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 1), new ItemAdded("b", 1)]);
+        await StopHost(before);
+
+        var host = await StartHost(probe, b => b.Subscription<Receipts>("from_now", SubscriptionStart.Now));
+        Assert.Equal(2, (await Checkpoint(host, "from_now")).Position);
+        await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("c", 1)]);
+        await WaitForCaughtUp(host, "from_now");
+        Assert.Equal(["c"], probe.Delivered.Select(d => ((ItemAdded)d.Envelope.Event).Sku));
+        await StopHost(host);
+
+        // The choice applies once: the checkpoint exists, so a restart delivers nothing again.
+        probe.Delivered.Clear();
+        var again = await StartHost(probe, b => b.Subscription<Receipts>("from_now", SubscriptionStart.Now));
+        await WaitForCaughtUp(again, "from_now");
+        Assert.Empty(probe.Delivered);
+        await StopHost(again);
+
+        // The default skips nothing.
+        var fromStart = await StartHost(probe, b => b.Subscription<Receipts>("from_start"));
+        await WaitForCaughtUp(fromStart, "from_start");
+        Assert.Equal(["a", "b", "c"], probe.Delivered.Select(d => ((ItemAdded)d.Envelope.Event).Sku));
+    }
+
+    [Fact]
+    public async Task A_handler_that_hangs_is_cut_off_at_the_handler_timeout_and_stalls_like_any_failing_event()
+    {
+        var probe = NewProbe();
+        var host = await StartHost(probe, b => b.Subscription<Receipts>("receipts"), o => (o.HandlerTimeout, o.HandlerGrace) = (TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200)));
+        await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 1), new ItemAdded("hang", 1), new ItemAdded("b", 1)]);
+
+        await WaitForCheckpoint(host, "receipts", r => r.Status == "stalled");
+
+        var stalled = await Checkpoint(host, "receipts");
+        Assert.Equal(1, stalled.Position);
+        Assert.Equal("System.TimeoutException", JsonNode.Parse(stalled.Error!)!["exception"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_handler_that_blocks_its_thread_is_bounded_too()
+    {
+        var probe = NewProbe();
+        var host = await StartHost(probe, b => b.Subscription<Receipts>("receipts"),
+            o => (o.HandlerTimeout, o.HandlerGrace) = (TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200)));
+        await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("blocks", 1)]);
+
+        await WaitForCheckpoint(host, "receipts", r => r.Status == "stalled");
+
+        Assert.Equal("System.TimeoutException", JsonNode.Parse((await Checkpoint(host, "receipts")).Error!)!["exception"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task With_no_retries_a_poison_event_in_a_batch_still_stalls_directly_before_it_so_a_skip_finds_it()
+    {
+        var probe = NewProbe();
+        probe.PoisonSku = "poison";
+        var host = await StartHost(probe, b => b.Projection<AsyncApplied>("applied", Run.Async), o => (o.Enabled, o.HandlerRetries) = (false, 0));
+        await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 1), new ItemAdded("b", 1)]);
+        var poison = (await StoreOf(host).Append("cart-2", ExpectedVersion.Any, [new ItemAdded("poison", 1)])).Events[0];
+        await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("c", 1)]);
+        await StopHost(host);
+
+        // The first batch holds all four events, so the failure is seen with the checkpoint still at 0.
+        var runner = await StartHost(probe, b => b.Projection<AsyncApplied>("applied", Run.Async), o => o.HandlerRetries = 0);
+        await WaitForCheckpoint(runner, "applied", r => r.Status == "stalled");
+        Assert.Equal(2, (await Checkpoint(runner, "applied")).Position);
+
+        var skip = await WaitForJob(runner, await Enqueue(runner, Jobs.Skip, new JsonObject { ["projection"] = "applied", ["eventId"] = poison.EventId.ToString() }));
+        await WaitForCaughtUp(runner, "applied");
+
+        Assert.Equal("done", skip.Status);
+        Assert.Equal(3, await AppliedCount("async"));
+    }
+
+    [Fact]
+    public async Task A_rebuild_into_the_other_run_mode_stops_inline_instances_from_applying_the_projection()
+    {
+        // This instance registers the projection inline and runs no jobs; the other registers it async and rebuilds it.
+        var probe = NewProbe();
+        var inline = await StartHost(probe, b => b.Projection<AsyncApplied>("applied", Run.Inline), o => o.Enabled = false);
+        await StoreOf(inline).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 1)]);
+
+        var asynchronous = await StartHost(probe, b => b.Projection<AsyncApplied>("applied", Run.Async));
+        Assert.Equal("stalled", (await Checkpoint(asynchronous, "applied")).Status);
+        Assert.Equal("done", (await WaitForJob(asynchronous, await Enqueue(asynchronous, Jobs.Rebuild, new JsonObject { ["projection"] = "applied" }))).Status);
+        await WaitForCaughtUp(asynchronous, "applied");
+
+        // The checkpoint is async and running now. An append of the inline instance must leave it to the runner:
+        // applied inline as well, the event would be inserted twice and stall the projection on its primary key.
+        await StoreOf(inline).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("b", 1)]);
+        await WaitForCaughtUp(asynchronous, "applied");
+
+        Assert.Equal(("async", "running"), ((await Checkpoint(asynchronous, "applied")).Mode, (await Checkpoint(asynchronous, "applied")).Status));
+        Assert.Equal(2, await AppliedCount("async"));
+        Assert.Equal(0, await Scalar<int>($"SELECT COUNT(*) FROM {Table("applied")} WHERE position = -1 AND event_id IN (SELECT CAST(event_id AS varchar(50)) FROM {Table("events")} WHERE global_position = 2)"));
+    }
+
+    [Fact]
+    public async Task A_transient_database_error_in_a_handler_is_retried_and_never_stalls_the_consumer()
+    {
+        // Six failures are more than the two retries a poison event gets in these tests.
+        var probe = NewProbe();
+        var host = await StartHost(probe, b => b.Subscription<Receipts>("receipts"));
+        await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("flaky", 1), new ItemAdded("b", 1)]);
+
+        await WaitForCaughtUp(host, "receipts");
+
+        Assert.Equal(7, probe.FlakyAttempts);
+        Assert.Equal(["flaky", "b"], probe.Delivered.Select(d => ((ItemAdded)d.Envelope.Event).Sku));
+    }
+
+    [Fact]
+    public async Task An_error_that_stays_transient_at_one_event_past_StallAfter_stalls_so_the_event_can_be_skipped()
+    {
+        // A query that always times out for one event looks transient to the driver on every attempt.
+        var probe = NewProbe();
+        var host = await StartHost(probe, b => b.Subscription<Receipts>("receipts"), o => o.StallAfter = TimeSpan.FromMilliseconds(300));
+        var stuck = (await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("never-ends", 1), new ItemAdded("b", 1)])).Events[0];
+
+        await WaitForCheckpoint(host, "receipts", r => r.Status == "stalled");
+        var skip = await WaitForJob(host, await Enqueue(host, Jobs.Skip, new JsonObject { ["projection"] = "receipts", ["eventId"] = stuck.EventId.ToString() }));
+        await WaitForCaughtUp(host, "receipts");
+
+        Assert.Equal("done", skip.Status);
+        Assert.Equal(["b"], probe.Delivered.Select(d => ((ItemAdded)d.Envelope.Event).Sku));
     }
 
     [Fact]
@@ -231,6 +373,29 @@ public abstract class RunnerTests(Databases databases, Db db) : RunnerTest(datab
         Assert.Equal(3, await AppliedCount("inline"));
         Assert.Equal(1, await Scalar<int>($"SELECT COUNT(*) FROM {Table("applied")} WHERE projection = 'inline' AND position = -1"));
         Assert.Equal(0, probe.Resets);
+    }
+
+    [Fact]
+    public async Task A_skip_on_an_inline_projection_that_stalled_in_catch_up_applies_every_later_event()
+    {
+        var probe = NewProbe();
+        probe.PoisonSku = "poison";
+        var before = await StartHost(probe, _ => { });
+        await StoreOf(before).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 1)]);
+        var poison = (await StoreOf(before).Append("cart-2", ExpectedVersion.Any, [new ItemAdded("poison", 1)])).Events[0];
+        await StoreOf(before).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("b", 1), new ItemAdded("c", 1)]);
+        await StopHost(before);
+
+        var host = await StartHost(probe, b => b.Projection<InlineApplied>("inline", Run.Inline));
+        await WaitForCheckpoint(host, "inline", r => r.Status == "stalled");
+        var skip = await WaitForJob(host, await Enqueue(host, Jobs.Skip, new JsonObject { ["projection"] = "inline", ["eventId"] = poison.EventId.ToString() }));
+        await WaitForCaughtUp(host, "inline");
+        await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("d", 1)]);
+
+        // Running at the skipped position would have dropped b and c for good.
+        Assert.Equal("done", skip.Status);
+        Assert.Equal(4, await AppliedCount("inline"));
+        Assert.Equal(1, await Scalar<int>($"SELECT COUNT(*) FROM {Table("applied")} WHERE projection = 'inline' AND position = -1"));
     }
 
     [Theory]
@@ -287,6 +452,23 @@ public abstract class RunnerTests(Databases databases, Db db) : RunnerTest(datab
         await WaitForCaughtUp(host, "ef_totals");
 
         Assert.Equal(1, probe.Resets);
+        Assert.Equal("5", await Scalar<string>($"SELECT note FROM ef_tests.orders WHERE id = '{probe.Prefix}cart-1'"));
+    }
+
+    [Fact]
+    public async Task An_ef_projection_works_when_its_context_has_a_retrying_execution_strategy()
+    {
+        var probe = NewProbe();
+        var retrying = new DbContextOptionsBuilder<OrdersDb>();
+        _ = Db == Db.Postgres
+            ? retrying.UseNpgsql(ConnectionString, o => o.EnableRetryOnFailure())
+            : retrying.UseSqlServer(ConnectionString, o => o.EnableRetryOnFailure());
+        var host = await StartHost(probe, b => b.Projection<EfCartTotals>("totals", Run.Async),
+            services: s => s.Replace(ServiceDescriptor.Scoped(_ => retrying.Options)));
+
+        await StoreOf(host).Append("cart-1", ExpectedVersion.Any, [new ItemAdded("a", 2), new ItemAdded("b", 3)]);
+        await WaitForCaughtUp(host, "totals");
+
         Assert.Equal("5", await Scalar<string>($"SELECT note FROM ef_tests.orders WHERE id = '{probe.Prefix}cart-1'"));
     }
 

@@ -22,7 +22,7 @@ The method is often called a blue/green rebuild: the old projection is blue, the
 
    <Ready />
 
-   The health check stays healthy while the new projection catches up.
+   The health check stays healthy while the new projection catches up. If an inline projection cannot finish its catch-up, the check reports it as degraded; see [rebuild a projection](/how-to/rebuild-a-projection/#what-happens).
 
 4. When the new projection is caught up, switch the reads to the new tables. Use a configuration flag or a deploy. Both read models stay current until the next step, so you can switch back.
 

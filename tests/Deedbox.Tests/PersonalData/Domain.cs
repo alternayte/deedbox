@@ -34,6 +34,12 @@ public record BadAge([property: DataSubject] string PersonId, [property: Persona
 
 public record NoSubject([property: PersonalData] string Name);
 
+public record Address([property: PersonalData] string? Street, string City);
+
+public record Moved([property: DataSubject] string PersonId, IReadOnlyList<Address> Addresses);
+
+public record MovedWhole([property: DataSubject] string PersonId, [property: PersonalData] Address? Address);
+
 public record Age(int Years) : IState<Age>
 {
     public static Age Initial { get; } = new(0);

@@ -79,7 +79,7 @@ internal static class CliApp
             var state = await Admin.Status(db, ct);
             if (result.GetValue(json))
             {
-                await output.WriteLineAsync(JsonSerializer.Serialize(state, CliJson.Default.StoreStatus));
+                await output.WriteLineAsync(StatusJson(state).ToJsonString(Indented));
                 return 0;
             }
 
@@ -87,17 +87,24 @@ internal static class CliApp
             await output.WriteLineAsync();
             await output.WriteLineAsync($"{"CONSUMER",-30} {"MODE",-13} {"STATUS",-11} {"POSITION",10} {"LAG",10}  UPDATED");
             foreach (var c in state.Consumers)
-                await output.WriteLineAsync($"{c.Name,-30} {c.Mode,-13} {c.Status,-11} {c.Position,10} {c.Lag,10}  {c.UpdatedAt:u}");
+                await output.WriteLineAsync($"{c.Name,-30} {Wire.Text(c.Mode),-13} {Wire.Text(c.Status),-11} {c.Position,10} {c.Lag,10}  {c.UpdatedAt:u}");
 
             foreach (var c in state.Consumers.Where(c => c.Error is not null))
             {
                 var e = JsonDocument.Parse(c.Error!).RootElement;
                 await output.WriteLineAsync();
+                if (Text(e, "reason") == ConsumerLoop.SlowCatchUpReason)
+                {
+                    await output.WriteLineAsync($"{c.Name} cannot finish its catch-up: {Text(e, "attempts")} forced cut-overs ran out of time, with {Text(e, "gap")} events left.");
+                    await output.WriteLineAsync("  Its handlers are too slow for the append rate. It keeps trying; make the handlers faster, or run it async.");
+                    continue;
+                }
+
                 await output.WriteLineAsync($"{c.Name} is stalled ({Text(e, "reason")}).");
                 if (Text(e, "reason") == "poison")
                 {
                     await output.WriteLineAsync($"  event {Text(e, "eventId")} ({Text(e, "eventType")}) in stream '{Text(e, "streamId")}' version {Text(e, "version")}, position {Text(e, "globalPosition")}");
-                    await output.WriteLineAsync($"  {Text(e, "exception")}: {Text(e, "message")}");
+                    await output.WriteLineAsync($"  {Text(e, "exception")}; the message is in the app's log, never in the store.");
                     if (e.TryGetProperty("retryAt", out var retryAt) && retryAt.TryGetDateTimeOffset(out var at))
                         await output.WriteLineAsync($"  {Text(e, "attempts")} attempts; the next retry is at {at:u}.");
                     await output.WriteLineAsync($"  Fix the cause and it runs again at the next retry, or: deedbox skip {c.Name} --event {Text(e, "eventId")}");
@@ -113,7 +120,7 @@ internal static class CliApp
                 await output.WriteLineAsync();
                 await output.WriteLineAsync($"{"JOB",-36} {"KIND",-10} {"STATUS",-8} CREATED");
                 foreach (var j in state.Jobs)
-                    await output.WriteLineAsync($"{j.Id,-36} {j.Kind,-10} {j.Status,-8} {j.CreatedAt:u}");
+                    await output.WriteLineAsync($"{j.Id,-36} {Wire.Text(j.Kind),-10} {Wire.Text(j.Status),-8} {j.CreatedAt:u}");
             }
 
             return 0;
@@ -160,10 +167,20 @@ internal static class CliApp
             {
                 if (keySpec is not null)
                     throw new CliException("--master-key is only for --identity; erasing a subject needs no master key.");
-                var args = Admin.EraseArgs(result.GetValue(tenant)!, subjectId!);
+                var subjectTenant = DeedboxContext.ValidTenant(result.GetValue(tenant)!);
+                ErasureResult started;
                 await using (var db = target.Open(result))
-                    await Admin.DeleteSubjectKey(db, result.GetValue(tenant)!, subjectId!, ct);
-                return await Queue(result, target, output, wait, Jobs.Erase, args, ct);
+                    started = await Admin.Erase(db, TimeProvider.System, subjectTenant, [subjectId!], ct);
+                if (started.KeysDeleted == 0)
+                {
+                    // Not a success: a wrong subject ID or tenant looks exactly like this.
+                    await output.WriteLineAsync($"Tenant '{subjectTenant}' has no key for this subject, so no personal data was erased. Check the subject ID and --tenant.");
+                    await Follow(result, target, output, wait, Jobs.Erase, started.JobIds[0], ct);
+                    return 1;
+                }
+
+                await output.WriteLineAsync("Deleted the subject's key. A running app instance finishes the erasure.");
+                return await Follow(result, target, output, wait, Jobs.Erase, started.JobIds[0], ct);
             }
 
             if (keySpec is null)
@@ -171,7 +188,7 @@ internal static class CliApp
             var tenantId = DeedboxContext.ValidTenant(result.GetValue(tenant)!);
             IReadOnlyList<Guid> jobs;
             await using (var db = target.Open(result))
-                jobs = await Admin.EraseIdentity(db, new Pseudonymizer(db, MasterKey(keySpec, db)), TimeProvider.System, tenantId, identityValue, ct);
+                jobs = (await Admin.EraseIdentity(db, new Pseudonymizer(db, MasterKey(keySpec, db)), TimeProvider.System, tenantId, identityValue, ct)).JobIds;
             if (jobs.Count == 0)
             {
                 await output.WriteLineAsync($"Tenant '{tenantId}' has no pseudonym period with a secret, so there is nothing to erase.");
@@ -293,15 +310,44 @@ internal static class CliApp
         while (true)
         {
             var job = await Admin.Job(db, id, ct);
-            if (job?.Status is "done" or "failed")
+            if (job?.Status is JobState.Done or JobState.Failed)
             {
-                await output.WriteLineAsync($"Job {id} {job.Status}: {job.Progress}");
-                return job.Status == "done" ? 0 : 1;
+                await output.WriteLineAsync($"Job {id} {Wire.Text(job.Status)}: {job.Progress}");
+                return job.Status == JobState.Done ? 0 : 1;
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
         }
     }
+
+    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
+
+    /// <summary>The status as JSON with the stored text of each value, so the output does not change with the API's enums.</summary>
+    private static System.Text.Json.Nodes.JsonObject StatusJson(StoreStatus state) => new()
+    {
+        ["head"] = state.Head,
+        ["consumers"] = new System.Text.Json.Nodes.JsonArray([.. state.Consumers.Select(c => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+        {
+            ["name"] = c.Name,
+            ["mode"] = Wire.Text(c.Mode),
+            ["status"] = Wire.Text(c.Status),
+            ["position"] = c.Position,
+            ["lag"] = c.Lag,
+            ["updatedAt"] = c.UpdatedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["error"] = c.Error,
+        })]),
+        ["jobs"] = new System.Text.Json.Nodes.JsonArray([.. state.Jobs.Select(j => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+        {
+            ["id"] = j.Id.ToString("D"),
+            ["kind"] = Wire.Text(j.Kind),
+            ["args"] = j.Args,
+            ["status"] = Wire.Text(j.Status),
+            ["progress"] = j.Progress,
+            ["createdAt"] = j.CreatedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["startedAt"] = j.StartedAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["finishedAt"] = j.FinishedAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+        })]),
+    };
 
     private static string RequireProvider(ParseResult result, Option<string?> provider) =>
         result.GetValue(provider) ?? throw new CliException("Pass --provider postgres or --provider sqlserver.");
@@ -341,7 +387,3 @@ internal static class CliApp
 }
 
 internal sealed class CliException(string message) : Exception(message);
-
-[System.Text.Json.Serialization.JsonSourceGenerationOptions(JsonSerializerDefaults.Web, WriteIndented = true)]
-[System.Text.Json.Serialization.JsonSerializable(typeof(StoreStatus))]
-internal sealed partial class CliJson : System.Text.Json.Serialization.JsonSerializerContext;

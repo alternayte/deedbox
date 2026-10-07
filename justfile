@@ -13,16 +13,21 @@ test: build
 pack: build
     dotnet pack Deedbox.slnx -c Release --no-build
 
-# The gate: repo checks, then build, tests, pack, and the dotnet new template.
+# The gate: repo checks, then build, tests, pack, the dotnet new template, and the native AOT app.
 check:
     @for c in checks/*.sh; do bash "$c" || { echo "FAIL $c" >&2; exit 1; }; done
     just test
     just pack
     just template
+    just aot
 
 # Generate both variants of the dotnet new template against the packed packages, and build and test them.
 template:
     scripts/template-check.sh
+
+# Publish tests/Deedbox.Aot as a native AOT binary and run it: append, load and erase against a throwaway Postgres.
+aot:
+    scripts/aot-check.sh
 
 # Refresh the docs' and README's code samples from the compiled snippets.
 snippets:

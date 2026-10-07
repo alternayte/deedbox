@@ -18,7 +18,7 @@ public abstract class AdminTests(Databases databases, Db db) : RunnerTest(databa
     private static async Task<JobInfo> Finished(IHost host, Guid id)
     {
         JobInfo? job = null;
-        await WaitFor(async () => (job = await AdminOf(host).GetJobAsync(id))?.Status is "done" or "failed", $"job {id}");
+        await WaitFor(async () => (job = await AdminOf(host).GetJobAsync(id))?.Status is JobState.Done or JobState.Failed, $"job {id}");
         return job!;
     }
 
@@ -35,8 +35,8 @@ public abstract class AdminTests(Databases databases, Db db) : RunnerTest(databa
         var applied = status.Consumers.Single(c => c.Name == "applied");
         var inline = status.Consumers.Single(c => c.Name == "inline");
         Assert.Equal(3, status.Head);
-        Assert.Equal(("async", "stalled", 1L, 2L), (applied.Mode, applied.Status, applied.Position, applied.Lag));
-        Assert.Equal(("inline", "running", 0L), (inline.Mode, inline.Status, inline.Lag));
+        Assert.Equal((ConsumerMode.Async, ConsumerState.Stalled, 1L, 2L), (applied.Mode, applied.Status, applied.Position, applied.Lag));
+        Assert.Equal((ConsumerMode.Inline, ConsumerState.Running, 0L), (inline.Mode, inline.Status, inline.Lag));
         var poison = Guid.Parse(JsonNode.Parse(applied.Error!)!["eventId"]!.GetValue<string>());
 
         var skip = await Finished(host, await AdminOf(host).SkipAsync("applied", poison));
@@ -45,8 +45,9 @@ public abstract class AdminTests(Databases databases, Db db) : RunnerTest(databa
         var rebuild = await Finished(host, await AdminOf(host).RebuildAsync("inline"));
         await WaitForCaughtUp(host, "inline");
 
-        Assert.Equal(("skip", "done"), (skip.Kind, skip.Status));
-        Assert.Equal(("rebuild", "done"), (rebuild.Kind, rebuild.Status));
+        Assert.Equal((JobKind.Skip, JobState.Done), (skip.Kind, skip.Status));
+        Assert.InRange(skip.StartedAt!.Value, skip.CreatedAt.AddMinutes(-1), skip.FinishedAt!.Value);
+        Assert.Equal((JobKind.Rebuild, JobState.Done), (rebuild.Kind, rebuild.Status));
         Assert.Equal(2, await AppliedCount("async"));
         Assert.Contains((await AdminOf(host).GetStatusAsync()).Jobs, j => j.Id == skip.Id && j.FinishedAt is not null);
         Assert.Null(await AdminOf(host).GetJobAsync(Guid.NewGuid()));
@@ -111,10 +112,16 @@ public abstract class AdminTests(Databases databases, Db db) : RunnerTest(databa
         var host = await StartHost(NewProbe(), b => { Keys.Streams(b); b.Keys(k => k.FromKeyRing(ring)); });
         await Tenant(host, "acme").Append("m-1", ExpectedVersion.NoStream, [new ReviewerInvited("m-1", "person:1", "Ada", null)]);
 
-        var job = await Finished(host, await AdminOf(host).EraseSubjectAsync("person:1", "acme"));
+        var wrongTenant = await AdminOf(host).EraseSubjectAsync("person:1", "");
+        var erased = await AdminOf(host).EraseSubjectAsync("person:1", "acme");
+        var job = await Finished(host, erased.JobIds[0]);
         var rewrapped = await AdminOf(host).RewrapKeysAsync(new KeyRingMasterKey(Keys.Ring($"{Schema}-b")));
 
-        Assert.Equal("done", job.Status);
+        // A store written before 0.5.0 can hold a subject ID that an append now refuses; it must stay erasable.
+        Assert.Equal(0, (await AdminOf(host).EraseSubjectAsync(new string('p', 120) + " ", "acme")).KeysDeleted);
+        Assert.Equal(0, wrongTenant.KeysDeleted);
+        Assert.Equal(1, erased.KeysDeleted);
+        Assert.Equal(JobState.Done, job.Status);
         Assert.Equal([null], (await Tenant(host, "acme").Load<Manuscript>("m-1")).State.Names);
         Assert.Equal(1, rewrapped);
     }

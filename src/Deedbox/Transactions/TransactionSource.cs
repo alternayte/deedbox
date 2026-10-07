@@ -25,12 +25,21 @@ internal abstract class Lease : IAsyncDisposable
     /// <summary>True when <see cref="Complete"/> commits, so what the operation wrote is durable once it returns.</summary>
     public virtual bool Commits => false;
 
+    /// <summary>
+    /// True when the whole write can run again in a new transaction. A lease that saves the caller's DbContexts cannot:
+    /// a context counts its changes as saved after the first try, so a second try would commit the events without them.
+    /// </summary>
+    public virtual bool Replayable => false;
+
     public DbTransaction WriteTransaction => Transaction ?? throw new InvalidOperationException("A write needs a transaction.");
 
     /// <summary>Runs just before the position counter update, such as EF Core SaveChanges.</summary>
     public virtual Task BeforeCounter(CancellationToken ct) => Task.CompletedTask;
 
-    /// <summary>Commits when this lease owns the transaction.</summary>
+    /// <summary>
+    /// Commits when this lease owns the transaction. The commit ignores <paramref name="ct"/>: a commit that is
+    /// cancelled part-way leaves the caller unable to tell whether the write happened.
+    /// </summary>
     public virtual Task Complete(CancellationToken ct) => Task.CompletedTask;
 
     public virtual ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -80,7 +89,9 @@ internal sealed class OwnedTransactions : TransactionSource
 
         public override bool Commits => transaction is not null;
 
-        public override Task Complete(CancellationToken ct) => transaction?.CommitAsync(ct) ?? Task.CompletedTask;
+        public override bool Replayable => transaction is not null;
+
+        public override Task Complete(CancellationToken ct) => transaction?.CommitAsync(CancellationToken.None) ?? Task.CompletedTask;
 
         public override async ValueTask DisposeAsync()
         {

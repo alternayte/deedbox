@@ -53,6 +53,19 @@ public static class PersonalDataSetup
         // end-snippet
     }
 
+    public static void MoveOutOfTheDatabase(IServiceCollection services, string connStr)
+    {
+        // begin-snippet: keys-also-unwrap
+        // Step 3: the new key wraps. The database key stays for unwrap only, until the re-wrap is done.
+        services.AddDeedbox(es => es
+            .UsePostgres(connStr)
+            .Keys(keys => keys
+                .FromEnvironment("DEEDBOX_NEW_MASTER_KEY")
+                .AlsoUnwrapWith(old => old.StoreInDatabase()))
+            .Stream<Manuscript>(s => s.Events<ReviewerInvited, CoAuthorAdded>()));
+        // end-snippet
+    }
+
     public static void Azure(IServiceCollection services, string connStr)
     {
         // begin-snippet: keys-azure

@@ -33,4 +33,6 @@ Steps run in order: version 1 goes through the JSON step to version 2, then the 
 | Remove or rename a property | Yes |
 | Change a property's type | Yes |
 
+A property of a polymorphic type, such as a base type with `[JsonDerivedType]`, works on .NET 9 and later. On .NET 8 with Postgres, start-up fails with [DBX039](/reference/errors/dbx039/).
+
 Start-up fails when a version has no upcaster for some step ([DBX018](/reference/errors/dbx018/)). The [lockfile](/how-to/test-deciders/#pin-event-contracts) fails a test when a shape changes without a new version.

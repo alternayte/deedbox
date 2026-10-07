@@ -129,10 +129,22 @@ public sealed class DeedboxBuilder
     /// <param name="name">The stored subscription name, such as <c>receipt_email</c>.</param>
     /// <typeparam name="TSubscription">The subscription.</typeparam>
     public DeedboxBuilder Subscription<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TSubscription>(string name)
+        where TSubscription : Subscription => Subscription<TSubscription>(name, SubscriptionStart.FirstEvent);
+
+    /// <summary>
+    /// Registers a subscription and says where it starts when its checkpoint does not exist yet. With
+    /// <see cref="SubscriptionStart.FirstEvent"/> a new subscription on a store that holds events handles every one of
+    /// them, so its side effects run for the whole history. With <see cref="SubscriptionStart.Now"/> it handles only
+    /// later events.
+    /// </summary>
+    /// <param name="name">The stored subscription name; its checkpoint is kept under this name.</param>
+    /// <param name="start">Where the subscription starts the first time. It has no effect once the checkpoint exists.</param>
+    /// <typeparam name="TSubscription">The subscription.</typeparam>
+    public DeedboxBuilder Subscription<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] TSubscription>(string name, SubscriptionStart start)
         where TSubscription : Subscription
     {
         ArgumentNullException.ThrowIfNull(name);
-        _subscriptions.Add(new SubscriptionRegistration(name, typeof(TSubscription), services => ActivatorUtilities.CreateInstance<TSubscription>(services)));
+        _subscriptions.Add(new SubscriptionRegistration(name, typeof(TSubscription), start, services => ActivatorUtilities.CreateInstance<TSubscription>(services)));
         return this;
     }
 
@@ -254,6 +266,7 @@ public sealed class DeedboxBuilder
         return services =>
         {
             var provider = createProvider(schema, services);
+            RequireKeyOrder(provider, registry, json);
             var master = createKeys?.Invoke(provider);
             return new DeedboxRuntime(options, provider, registry, json)
             {
@@ -261,6 +274,30 @@ public sealed class DeedboxBuilder
                 Pseudonyms = master is null ? null : new Pseudonymizer(provider, master),
             };
         };
+    }
+
+    /// <summary>
+    /// On .NET 8 the serializer reads a polymorphic type's discriminator only when it is the first key, and a database
+    /// that reorders keys breaks every later load. .NET 9 and later read it in any position, so the rule ends there.
+    /// </summary>
+    private static void RequireKeyOrder(DeedboxProvider provider, EventRegistry registry, DeedboxJson json)
+    {
+#if !NET9_0_OR_GREATER
+        if (provider.KeepsJsonKeyOrder)
+            return;
+
+        var types = registry.Streams.SelectMany(s => s.Events.Select(e => e.ClrType).Prepend(s.StateType));
+        foreach (var type in types)
+        {
+            if (json.NeedsKeyOrder(type) is { } member)
+            {
+                throw new DeedboxException(Errors.JsonKeyOrder,
+                    $"{type.Name} holds {member}, whose JSON starts with a metadata property such as \"$type\". The {provider.Name} provider stores JSON keys in its own order, " +
+                    "and System.Text.Json on .NET 8 reads that property only when it is first, so the stored event or state could not be read back. " +
+                    "Target .NET 9 or later, or store a plain property that names the kind instead of [JsonDerivedType].");
+            }
+        }
+#endif
     }
 }
 
@@ -285,6 +322,17 @@ internal sealed class DeedboxRuntime(DeedboxOptions options, DeedboxProvider pro
 
     /// <summary>This process's ID in the heartbeat table.</summary>
     public Guid InstanceId { get; } = Uuid7.New();
+
+    /// <summary>
+    /// The newest storage format that every instance of the store can read: the lowest one among the heartbeat rows.
+    /// Appends write this format, so an older version that still runs during a rolling deploy can read what a newer
+    /// one writes. Before this instance joins it is 1, the format every version reads.
+    /// </summary>
+    public int Formats => Volatile.Read(ref _formats);
+
+    private int _formats = 1;
+
+    public void UseFormats(int formats) => Volatile.Write(ref _formats, Math.Clamp(formats, 1, Crypto.Formats));
 
     /// <summary>The key hierarchy, or null when no key mode is configured.</summary>
     public KeyRing? Keys { get; init; }

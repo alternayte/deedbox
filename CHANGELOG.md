@@ -2,6 +2,70 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.5.0] - 2026-10-07
+
+This release closes the defects from the 1.0 readiness review. It breaks the public API in the places listed under "Changed"; migration 6 is a forward migration.
+
+### Fixed
+
+- A skip on an inline projection that stalled in catch-up put it back to `running` at the skipped position, so every event between that position and the head was never applied. The skip now puts it back to catch-up.
+- An inline projection in catch-up tried its cut-over again while it stepped through a failed batch. It then stalled at the wrong position, and `deedbox skip` refused the event. It now steps to the failing event first.
+- A stalled inline projection now retries its poison event on the schedule, as other consumers do.
+- A failed append in a caller's transaction (`UseTransaction`, or `UseDbContext` with an open transaction) left the stream row at the new version with no events, when the caller caught the error and committed. The write now runs in a savepoint.
+- `EraseSubjectAsync` could return while a stream still had readable stored state for the subject: an append that was open during the erasure, or a load that rebuilt a snapshot, could store it after the state was cleared. The erasure now clears state again after the key is gone, and a load rebuilds a snapshot only under the stream's lock.
+- The key deletion and the erasure job are one transaction. Before, a crash between them left the key deleted with no job, so no `SubjectErased` was appended.
+- The erasure job deletes no key. Before, it deleted the subject's current key, so a subject who came back before the job ran lost the new data.
+- An erasure job on an instance that does not register a stream type removed that stream's subject pair and appended nothing. Each instance now handles the stream types it registers, and the job waits for an instance that registers the rest.
+- A `[PersonalData]` property whose JSON name differs from the naming policy, through a contract modifier or a custom resolver, was stored in plain text. The name now comes from the serializer's contract.
+- A `[PersonalData]` or `[DataSubject]` attribute on a type nested in an event did nothing. Start-up now fails with [DBX026](https://deedbox-docs.pages.dev/reference/errors/dbx026/).
+- A subject ID follows the stream ID rules: 1 to 100 characters with no leading or trailing white space ([DBX027](https://deedbox-docs.pages.dev/reference/errors/dbx027/)). SQL Server treated two subject IDs that differ in trailing spaces, or after character 100, as one key. The rule applies to appends; an erasure still accepts any ID that an older version stored.
+- An event or state with a polymorphic member (`[JsonDerivedType]`) could not be read back on Postgres, because `jsonb` reorders keys. On .NET 9 and later Deedbox reads it. On .NET 8 start-up fails with [DBX039](https://deedbox-docs.pages.dev/reference/errors/dbx039/).
+- `UseDbContext` and `Projection<TDbContext>` failed when the context used a retrying execution strategy, such as `EnableRetryOnFailure`.
+- The commit of an append no longer takes the caller's cancellation token.
+- The Kubernetes guide used the health check as a liveness probe, which restarts every pod while a subscription is stalled. The guide now keeps the check off both probes and gives it its own path for alerts.
+- The "Wire QueueBox" guide said one stream's messages keep their order. They do not ([#1](https://github.com/alternayte/deedbox/issues/1)).
+
+- An inline projection could miss appends from an instance that was paused past the liveness window, or whose heartbeat failed, and then went on appending. A cut-over now removes the heartbeat row of an instance that is not live, and every append checks its own row under the position counter. An append without a row writes nothing. Deedbox joins the instance again and repeats an append in a transaction that it owns; an append in your transaction, or with a DbContext passed to `UseDbContext`, fails with [DBX038](https://deedbox-docs.pages.dev/reference/errors/dbx038/), and you run the transaction again. The check covers instances on 0.5.0 and later.
+- A cut-over that found a live instance to wait for went on with a normal batch while it still held the position counter. It now gives the counter back first.
+- A forced cut-over held the position counter until it had applied every remaining event, so every append in the store waited without a limit. It now holds the counter for at most 2 seconds, keeps the events it applied, and stays in catch-up. It tries again after appends had the same time, so holds and catch-up alternate until it finishes. After five such attempts in a row, the health check reports the projection as degraded.
+- A handler that never returned held its checkpoint and a connection until the process stopped. `RunnerOptions.HandlerTimeout`, 5 minutes by default, now cancels the call through its token and counts it as a failed attempt. This also covers a handler that blocks its thread. A subscription handler that ignores the token is left behind after 10 more seconds. A projection handler writes in the batch's transaction, so the runner waits for it: pass the token to everything it awaits.
+- With `HandlerRetries = 0`, a consumer stalled with its checkpoint before the whole batch, not before the failing event, so `deedbox skip` refused the event. A stall is now recorded only after the event failed on its own.
+- A skip or rebuild that waited for a failing batch could be overwritten by that batch's stall record.
+- A handler that left a reader open on the batch's connection made the rollback fail, and the event was then retried without end and never stalled.
+- A projection registered inline by one instance and async by another could be applied both ways. An instance now leaves a checkpoint of the other run mode alone, a rebuild takes the inline gate for either mode, and an append applies a projection inline only while its checkpoint is inline.
+- A new inline checkpoint was created as `running` from a read that a joining instance could race, and a process that appended without a started host applied an inline projection with no checkpoint at all. Checkpoints are now created under the position counter, by hosted and hostless processes alike.
+- When a new version of an inline projection handles an event that another app appends, that app's appends skipped it. The projection now goes back to catch-up until that app stops. A checkpoint records every event that any version handled since its last rebuild.
+- A cut-over waits for an instance from before 0.5.0 as long as it has a heartbeat row, because such an instance does not check its row when it appends.
+- A failover or a lost connection while a handler ran counted as an attempt on the event, so a short database outage stalled consumers. A transient database error is now retried with backoff and counts no attempt. An error that stays transient at one event for longer than `StallAfter`, such as a query that always times out, then counts as a failure of that event, so the consumer stalls and the event can be skipped.
+- A subscription committed its progress once per batch, so a crash repeated the side effects of up to 500 events. It now commits after each event.
+- A random AES-GCM nonce is safe for about 2^32 messages under one key, and a tenant key sealed every stored state of its tenant for ever. Stored state is now sealed with a key derived from the tenant key for one stream.
+- A personal-data field copied to another event or property of the same subject still verified. A field now binds its event ID and its JSON name ([DBX030](https://deedbox-docs.pages.dev/reference/errors/dbx030/) otherwise).
+- In database mode, an instance kept the master key in memory. After `deedbox keys rewrap` moved the keys away, it wrapped new tenant keys with a key that no longer existed. The key is now read for each wrap.
+- With a Key Vault key that rotated between two overlapping wraps, a row could name the wrong key version.
+
+### Changed
+
+- **Breaking:** an append in your own transaction at REPEATABLE READ, SERIALIZABLE or SNAPSHOT fails with [DBX040](https://deedbox-docs.pages.dev/reference/errors/dbx040/). Deedbox orders appends with locks, and a transaction that keeps one snapshot reads a state from before a lock it waited for. Use READ COMMITTED, the default of both databases.
+
+- **Breaking:** `AppendResult`, `ExecuteResult<T>`, `LoadResult<T>`, `StoreStatus`, `ConsumerStatus` and `JobInfo` have properties, not constructor parameters, so a later release can add one. `var (state, version) = await store.Load<T>(id)` still works.
+- **Breaking:** `ConsumerStatus.Mode`, `ConsumerStatus.Status`, `JobInfo.Kind` and `JobInfo.Status` are enums: `ConsumerMode`, `ConsumerState`, `JobKind`, `JobState`. `deedbox status` prints the same text as before.
+- **Breaking:** `IMasterKeyProvider.WrapAsync` returns a `WrappedKey`: the bytes and the key version that wrapped them, from the same call. A provider of your own returns `new WrappedKey { Bytes = ..., KeyVersion = ... }`.
+- Appends write storage format 2 for personal-data fields, subject keys and stored state once every instance with a heartbeat can read it. While a 0.3 or 0.4 instance runs, they write format 1, so a rolling deploy works. Format 1 stays readable. After 0.5.0 has written format 2, an older version cannot read that data, so a rollback needs a restore.
+- A marker for an encrypted field is read only as the whole value of a top-level property, which is the only place an append writes one.
+- **Breaking:** `IEventStoreAdmin.EraseSubjectAsync`, `EraseIdentityAsync` and `DestroyPseudonymPeriodAsync` take a required `tenantId`; pass `""` when the app has no tenants. The two erasure methods return an `ErasureResult` with the job IDs and the number of keys deleted. Zero keys means the subject ID or the tenant is wrong, or the subject was erased before.
+- `deedbox erase <subject>` exits 1 when it deleted no key.
+- A stall and a failed job record the exception type and stack frames, not the message. A message can hold personal data, and these rows outlive an erasure. The full exception is in the log. The stall JSON has `exception` and `stack`; `message` and `stackTrace` are gone.
+- Migration 6 removes exception messages from existing stall and job rows, and adds an index on `subject_streams (tenant_id, stream_id)` and on queued jobs.
+
+### Added
+
+- `KeysBuilder.AlsoUnwrapWith(...)` adds a master key that only unwraps, so the key mode or the key can change while the app runs. The "Rotate keys" guide has the order.
+- `Subscription<T>(name, SubscriptionStart.Now)` starts a new subscription after the newest stored event. The default is still the first event; start-up now logs a warning when a new subscription will handle events that the store already holds.
+- `DeedboxError` holds every DBX code as a constant.
+- `JobInfo.StartedAt`.
+- Tests that run each of 0.1.0, 0.2.1, 0.3.1 and 0.4.1 from nuget.org: the release writes a store, this build migrates and uses it, and the release then appends to the migrated store, as an old pod does in a rolling deploy.
+- A native AOT app in the gate: it appends, loads and erases through a trimmed native binary.
+
 ## [0.4.1] - 2026-09-29
 
 ### Fixed
@@ -20,6 +84,8 @@ This file records every notable change to the Deedbox packages. The format follo
 
 ### Changed
 
+- **Breaking:** an append in your own transaction at REPEATABLE READ, SERIALIZABLE or SNAPSHOT fails with [DBX040](https://deedbox-docs.pages.dev/reference/errors/dbx040/). Deedbox orders appends with locks, and a transaction that keeps one snapshot reads a state from before a lock it waited for. Use READ COMMITTED, the default of both databases.
+
 - Shredding a tenant also deletes its pseudonym secrets.
 - `RewrapKeysAsync` and `deedbox keys rewrap` also re-wrap pseudonym secrets, in the same transaction, and the count includes them. No subject ID changes.
 - `IEventStoreAdmin.EraseIdentityAsync` and `DestroyPseudonymPeriodAsync` have default bodies, so an implementation of the interface written for 0.3 still compiles.
@@ -27,6 +93,8 @@ This file records every notable change to the Deedbox packages. The format follo
 ## [0.3.1] - 2026-09-26
 
 ### Changed
+
+- **Breaking:** an append in your own transaction at REPEATABLE READ, SERIALIZABLE or SNAPSHOT fails with [DBX040](https://deedbox-docs.pages.dev/reference/errors/dbx040/). Deedbox orders appends with locks, and a transaction that keeps one snapshot reads a state from before a lock it waited for. Use READ COMMITTED, the default of both databases.
 
 - A consumer that stalls on a poison event retries the event every 5 minutes, and runs again once it succeeds. Before, it retried only when an instance started, so an outage of a service that a subscription calls stopped the subscription until a restart or a skip. The instances share one schedule, so the event gets one attempt per interval. The consumer stays `stalled` while it retries, so the health check still reports it and `deedbox skip` still works; `deedbox status` shows the attempts and the next retry time.
 - Only a stall that exists when an instance starts gets that instance's immediate round of retries. Before, every instance that had not stalled the consumer itself gave it one more round.
@@ -39,6 +107,8 @@ This file records every notable change to the Deedbox packages. The format follo
 - `IEventStoreAdmin.RetireAsync(name)` and `deedbox retire <name>` retire a projection that no live instance registers ([DBX035](https://deedbox-docs.pages.dev/reference/errors/dbx035/) otherwise). A retired projection keeps its checkpoint, nothing applies it, and `RebuildAsync` brings it back. An instance that still registers it starts, and its health check reports degraded.
 
 ### Changed
+
+- **Breaking:** an append in your own transaction at REPEATABLE READ, SERIALIZABLE or SNAPSHOT fails with [DBX040](https://deedbox-docs.pages.dev/reference/errors/dbx040/). Deedbox orders appends with locks, and a transaction that keeps one snapshot reads a state from before a lock it waited for. Use READ COMMITTED, the default of both databases.
 
 - An inline projection switches from catch-up to inline only when no live instance can append its events without running it. Before, a new inline projection added during a rolling deploy missed the appends of instances of the old version.
 - An instance that starts without a running inline projection, but can append its events, moves that projection back to catch-up from the current head. A rollback no longer makes an inline projection miss events.

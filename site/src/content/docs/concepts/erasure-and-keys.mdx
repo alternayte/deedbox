@@ -18,6 +18,7 @@ The keys form a chain:
 - Each subject key is wrapped by its tenant's key. Each tenant key is wrapped by the master key.
 - Reads and rebuilds use only local AES. They never call a key service.
 - Erasing a subject deletes their key. Every copy of their data, in every stream, becomes unreadable at once.
+- The job that finishes an erasure deletes no key. Data written about a subject who comes back uses a new key and stays readable.
 - Shredding a tenant destroys the tenant key, all its subject keys and all its pseudonym secrets.
 
 ## Pseudonymous subject IDs
@@ -33,15 +34,30 @@ The master key also wraps one **pseudonym secret** per tenant and period, in the
 
 See [use pseudonymous subject IDs](/how-to/use-pseudonymous-ids/).
 
+## Storage formats
+
+From 0.5.0, Deedbox writes storage format 2 for personal-data fields, subject keys and stored state.
+
+- A format 2 field binds its event ID and its JSON property name. A field copied to another event or property fails with [DBX030](/reference/errors/dbx030/).
+- Stored state is sealed with a key derived from the tenant key for one stream, so no single key seals every state of a tenant.
+- Deedbox writes format 2 only when every instance with a heartbeat row can read it. While a 0.3 or 0.4 instance runs, appends write format 1, so a rolling deploy works.
+- Format 1 stays readable.
+- After 0.5.0 writes format 2, an older version cannot read that data. A rollback then needs a [restore](/operations/backup-and-restore/).
+- Versions 0.1 and 0.2 write no heartbeat. A rolling deploy straight from one of them to 0.5.0 is not covered for personal data.
+
 ## What is safe to rely on
 
 - A missing subject key is the only thing that reads as erased. A key that does not verify, or a master key that cannot unwrap a tenant key, stops Deedbox with an error. A misconfiguration never looks like an erasure.
 - Subject keys are cached for one operation only, so an erasure on one instance applies on every instance at once.
-- The stored state of a stream with personal data is encrypted with the tenant key, and cleared when a subject in it is erased.
+- The stored state of a stream with personal data is sealed with a key derived from the tenant key for that stream, and cleared when a subject in it is erased.
+- When `EraseSubjectAsync` returns, no load reads the subject's data, on any instance.
+- A stall record and a job record hold the exception type and stack frames, never the message. A message can hold personal data, and these rows outlive an erasure.
 
 ## What it does not cover
 
 - Backups taken before an erasure keep the subject key until they age out.
 - Your projections and subscriptions receive decrypted data. Scrub it when they handle `SubjectErased`.
+- Deedbox does not erase outbox rows or your own tables.
+- Only top-level properties of an event are encrypted. `[PersonalData]` on a type nested in an event fails start-up ([DBX026](/reference/errors/dbx026/)).
 - Metadata, stream IDs and subject IDs are plain text. Use [pseudonymous subject IDs](/how-to/use-pseudonymous-ids/) instead of emails or logins.
 - A person who holds a pseudonym secret and a list of candidate identities can re-identify that period's subjects. Pseudonymized data is still personal data under the GDPR.

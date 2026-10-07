@@ -1,5 +1,3 @@
-using System.Text.Json.Nodes;
-
 namespace Deedbox;
 
 /// <summary>Erases a data subject: their personal data becomes unreadable everywhere, including stored state and backups' future reads.</summary>
@@ -20,14 +18,20 @@ internal sealed class SubjectErasure(DeedboxRuntime runtime, DeedboxContext cont
 {
     public async Task<Guid> EraseSubjectAsync(string subjectId, CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrEmpty(subjectId);
         var tenantId = DeedboxContext.ValidTenant(context.TenantId);
         runtime.RequireKeys();
-
-        await DeleteKey(runtime, tenantId, subjectId, ct);
-        return await Jobs.Enqueue(runtime, Jobs.Erase, new JsonObject { ["tenantId"] = tenantId, ["subjectId"] = subjectId }, ct);
+        return (await Admin.Erase(runtime.Provider, runtime.Clock, tenantId, [subjectId], ct)).JobIds[0];
     }
+}
 
-    public static Task DeleteKey(DeedboxRuntime runtime, string tenantId, string subjectId, CancellationToken ct) =>
-        Admin.DeleteSubjectKey(runtime.Provider, tenantId, subjectId, ct);
+/// <summary>
+/// The rules for a subject ID, the same as for a stream ID and on both databases: SQL Server ignores trailing spaces
+/// when it compares keys and cuts a longer value to the column, so two subjects could otherwise share one key.
+/// </summary>
+internal static class SubjectId
+{
+    public const int MaxLength = 100;
+
+    public static bool IsValid(string? subjectId) =>
+        subjectId is { Length: > 0 and <= MaxLength } && !char.IsWhiteSpace(subjectId[0]) && !char.IsWhiteSpace(subjectId[^1]);
 }

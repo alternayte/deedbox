@@ -4,6 +4,10 @@ namespace Deedbox;
 /// Every operation of the deedbox CLI, in code. Jobs run in the background runner of whichever instance takes them;
 /// the returned ID tracks them with <see cref="GetJobAsync"/>.
 /// </summary>
+/// <remarks>
+/// Apps call this interface; they do not implement it. A later release can add a member. In a test, use the instance
+/// that AddDeedbox registers against a test database.
+/// </remarks>
 public interface IEventStoreAdmin
 {
     /// <summary>Every projection and subscription checkpoint, the head position, and recent jobs.</summary>
@@ -36,9 +40,13 @@ public interface IEventStoreAdmin
     /// and rebuilds the affected state. The same as <see cref="ISubjectErasure"/> with an explicit tenant.
     /// </summary>
     /// <param name="subjectId">The subject.</param>
-    /// <param name="tenantId">The tenant; empty when the app has no tenants.</param>
+    /// <param name="tenantId">The tenant; pass an empty string when the app has no tenants.</param>
     /// <param name="ct">Cancels the call.</param>
-    Task<Guid> EraseSubjectAsync(string subjectId, string tenantId = "", CancellationToken ct = default);
+    /// <returns>
+    /// The erasure job, and how many keys the call deleted. Zero keys means the tenant holds no personal data under this
+    /// subject ID: the ID or the tenant is wrong, or the subject was erased before.
+    /// </returns>
+    Task<ErasureResult> EraseSubjectAsync(string subjectId, string tenantId, CancellationToken ct = default);
 
     /// <summary>
     /// Retires a projection or subscription that the app no longer registers. Its checkpoint stays, as retired: nothing
@@ -84,11 +92,11 @@ public interface IEventStoreAdmin
     /// <see cref="IPseudonyms.EraseIdentityAsync"/> with an explicit tenant. The identity is never stored.
     /// </summary>
     /// <param name="identity">The identity, such as <c>github:alice</c>.</param>
-    /// <param name="tenantId">The tenant; empty when the app has no tenants.</param>
+    /// <param name="tenantId">The tenant; pass an empty string when the app has no tenants.</param>
     /// <param name="ct">Cancels the call.</param>
-    /// <returns>The erasure job IDs, one per period, in period order.</returns>
+    /// <returns>The erasure jobs, one per period, in period order, and how many keys the call deleted.</returns>
     /// <remarks>The default body exists so that test doubles written against 0.3 still compile; Deedbox's own admin overrides it.</remarks>
-    Task<IReadOnlyList<Guid>> EraseIdentityAsync(string identity, string tenantId = "", CancellationToken ct = default) =>
+    Task<ErasureResult> EraseIdentityAsync(string identity, string tenantId, CancellationToken ct = default) =>
         throw new NotSupportedException("This IEventStoreAdmin does not support EraseIdentityAsync. Use the one that AddDeedbox registers.");
 
     /// <summary>
@@ -98,39 +106,238 @@ public interface IEventStoreAdmin
     /// still works. This cannot be undone.
     /// </summary>
     /// <param name="periodId">The period, such as <c>2026-Q1</c>.</param>
-    /// <param name="tenantId">The tenant; empty when the app has no tenants.</param>
+    /// <param name="tenantId">The tenant; pass an empty string when the app has no tenants.</param>
     /// <param name="ct">Cancels the call.</param>
     /// <returns>True when the period had a secret; false when it had none or was already destroyed.</returns>
     /// <remarks>The default body exists so that test doubles written against 0.3 still compile; Deedbox's own admin overrides it.</remarks>
-    Task<bool> DestroyPseudonymPeriodAsync(string periodId, string tenantId = "", CancellationToken ct = default) =>
+    Task<bool> DestroyPseudonymPeriodAsync(string periodId, string tenantId, CancellationToken ct = default) =>
         throw new NotSupportedException("This IEventStoreAdmin does not support DestroyPseudonymPeriodAsync. Use the one that AddDeedbox registers.");
 }
 
+/// <summary>What an erasure call did before it returned.</summary>
+public sealed record ErasureResult
+{
+    /// <summary>The queued erasure jobs, one per subject.</summary>
+    public required IReadOnlyList<Guid> JobIds { get; init; }
+
+    /// <summary>How many subject keys the call deleted. Zero means it found no personal data to erase.</summary>
+    public required int KeysDeleted { get; init; }
+}
+
 /// <summary>The state of the store's background work.</summary>
-/// <param name="Head">The highest committed global position.</param>
-/// <param name="Consumers">Every projection and subscription checkpoint.</param>
-/// <param name="Jobs">The most recent jobs, newest first.</param>
-public sealed record StoreStatus(long Head, IReadOnlyList<ConsumerStatus> Consumers, IReadOnlyList<JobInfo> Jobs);
+public sealed record StoreStatus
+{
+    /// <summary>The highest committed global position.</summary>
+    public required long Head { get; init; }
+
+    /// <summary>Every projection and subscription checkpoint.</summary>
+    public required IReadOnlyList<ConsumerStatus> Consumers { get; init; }
+
+    /// <summary>The most recent jobs, newest first.</summary>
+    public required IReadOnlyList<JobInfo> Jobs { get; init; }
+}
+
+/// <summary>How a projection or subscription runs.</summary>
+public enum ConsumerMode
+{
+    /// <summary>A mode that this version of Deedbox does not know; a newer version wrote it.</summary>
+    Unknown,
+
+    /// <summary>A projection applied in the transaction of each append.</summary>
+    Inline,
+
+    /// <summary>A projection applied by the background runner.</summary>
+    Async,
+
+    /// <summary>A subscription.</summary>
+    Subscription,
+}
+
+/// <summary>What a projection or subscription is doing.</summary>
+public enum ConsumerState
+{
+    /// <summary>A state that this version of Deedbox does not know; a newer version wrote it.</summary>
+    Unknown,
+
+    /// <summary>It applies events as they come.</summary>
+    Running,
+
+    /// <summary>It replays events to catch up, after a rebuild or as a new inline projection.</summary>
+    Rebuilding,
+
+    /// <summary>It stopped on an event or a change that needs attention; <see cref="ConsumerStatus.Error"/> says why.</summary>
+    Stalled,
+
+    /// <summary>It was retired; nothing applies it until a rebuild.</summary>
+    Retired,
+}
 
 /// <summary>One projection or subscription.</summary>
-/// <param name="Name">The stored name.</param>
-/// <param name="Mode">inline, async or subscription.</param>
-/// <param name="Status">running, rebuilding or stalled.</param>
-/// <param name="Position">The last global position it applied or scanned.</param>
-/// <param name="Lag">How many positions it is behind the head; 0 for an inline projection that is running.</param>
-/// <param name="UpdatedAt">When its checkpoint last moved.</param>
-/// <param name="Error">
-/// For a stalled consumer, the stall as JSON: reason, event, stream, version and exception, and for a poison event the
-/// attempts so far and <c>retryAt</c>, when the runner next retries it.
-/// </param>
-public sealed record ConsumerStatus(string Name, string Mode, string Status, long Position, long Lag, DateTimeOffset UpdatedAt, string? Error);
+public sealed record ConsumerStatus
+{
+    /// <summary>The stored name.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>How it runs.</summary>
+    public required ConsumerMode Mode { get; init; }
+
+    /// <summary>What it is doing.</summary>
+    public required ConsumerState Status { get; init; }
+
+    /// <summary>The last global position it applied or scanned.</summary>
+    public required long Position { get; init; }
+
+    /// <summary>How many positions it is behind the head; 0 for an inline projection that is running, and for a retired one.</summary>
+    public required long Lag { get; init; }
+
+    /// <summary>When its checkpoint last moved.</summary>
+    public required DateTimeOffset UpdatedAt { get; init; }
+
+    /// <summary>
+    /// A note about the consumer as JSON, or null. Its <c>reason</c> is <c>poison</c> for a consumer stalled on an event,
+    /// with the event, the stream, the exception type, the stack frames, the attempts so far and <c>retryAt</c>;
+    /// <c>mode_changed</c> for a projection whose run mode changed; and <c>slow_catch_up</c> for an inline projection
+    /// whose catch-up cannot keep up with appends. An exception's message is never stored.
+    /// </summary>
+    public string? Error { get; init; }
+}
+
+/// <summary>The kind of a job.</summary>
+public enum JobKind
+{
+    /// <summary>A kind that this version of Deedbox does not know; a newer version wrote it.</summary>
+    Unknown,
+
+    /// <summary>A rebuild of a projection.</summary>
+    Rebuild,
+
+    /// <summary>An audited skip of the event a consumer stalled on.</summary>
+    Skip,
+
+    /// <summary>The part of an erasure that appends SubjectErased and rebuilds the affected state.</summary>
+    Erase,
+
+    /// <summary>A rebuild of the stored state of every stream of a type.</summary>
+    Snapshots,
+
+    /// <summary>The record of a destroyed pseudonym period; it is written as done and never runs.</summary>
+    PseudonymsDestroyed,
+}
+
+/// <summary>Where a job is.</summary>
+public enum JobState
+{
+    /// <summary>A state that this version of Deedbox does not know; a newer version wrote it.</summary>
+    Unknown,
+
+    /// <summary>It waits for a runner.</summary>
+    Queued,
+
+    /// <summary>It finished.</summary>
+    Done,
+
+    /// <summary>It failed; <see cref="JobInfo.Progress"/> says why.</summary>
+    Failed,
+}
 
 /// <summary>A queued, finished or failed job.</summary>
-/// <param name="Id">The job ID.</param>
-/// <param name="Kind">rebuild, skip, erase, snapshots, or pseudonyms_destroyed for the record of a destroyed pseudonym period.</param>
-/// <param name="Args">The job's arguments as JSON.</param>
-/// <param name="Status">queued, done or failed.</param>
-/// <param name="Progress">What the job did or why it failed, as JSON.</param>
-/// <param name="CreatedAt">When it was queued.</param>
-/// <param name="FinishedAt">When it finished, or null.</param>
-public sealed record JobInfo(Guid Id, string Kind, string Args, string Status, string? Progress, DateTimeOffset CreatedAt, DateTimeOffset? FinishedAt);
+public sealed record JobInfo
+{
+    /// <summary>The job ID.</summary>
+    public required Guid Id { get; init; }
+
+    /// <summary>What the job does.</summary>
+    public required JobKind Kind { get; init; }
+
+    /// <summary>The job's arguments as JSON.</summary>
+    public required string Args { get; init; }
+
+    /// <summary>Where the job is.</summary>
+    public required JobState Status { get; init; }
+
+    /// <summary>What the job did or why it failed, as JSON.</summary>
+    public string? Progress { get; init; }
+
+    /// <summary>When it was queued.</summary>
+    public required DateTimeOffset CreatedAt { get; init; }
+
+    /// <summary>When a runner started it, or null.</summary>
+    public DateTimeOffset? StartedAt { get; init; }
+
+    /// <summary>When it finished, or null.</summary>
+    public DateTimeOffset? FinishedAt { get; init; }
+}
+
+/// <summary>The stored text of each status value, which the CLI prints and the database holds.</summary>
+internal static class Wire
+{
+    public static ConsumerMode Mode(string text) => text switch
+    {
+        CheckpointMode.Inline => ConsumerMode.Inline,
+        CheckpointMode.Async => ConsumerMode.Async,
+        CheckpointMode.Subscription => ConsumerMode.Subscription,
+        _ => ConsumerMode.Unknown,
+    };
+
+    public static ConsumerState State(string text) => text switch
+    {
+        CheckpointStatus.Running => ConsumerState.Running,
+        CheckpointStatus.Rebuilding => ConsumerState.Rebuilding,
+        CheckpointStatus.Stalled => ConsumerState.Stalled,
+        CheckpointStatus.Retired => ConsumerState.Retired,
+        _ => ConsumerState.Unknown,
+    };
+
+    public static JobKind Kind(string text) => text switch
+    {
+        Jobs.Rebuild => JobKind.Rebuild,
+        Jobs.Skip => JobKind.Skip,
+        Jobs.Erase => JobKind.Erase,
+        Jobs.Snapshots => JobKind.Snapshots,
+        Jobs.PseudonymsDestroyed => JobKind.PseudonymsDestroyed,
+        _ => JobKind.Unknown,
+    };
+
+    public static JobState JobState(string text) => text switch
+    {
+        JobStatus.Queued => Deedbox.JobState.Queued,
+        JobStatus.Done => Deedbox.JobState.Done,
+        JobStatus.Failed => Deedbox.JobState.Failed,
+        _ => Deedbox.JobState.Unknown,
+    };
+
+    public static string Text(ConsumerMode mode) => mode switch
+    {
+        ConsumerMode.Inline => CheckpointMode.Inline,
+        ConsumerMode.Async => CheckpointMode.Async,
+        ConsumerMode.Subscription => CheckpointMode.Subscription,
+        _ => "unknown",
+    };
+
+    public static string Text(ConsumerState state) => state switch
+    {
+        ConsumerState.Running => CheckpointStatus.Running,
+        ConsumerState.Rebuilding => CheckpointStatus.Rebuilding,
+        ConsumerState.Stalled => CheckpointStatus.Stalled,
+        ConsumerState.Retired => CheckpointStatus.Retired,
+        _ => "unknown",
+    };
+
+    public static string Text(JobKind kind) => kind switch
+    {
+        JobKind.Rebuild => Jobs.Rebuild,
+        JobKind.Skip => Jobs.Skip,
+        JobKind.Erase => Jobs.Erase,
+        JobKind.Snapshots => Jobs.Snapshots,
+        JobKind.PseudonymsDestroyed => Jobs.PseudonymsDestroyed,
+        _ => "unknown",
+    };
+
+    public static string Text(JobState state) => state switch
+    {
+        Deedbox.JobState.Queued => JobStatus.Queued,
+        Deedbox.JobState.Done => JobStatus.Done,
+        Deedbox.JobState.Failed => JobStatus.Failed,
+        _ => "unknown",
+    };
+}
