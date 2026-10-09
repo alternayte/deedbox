@@ -219,6 +219,10 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
 
             if (RetryDue(row))
             {
+                // An older version makes no retry of its own while a newer one is live, and leaves the claim to it.
+                if (await LeftToWiderVersion(connection, transaction, ct))
+                    return Outcome.Idle;
+
                 // The claim commits before the attempt, so the instances make one attempt per interval between them.
                 _claimedRetry = Stamp(runtime.Clock.GetUtcNow() + Options.MaxRetryDelay);
                 var error = JsonNode.Parse(row.Error!)!.AsObject();
@@ -235,6 +239,11 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
 
         if (row.Position < _lastPosition)
             ResetFailureState(); // A rebuild moved the checkpoint back.
+
+        // A forced cut-over that ran out of time belongs to one catch-up. A rebuild, or a cut-over that another instance
+        // finished, ends that catch-up, and the next one starts with no forced attempt pending.
+        if (row.Position < _lastPosition || row.Status != CheckpointStatus.Rebuilding)
+            (_forcedOutOfTime, _forceAgainAt, _rebuildGap, _gapNotShrinking) = (0, null, long.MaxValue, 0);
         _lastPosition = row.Position;
         _stepped = false;
 
@@ -247,7 +256,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
             // After a handler failure the loop steps one event at a time to find the failing event. It does not cut over
             // then: the cut-over would meet the same event under the counter lock, and a stall must name that event's position.
             if (consumer.IsInline && row.Status == CheckpointStatus.Rebuilding && _singleStepUntil is null && ShouldCutOver(await Provider.ReadHead(connection, transaction, ct) - row.Position)
-                && await Skipping(connection, transaction, row, ct) is [])
+                && await Skipping(connection, transaction, row, ct) is [] && !await LeftToWiderVersion(connection, transaction, ct))
             {
                 var cutOver = await CutOver(connection, transaction, row, ct);
                 if (cutOver == CutOverResult.Waiting)
@@ -288,6 +297,11 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
                 return Outcome.Progress;
             }
 
+            // Checked after the events are read: an instance appends only with a heartbeat row, so the row of every
+            // instance that appended one of these events is already there to see.
+            if (await LeftToWiderVersion(connection, transaction, ct))
+                return Outcome.Idle;
+
             using var activity = DeedboxDiagnostics.Source.StartActivity("deedbox.batch");
             activity?.SetTag("deedbox.consumer", consumer.Name);
             activity?.SetTag("deedbox.from_position", stored[0].GlobalPosition);
@@ -299,8 +313,18 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
             if (consumer.Transactional)
             {
                 await consumer.Process(envelopes, connection, transaction, services, Options.HandlerLimits, ct);
-                await Provider.UpdateCheckpoint(connection, transaction, Advanced(row, last, stored.Count < limit), ct);
-                await transaction.CommitAsync(ct);
+                try
+                {
+                    await Provider.UpdateCheckpoint(connection, transaction, Advanced(row, last, stored.Count < limit), ct);
+                    await transaction.CommitAsync(ct);
+                }
+                catch (Exception ex) when (envelopes.Count > 0 && AfterHandlers(ex) && !ct.IsCancellationRequested)
+                {
+                    // The handlers returned, and the checkpoint cannot move. A handler left the transaction or the
+                    // connection unusable, such as with an error it caught or a reader it did not close, or the session
+                    // was lost. It counts like a failure in a handler, so the loop steps to the event and can stall on it.
+                    throw Consumer.Failure(ex, connection, envelopes[0], last);
+                }
             }
             else if (!await Deliver(connection, transaction, row, envelopes, last, ct))
             {
@@ -401,8 +425,17 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
                 // The scan may end with events of other types; the last commit moves past them too.
                 var delivered = i >= envelopes.Count - 1;
                 var position = delivered ? last : envelopes[i].GlobalPosition;
-                await Provider.UpdateCheckpoint(connection, transaction, Advanced(current, position, false), ct);
-                await transaction.CommitAsync(ct);
+                try
+                {
+                    await Provider.UpdateCheckpoint(connection, transaction, Advanced(current, position, false), ct);
+                    await transaction.CommitAsync(ct);
+                }
+                catch (Exception ex) when (i < envelopes.Count && AfterHandlers(ex) && !ct.IsCancellationRequested)
+                {
+                    // The handler ran and its progress cannot be stored, such as when the database ends the session
+                    // while each call runs. Without a count, the event would be delivered again without end.
+                    throw Consumer.Failure(ex, connection, envelopes[i], envelopes[i].GlobalPosition);
+                }
                 if (delivered)
                     return true;
 
@@ -421,6 +454,8 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
                 await transaction.DisposeAsync();
         }
     }
+
+    private static bool AfterHandlers(Exception ex) => ex is DbException or InvalidOperationException or IOException;
 
     /// <summary>
     /// Rolls the batch back, so the checkpoint row is free before the failure is recorded on it. A handler can leave the
@@ -477,6 +512,27 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
     }
 
     private DateTimeOffset? _forceAgainAt;
+
+    /// <summary>
+    /// True when a live instance's version of the consumer handles an event that this instance's version does not. In a
+    /// rolling deploy the older version would read such an event without its payload and move the checkpoint past it,
+    /// and no version would ever handle it. So the older version leaves the checkpoint to the newer one. The heartbeat
+    /// rows decide, read in this tick: nothing stored with the checkpoint can go stale. With no such instance live, as
+    /// after a version that removed a handler replaced the others, this instance runs the consumer. The read runs only
+    /// when the tick has work, so an idle consumer sends no extra statement.
+    /// </summary>
+    private async Task<bool> LeftToWiderVersion(DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    {
+        var live = await Provider.ReadLiveInstances(connection, transaction, Options.HeartbeatInterval * Instances.LiveIntervals, ct);
+        var wider = live.Where(i => i.Id != runtime.InstanceId && i.HandlesMoreThan(consumer.Name, consumer.Handles)).ToList();
+        var leftTo = Instances.Describe(wider);
+        if (wider.Count > 0 && leftTo != _leftTo)
+            LogLeftToWiderVersion(consumer.Name, leftTo);
+        _leftTo = leftTo;
+        return wider.Count > 0;
+    }
+
+    private string _leftTo = "";
 
     private bool ShouldRun(CheckpointRow row)
     {
@@ -613,12 +669,8 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
         return decoded.Select(d => Envelope(d.Stored, d.Event, d.ErasedSubjects)).ToList();
     }
 
-    private EventEnvelope Envelope(StoredEvent e, object decoded, IReadOnlyList<string> erasedSubjects)
-    {
-        var registration = runtime.Registry.FindStoredName(e.EventType);
-        return new EventEnvelope(e.EventId, e.TenantId, e.StreamId, e.StreamType, e.Version, e.GlobalPosition,
-            registration?.Name ?? e.EventType, registration?.Version ?? e.EventVersion, decoded, EventMetadata.FromJson(e.Metadata ?? "{}"), e.OccurredAt, erasedSubjects);
-    }
+    private EventEnvelope Envelope(StoredEvent e, object decoded, IReadOnlyList<string> erasedSubjects) =>
+        EventDecoding.Envelope(runtime, e, decoded, erasedSubjects);
 
     private async Task OnFailure(HandlerFailure failure, CancellationToken ct)
     {
@@ -771,6 +823,9 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
 
     [LoggerMessage(EventId = 45, Level = LogLevel.Warning, Message = "Deedbox projection '{Consumer}' cannot finish its catch-up: {Attempts} forced cut-overs in a row ran out of time, with {Gap} events left. Its handlers are too slow for the append rate; it stays in catch-up and keeps trying.")]
     private partial void LogSlowCatchUp(string consumer, int attempts, long gap);
+
+    [LoggerMessage(EventId = 46, Level = LogLevel.Information, Message = "Deedbox consumer '{Consumer}' is left to {Instances}: their version handles events that this instance's version does not.")]
+    private partial void LogLeftToWiderVersion(string consumer, string instances);
 
     [LoggerMessage(EventId = 26, Level = LogLevel.Information, Message = "Deedbox projection '{Consumer}' stays in catch-up: {Instances} can append its events without running it inline.")]
     private partial void LogWaitingForInstances(string consumer, string instances);

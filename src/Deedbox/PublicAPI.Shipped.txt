@@ -139,6 +139,7 @@ Deedbox.IEventStore.Append(string! streamId, Deedbox.ExpectedVersion expected, S
 Deedbox.IEventStore.DeleteStream(string! streamId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Deedbox.IEventStore.Execute<TState>(string! streamId, System.Func<TState, System.Collections.Generic.IEnumerable<object!>!>! decide, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Deedbox.ExecuteResult<TState>!>!
 Deedbox.IEventStore.Load<TState>(string! streamId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Deedbox.LoadResult<TState>>!
+Deedbox.IEventStore.ReadStream(string! streamId, long afterVersion = 0, int limit = 500, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Deedbox.EventEnvelope!>!>!
 Deedbox.IEventStore.UseTransaction(System.Data.Common.DbTransaction! transaction) -> Deedbox.IEventStore!
 Deedbox.IEventStore.WithMetadata(System.Func<Deedbox.EventMetadata!, Deedbox.EventMetadata!>! change) -> Deedbox.IEventStore!
 Deedbox.IEventStoreAdmin

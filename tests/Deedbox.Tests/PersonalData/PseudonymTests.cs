@@ -279,32 +279,4 @@ public sealed class PseudonymTokenTests
         Assert.Throws<ArgumentException>(() => builder.AddDeedbox(b => b.PseudonymPrefix("per son:")));
         Assert.Throws<ArgumentException>(() => builder.AddDeedbox(b => b.PseudonymPrefix(new string('p', 75))));
     }
-
-    [Fact]
-    public async Task An_admin_written_for_an_older_version_still_compiles_and_says_it_does_not_support_pseudonyms()
-    {
-        IEventStoreAdmin admin = new OlderAdmin();
-
-        await Assert.ThrowsAsync<NotSupportedException>(() => admin.EraseIdentityAsync("github:alice", ""));
-        await Assert.ThrowsAsync<NotSupportedException>(() => admin.DestroyPseudonymPeriodAsync("2026-Q1", ""));
-    }
-
-    private sealed class OlderAdmin : IEventStoreAdmin
-    {
-        public Task<StoreStatus> GetStatusAsync(CancellationToken ct = default) => throw new InvalidOperationException();
-
-        public Task<JobInfo?> GetJobAsync(Guid jobId, CancellationToken ct = default) => throw new InvalidOperationException();
-
-        public Task<Guid> RebuildAsync(string projection, CancellationToken ct = default) => throw new InvalidOperationException();
-
-        public Task<Guid> SkipAsync(string consumer, Guid eventId, CancellationToken ct = default) => throw new InvalidOperationException();
-
-        public Task<ErasureResult> EraseSubjectAsync(string subjectId, string tenantId, CancellationToken ct = default) => throw new InvalidOperationException();
-
-        public Task<Guid> RebuildSnapshotsAsync(string streamType, CancellationToken ct = default) => throw new InvalidOperationException();
-
-        public Task<int> RewrapKeysAsync(IMasterKeyProvider target, CancellationToken ct = default) => throw new InvalidOperationException();
-
-        public Task ShredTenantAsync(string tenantId, CancellationToken ct = default) => throw new InvalidOperationException();
-    }
 }

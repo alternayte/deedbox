@@ -14,7 +14,7 @@ This page describes the tables in the Deedbox schema. Deedbox owns only these ta
 | `position` | one row | The global position counter. |
 | `event_types` | `(stream_type, event_type, event_version)` | Every event type ever stored; the start-up check reads it. |
 | `checkpoints` | `name` | One row per projection and subscription: `position`, `mode`, `status`, `error`, and `handles`, the event types it handles. For a stall, `error` holds the exception type and stack frames, never the message. |
-| `instances` | `instance_id` | One row per live app instance: what it runs, what it can append, and `formats`, the newest storage format it reads. Each instance refreshes its row every 10 seconds and deletes it when it stops. A cut-over deletes the row of an instance that is not live. |
+| `instances` | `instance_id` | One row per live app instance: what it runs, what it can append, `handles`, the events its version of each projection and subscription handles, and `formats`, the newest storage format it reads. Each instance refreshes its row every 10 seconds and deletes it when it stops. A cut-over deletes the row of an instance that is not live. |
 | `jobs` | `id` | Rebuilds, skips, erasures, snapshot rebuilds and destroyed pseudonym periods; the audit trail. A failed job holds the exception type and stack frames, never the message. |
 | `master_keys` | `(tenant_id, key_version)` | Wrapped tenant keys; shredded tenants leave tombstone rows. |
 | `subject_keys` | `(tenant_id, subject_id)` | Wrapped subject keys. Erasure deletes a row. |
@@ -27,3 +27,5 @@ On Postgres, JSON columns are `jsonb`. On SQL Server, they are `nvarchar(max)`, 
 Migrations are numbered, idempotent and forward-only. See [apply the schema](/how-to/apply-the-schema/).
 
 Migration 6, in 0.5.0, adds the `instances.formats` column, and indexes on `subject_streams (tenant_id, stream_id)` and on queued `jobs`. It also removes exception messages from existing stall and job rows.
+
+Migration 7, in 0.6.0, adds the `instances.handles` column.

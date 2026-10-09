@@ -43,7 +43,7 @@ Each instance reports the consumer gauges for the consumers it runs. An instance
 
 ## Logs
 
-Log events have stable IDs: 1 to 5 at start-up, 20 to 29 in the runner, and 30 to 34 for jobs. IDs 40 to 45 are for the heartbeat and the cut-over of an inline projection. Every start-up error is a `DeedboxException` with a [DBX code](/reference/errors/).
+Log events have stable IDs: 1 to 5 at start-up, 20 to 29 in the runner, and 30 to 34 for jobs. IDs 40 to 46 are for the heartbeat, the cut-over of an inline projection, and consumers left to a newer version. Every start-up error is a `DeedboxException` with a [DBX code](/reference/errors/).
 
 Events added in 0.5.0:
 
@@ -55,5 +55,6 @@ Events added in 0.5.0:
 | 43 | Error | This instance could not join again; it retries. Appends fail with DBX038 until it does. |
 | 44 | Warning | A cut-over removed the heartbeat rows of the instances it names, because their heartbeat was late. |
 | 45 | Warning | An inline projection cannot finish its catch-up: forced cut-overs ran out of time. |
+| 46 | Information | This instance leaves a consumer to the instances it names: their version handles events that its own version does not. |
 
 A stall record and a failed job hold the exception type and stack frames. The exception's message is only in these logs.

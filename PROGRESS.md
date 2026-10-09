@@ -369,3 +369,31 @@ Spec: `docs/specs/hardening-before-1-0.md` (from the 1.0 readiness review of 202
 - Upgrade tests build `tests/Deedbox.OldVersion` against 0.1.0, 0.2.1, 0.3.1 and 0.4.1 from nuget.org. `tests/Deedbox.Aot` is published with native AOT by `just aot`. Both projects are outside the solution.
 - Package validation against 0.4.1 needed suppressions for the listed API breaks. They are gone: 0.5.0 is the baseline now, and VersionPrefix is 0.5.1.
 - Released on 2026-10-07: https://github.com/alternayte/deedbox/releases/tag/v0.5.0. All nine packages pushed through trusted publishing in one attempt. The docs site was deployed with wrangler from a local build, because CI has no CLOUDFLARE_API_TOKEN.
+
+## 0.6.0
+
+Spec: `docs/specs/read-stream-and-review-before-1-0.md` (from the 1.0 readiness review of 2026-10-07 and the grill on 2026-10-09).
+
+- `IEventStore.ReadStream` reads one stream forward in pages and returns the envelope that a subscription gets. A deleted stream holds only its tombstone, so its page starts at the tombstone whatever `afterVersion` is below it. An empty page that the stream row said holds events is read once more: a deletion between the two reads removed the events, and the second read finds the tombstone.
+- `IEventStoreAdmin` has no default bodies. Package validation against 0.5.0 has one suppression, CP0006 for `ReadStream`; removing a default body is not a break that it reports.
+- `IMasterKeyProvider` and the docs address do not change; the spec has the reasons. Archiving is out; the "Table growth" page states what a growing events table costs.
+- The upgrade tests now run 0.5.0 too, the first release whose heartbeat rows have no `handles`.
+
+### Review of the fence and the runner
+
+A finding counts only with a failing test. The tests are in `tests/Deedbox.Tests/Runner/`: `FenceReviewTests`, `LoopReviewTests`, `Round2ReviewTests`, `Round3ReviewTests` and `Round4ReviewTests`.
+
+- Round 1, two reviewers (fence and cut-over; loop, delivery and jobs): 4 guarantee defects and 7 edge defects.
+  - Guarantee: an evicted instance that registers the projection async appended past it after it went inline. The join now stalls it as mode_changed in the transaction that writes the heartbeat row.
+  - Guarantee: `Instances.Skips` missed an instance that appends a built-in event on a stream type that the projection has no events of, or on a stream type with no events. An instance with any stream type now skips an inline projection that handles a built-in event; the heartbeat row lists each stream type as `name/`.
+  - Guarantee: on SQL Server, a handler that caught an error with which the server rolled the transaction back let the checkpoint commit on its own past events whose writes were gone. `transaction.Connection is null` after user code fails the event; the append path has the same check.
+  - Guarantee: an instance of the older version moved a shared checkpoint past events that only the newer version handles. Decision from the user: fix it for async projections and subscriptions, with migration 7 (`instances.handles`).
+  - Edge: a failure after the handlers returned was never counted; a stale forced cut-over started a new catch-up; on locking SQL Server a join held the counter, and an inline append waited, for the rebuild of another projection; a rebuild job for a subscription stayed queued with two instances; `MarkFailed` overwrote a job that another instance finished.
+- Round 2, on the fixes: 3 guarantee defects and 1 edge defect. A rebuild by the older version narrowed the recorded handles; the join's READPAST read missed a row whose holder rolled back; a reset that caught a transaction-ending error made a rebuild apply every event twice; the append's transaction check ran once, after every handler. The READPAST read is gone: the join reads with no lock wait, and when a row is held it gives its locks back, waits for the row, and starts over.
+- Round 3, on those fixes: 2 guarantee defects, both in the checkpoint's record of handled events (a join raced the rebuild's narrow write; a re-join that failed after its row was stored never widened it). The rule no longer uses that record. `ConsumerLoop.LeftToWiderVersion` reads the live heartbeat rows in the tick's transaction, after the events are read, and only on a tick that has work, so an idle consumer sends no extra statement. An instance appends only with a heartbeat row, so the row of each appender is there to see.
+- Round 4, on that change: the rule held. 1 guarantee defect outside it, older than this release: an instance of the older version ran a rebuild with its own reset while a newer version was live, and the replay applied events twice. It now leaves the job to the instance that handles more.
+- Round 5, on that change: 1 guarantee defect of the same class. A newer version that joined while the older version's reset ran still replayed over what that reset left. The rebuild now reads the instances again after the reset and gives the job back, with the reset undone. This recheck had no review round of its own.
+- The spec's exit, one round with zero guarantee defects, is not met by count. Rounds 4 and 5 found nothing in the rules under review; both findings are one class, a rebuild while two versions of a projection run. No code closes that class: a newer version that joins just after the job commits replays over the older reset too. The known-limits page states the rule, "finish the deploy, then rebuild". The user ruled on 2026-10-09 that this class is by design, so round 5 has zero guarantee defects in scope and the exit is met.
+- Tests that the reviewers wrote for an outcome that a later fix changed were adapted, not deleted: the old version now leaves the checkpoint and the rebuild job, so those tests assert that nothing moves, then finish the deploy and assert that every event is applied once.
+- Known and documented, not fixed: two versions of one inline projection apply their own handlers to their own appends; a handler's statements after an error that ended the transaction commit on their own on SQL Server.
+

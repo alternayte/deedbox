@@ -26,6 +26,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         ("instances", "consumers", false),
         ("instances", "inline_projections", false),
         ("instances", "event_types", false),
+        ("instances", "handles", true),
     ];
 
     private readonly string _connectionString;
@@ -291,6 +292,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         AddText(command, "inline", Instances.ListJson(instance.Inline), -1);
         AddText(command, "events", Instances.ListJson(instance.Events), -1);
         Add(command, "formats", instance.Formats);
+        ((SqlCommand)command).Parameters.Add(new SqlParameter("handles", SqlDbType.NVarChar, -1) { Value = (object?)Instances.HandledJson(instance.Handled) ?? DBNull.Value });
         await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -317,7 +319,8 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         while (await reader.ReadAsync(ct))
         {
             rows.Add(new InstanceRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Instances.ReadList(reader.GetString(3)),
-                Instances.ReadList(reader.GetString(4)), Instances.ReadList(reader.GetString(5)), reader.GetFieldValue<DateTimeOffset>(6), reader.GetInt32(7) == 1, reader.GetInt32(8)));
+                Instances.ReadList(reader.GetString(4)), Instances.ReadList(reader.GetString(5)), reader.GetFieldValue<DateTimeOffset>(6), reader.GetInt32(7) == 1, reader.GetInt32(8),
+                Instances.ReadHandled(reader.IsDBNull(9) ? null : reader.GetString(9))));
         }
 
         return rows;
@@ -327,6 +330,26 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
     {
         await using var command = Command(connection, transaction, Sql.ReadCheckpoints);
         return await ReadCheckpointRows(command, ct);
+    }
+
+    public override async Task<List<CheckpointRow>?> TryReadCheckpoints(DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    {
+        // Error 1222 ends the statement, not the transaction. The timeout is a session setting, so it is put back.
+        await using (var noWait = Command(connection, transaction, "SET LOCK_TIMEOUT 0"))
+            await noWait.ExecuteNonQueryAsync(ct);
+        try
+        {
+            return await ReadCheckpoints(connection, transaction, ct);
+        }
+        catch (SqlException ex) when (ex.Number == 1222)
+        {
+            return null;
+        }
+        finally
+        {
+            await using var wait = Command(connection, transaction, "SET LOCK_TIMEOUT -1");
+            await wait.ExecuteNonQueryAsync(CancellationToken.None);
+        }
     }
 
     public override async Task<CheckpointRow?> LockCheckpoint(DbConnection connection, DbTransaction transaction, string name, CheckpointLock mode, CancellationToken ct)
@@ -871,11 +894,11 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
 
         public string WriteInstance => $"""
             UPDATE [{s}].[instances] WITH (UPDLOCK, HOLDLOCK)
-            SET consumers = @consumers, inline_projections = @inline, event_types = @events, seen_at = {Now}, formats = @formats
+            SET consumers = @consumers, inline_projections = @inline, event_types = @events, seen_at = {Now}, formats = @formats, handles = @handles
             WHERE instance_id = @id;
             IF @@ROWCOUNT = 0
-                INSERT INTO [{s}].[instances] (instance_id, host, app, consumers, inline_projections, event_types, formats)
-                VALUES (@id, @host, @app, @consumers, @inline, @events, @formats);
+                INSERT INTO [{s}].[instances] (instance_id, host, app, consumers, inline_projections, event_types, formats, handles)
+                VALUES (@id, @host, @app, @consumers, @inline, @events, @formats, @handles);
             """;
 
         public readonly string Leave = $"DELETE FROM [{s}].[instances] WHERE instance_id = @id";
@@ -885,7 +908,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
 
         public string ReadInstances => $"""
             SELECT instance_id, host, app, consumers, inline_projections, event_types, seen_at,
-                CASE WHEN seen_at > DATEADD(millisecond, -@live_ms, {Now}) THEN 1 ELSE 0 END, formats
+                CASE WHEN seen_at > DATEADD(millisecond, -@live_ms, {Now}) THEN 1 ELSE 0 END, formats, handles
             FROM [{s}].[instances] ORDER BY started_at
             """;
 
@@ -902,9 +925,12 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             WHERE name = @name
             """;
 
+        // A seek per name: a scan would wait for the row of another projection that a rebuild holds while its reset runs.
         public readonly string ReadStatuses = $"""
-            SELECT name, status FROM [{s}].[checkpoints]
-            WHERE name IN (SELECT n FROM OPENJSON(@names) WITH (n nvarchar(200) '$[0]')) AND mode = N'inline'
+            SELECT c.name, c.status FROM OPENJSON(@names) WITH (n nvarchar(200) '$[0]') AS j
+            INNER LOOP JOIN [{s}].[checkpoints] AS c WITH (FORCESEEK) ON c.name = j.n COLLATE Latin1_General_100_BIN2
+            WHERE c.mode = N'inline'
+            OPTION (FORCE ORDER)
             """;
 
         // The head is read first. Under locking READ COMMITTED it waits for an append in flight to commit or roll back,
@@ -941,10 +967,11 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             $"SELECT TOP (1) {JobColumns} FROM [{s}].[jobs] WITH (UPDLOCK, READPAST, ROWLOCK) WHERE status = N'queued' " +
             "AND id NOT IN (SELECT i FROM OPENJSON(@except) WITH (i uniqueidentifier '$[0]')) ORDER BY created_at, id";
 
+        // Only a queued job changes: an instance that rejected a job must not overwrite the result of one that ran it since.
         public readonly string UpdateJob = $"""
             UPDATE [{s}].[jobs] SET status = @status, args = @args, progress = @progress, started_at = @started_at, finished_at = @finished_at,
                 updated_at = {Now}, kind = @kind
-            WHERE id = @id
+            WHERE id = @id AND status = N'queued'
             """;
 
         public readonly string ReadJob = $"SELECT {JobColumns} FROM [{s}].[jobs] WHERE id = @id";

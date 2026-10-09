@@ -2,6 +2,37 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.6.0] - 2026-10-09
+
+This release gives the public interfaces their 1.0 shape. It breaks only an app that implements `IEventStore` or `IEventStoreAdmin` itself; apps call these interfaces and do not implement them.
+
+### Added
+
+- `IEventStore.ReadStream(streamId, afterVersion, limit)` reads one page of a stream's events in version order. Each item is the envelope that a subscription gets: the event in its current shape, personal data decrypted, and erased fields redacted with their subjects in `ErasedSubjects`. A missing stream gives an empty list, and a deleted stream gives its `StreamDeleted` event. A store from `UseTransaction` or `UseDbContext` reads in that transaction.
+- Migration 7 adds the nullable `instances.handles` column.
+- Docs: the "Table growth" page states what a growing events table costs and how to remove data.
+
+### Changed
+
+- **Breaking:** `IEventStoreAdmin.RetireAsync`, `EraseIdentityAsync` and `DestroyPseudonymPeriodAsync` have no default body. A class of your own that implements the interface must implement them.
+- **Breaking:** a class of your own that implements `IEventStore` must implement `ReadStream`.
+
+### Fixed
+
+A review of the fence and the runner found these defects. Each has a test that failed before its fix.
+
+- An instance that registers a projection as async, and that a cut-over evicted while the projection went inline, joined again and appended without the projection. The join now stalls the projection as `mode_changed` in the transaction that writes the heartbeat row.
+- An inline projection that handles `StreamDeleted` or `SubjectErased` missed that event when an app with other stream types, or with a stream type that has no events, appended it. Such an instance now counts as one that skips the projection, so the projection stays in catch-up while that instance is live.
+- On SQL Server, a projection handler that caught an error with which the server rolled the transaction back made the runner commit the checkpoint past events whose writes were gone. The same catch in an inline projection or an appending hook stored events without their stream row, and in a reset it made a rebuild apply every event over the old rows. Deedbox now fails the event, the append or the rebuild job, and checks after each call.
+- During a rolling deploy, an instance of the version that handles fewer events moved the checkpoint of an async projection or a subscription past events that only the newer version handles. It now leaves the checkpoint to a live instance that handles more. The heartbeat rows decide, read in the same transaction as the batch. A rebuild records the events of every instance with a heartbeat row, whichever version runs the job. Migration 7 adds the `instances.handles` column for this. The rule covers instances on 0.6.0 and later.
+- An instance of the older version could run a rebuild job while a newer version was live. Its reset did not clear what the newer version wrote, so the replay applied those events again. It now leaves the job to the instance that handles more.
+- A failure after a handler returned, such as an aborted transaction, a reader that the handler left open, or a session that the database ended during each call, was never counted. The consumer retried without end and could not be skipped. It now counts like a failure in the handler, so the consumer stalls on the event.
+- A new catch-up of an inline projection started with the forced cut-over that an earlier catch-up left pending, and held the position counter with no appends to outrun.
+- On SQL Server without `READ_COMMITTED_SNAPSHOT`, a start-up held the position counter while it waited for the rebuild of another projection, and an append that applies an inline projection waited for that rebuild too.
+- A rebuild job for a subscription name stayed queued for ever when two instances registered the subscription. It now fails at once with the reason.
+- An instance that rejected a job could overwrite the result of an instance that ran the job since.
+- The changelog listed the DBX040 isolation-level change under 0.3.0, 0.3.1 and 0.4.0. It shipped in 0.5.0 only.
+
 ## [0.5.0] - 2026-10-07
 
 This release closes the defects from the 1.0 readiness review. It breaks the public API in the places listed under "Changed"; migration 6 is a forward migration.
@@ -84,8 +115,6 @@ This release closes the defects from the 1.0 readiness review. It breaks the pub
 
 ### Changed
 
-- **Breaking:** an append in your own transaction at REPEATABLE READ, SERIALIZABLE or SNAPSHOT fails with [DBX040](https://deedbox-docs.pages.dev/reference/errors/dbx040/). Deedbox orders appends with locks, and a transaction that keeps one snapshot reads a state from before a lock it waited for. Use READ COMMITTED, the default of both databases.
-
 - Shredding a tenant also deletes its pseudonym secrets.
 - `RewrapKeysAsync` and `deedbox keys rewrap` also re-wrap pseudonym secrets, in the same transaction, and the count includes them. No subject ID changes.
 - `IEventStoreAdmin.EraseIdentityAsync` and `DestroyPseudonymPeriodAsync` have default bodies, so an implementation of the interface written for 0.3 still compiles.
@@ -93,8 +122,6 @@ This release closes the defects from the 1.0 readiness review. It breaks the pub
 ## [0.3.1] - 2026-09-26
 
 ### Changed
-
-- **Breaking:** an append in your own transaction at REPEATABLE READ, SERIALIZABLE or SNAPSHOT fails with [DBX040](https://deedbox-docs.pages.dev/reference/errors/dbx040/). Deedbox orders appends with locks, and a transaction that keeps one snapshot reads a state from before a lock it waited for. Use READ COMMITTED, the default of both databases.
 
 - A consumer that stalls on a poison event retries the event every 5 minutes, and runs again once it succeeds. Before, it retried only when an instance started, so an outage of a service that a subscription calls stopped the subscription until a restart or a skip. The instances share one schedule, so the event gets one attempt per interval. The consumer stays `stalled` while it retries, so the health check still reports it and `deedbox skip` still works; `deedbox status` shows the attempts and the next retry time.
 - Only a stall that exists when an instance starts gets that instance's immediate round of retries. Before, every instance that had not stalled the consumer itself gave it one more round.
@@ -107,8 +134,6 @@ This release closes the defects from the 1.0 readiness review. It breaks the pub
 - `IEventStoreAdmin.RetireAsync(name)` and `deedbox retire <name>` retire a projection that no live instance registers ([DBX035](https://deedbox-docs.pages.dev/reference/errors/dbx035/) otherwise). A retired projection keeps its checkpoint, nothing applies it, and `RebuildAsync` brings it back. An instance that still registers it starts, and its health check reports degraded.
 
 ### Changed
-
-- **Breaking:** an append in your own transaction at REPEATABLE READ, SERIALIZABLE or SNAPSHOT fails with [DBX040](https://deedbox-docs.pages.dev/reference/errors/dbx040/). Deedbox orders appends with locks, and a transaction that keeps one snapshot reads a state from before a lock it waited for. Use READ COMMITTED, the default of both databases.
 
 - An inline projection switches from catch-up to inline only when no live instance can append its events without running it. Before, a new inline projection added during a rolling deploy missed the appends of instances of the old version.
 - An instance that starts without a running inline projection, but can append its events, moves that projection back to catch-up from the current head. A rollback no longer makes an inline projection miss events.
@@ -157,6 +182,8 @@ The first release. It targets .NET 8 and .NET 10.
 - `IEventStoreAdmin`, metrics, traces, and DBX error codes that link to their docs pages.
 - Native `json` columns on SQL Server 2025 and Azure SQL, with `UseSqlServer(connectionString, sql => sql.NativeJson = true)`. Applying the schema converts existing `nvarchar(max)` columns.
 
+[0.6.0]: https://github.com/alternayte/deedbox/releases/tag/v0.6.0
+[0.5.0]: https://github.com/alternayte/deedbox/releases/tag/v0.5.0
 [0.4.1]: https://github.com/alternayte/deedbox/releases/tag/v0.4.1
 [0.4.0]: https://github.com/alternayte/deedbox/releases/tag/v0.4.0
 [0.3.1]: https://github.com/alternayte/deedbox/releases/tag/v0.3.1

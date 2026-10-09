@@ -36,6 +36,19 @@ public interface IEventStore
         where TState : IState<TState>;
 
     /// <summary>
+    /// Reads one page of a stream's events, in version order. Each envelope is the one a subscription gets: the event
+    /// in its current shape, with personal data decrypted, and with erased fields redacted and their subjects listed
+    /// in <see cref="EventEnvelope.ErasedSubjects"/>. A stream that does not exist returns an empty list. A deleted
+    /// stream returns its one <see cref="StreamDeleted"/> event.
+    /// </summary>
+    /// <param name="streamId">The stream ID.</param>
+    /// <param name="afterVersion">The page starts after this stream version; pass the last version of the page before.</param>
+    /// <param name="limit">The most events to return; at least 1.</param>
+    /// <param name="ct">Cancels the read.</param>
+    /// <exception cref="DeedboxException">DBX009 when the app does not register the stream's stream type.</exception>
+    Task<IReadOnlyList<EventEnvelope>> ReadStream(string streamId, long afterVersion = 0, int limit = 500, CancellationToken ct = default);
+
+    /// <summary>
     /// Deletes a stream for good, in one transaction: appends a <see cref="StreamDeleted"/> tombstone, deletes every
     /// earlier event and the stored state, and marks the stream deleted so its ID is never reused. Projections see the
     /// tombstone; they do not see deleted events they had not processed yet. Deleting a missing or deleted stream does nothing.

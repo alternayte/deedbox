@@ -103,6 +103,24 @@ public abstract class PersonalDataTests(Databases databases, Db db) : RunnerTest
     }
 
     [Fact]
+    public async Task ReadStream_returns_personal_data_in_plain_text_and_redacted_after_an_erasure()
+    {
+        var host = await StartHost(NewProbe(), InDatabase(k => k.RedactWith("[erased]")));
+        await StoreOf(host).Append("m-1", ExpectedVersion.NoStream, [Ada, Grace]);
+
+        var before = await StoreOf(host).ReadStream("m-1");
+        await WaitForJob(host, await host.Services.CreateScope().ServiceProvider.GetRequiredService<ISubjectErasure>().EraseSubjectAsync("person:1"));
+        var after = await StoreOf(host).ReadStream("m-1");
+
+        Assert.Equal(["Ada Lovelace", "Grace Hopper"], before.Select(e => ((ReviewerInvited)e.Event).ReviewerName));
+        Assert.All(before, e => Assert.Empty(e.ErasedSubjects));
+        Assert.Equal(["[erased]", "Grace Hopper"], after.Take(2).Select(e => ((ReviewerInvited)e.Event).ReviewerName));
+        Assert.Equal(["person:1"], after[0].ErasedSubjects);
+        Assert.Empty(after[1].ErasedSubjects);
+        Assert.Equal("person:1", ((SubjectErased)after[2].Event).SubjectId);
+    }
+
+    [Fact]
     public async Task Erased_strings_read_as_the_placeholder_and_new_data_about_the_subject_is_readable()
     {
         var host = await StartHost(NewProbe(), InDatabase(k => k.RedactWith("[erased]")));

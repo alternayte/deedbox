@@ -14,7 +14,15 @@ namespace Deedbox;
 /// </summary>
 internal sealed record InstanceRow(
     Guid Id, string Host, string App, IReadOnlyList<string> Consumers, IReadOnlyList<string> Inline, IReadOnlyList<string> Events, DateTimeOffset SeenAt,
-    bool Live = true, int Formats = Crypto.Formats);
+    bool Live = true, int Formats = Crypto.Formats, IReadOnlyDictionary<string, Handles>? Handled = null)
+{
+    /// <summary>
+    /// True when this instance's version of <paramref name="consumer"/> handles an event that <paramref name="other"/>
+    /// does not. A row from a version that does not record what it handles says nothing.
+    /// </summary>
+    public bool HandlesMoreThan(string consumer, Handles other) =>
+        Handled is not null && Handled.TryGetValue(consumer, out var handles) && !other.Covers(handles);
+}
 
 /// <summary>
 /// The events a projection handles, stored with its checkpoint so that an instance without the projection's code can
@@ -61,13 +69,16 @@ internal static class Instances
         app,
         [.. projections.All.Select(p => p.Name).Concat(projections.Subscriptions.Select(s => s.Name))],
         [.. projections.Inline.Select(p => p.Name)],
-        [.. runtime.Registry.Streams.SelectMany(s => s.Events.Select(e => $"{s.Name}/{e.Name}"))],
-        DateTimeOffset.MinValue);
+        // A stream type is listed on its own too, as "cart/": an instance can delete a stream of a type it has no event of.
+        [.. runtime.Registry.Streams.SelectMany(s => s.Events.Select(e => $"{s.Name}/{e.Name}").Prepend($"{s.Name}/"))],
+        DateTimeOffset.MinValue,
+        Handled: AsyncRunner.Consumers(runtime, projections).ToDictionary(c => c.Name, c => c.Handles, StringComparer.Ordinal));
 
     /// <summary>
     /// True when <paramref name="instance"/> can append an event that <paramref name="projection"/> handles, but does not
-    /// run the projection inline, so its appends would skip it. Built-in events go on streams of the instance's own
-    /// stream types, so they count only where those types meet the projection's.
+    /// run the projection inline, so its appends would skip it. A handler of a built-in event runs for a stream of any
+    /// type, and an instance appends StreamDeleted or SubjectErased to the streams of every stream type it registers.
+    /// So an instance with any stream type skips a projection that handles a built-in event.
     /// </summary>
     public static bool Skips(InstanceRow instance, string projection, Handles handles)
     {
@@ -75,12 +86,7 @@ internal static class Instances
             return false;
         if (handles.Events.Intersect(instance.Events, StringComparer.Ordinal).Any())
             return true;
-        if (handles.BuiltIns.Count == 0)
-            return false;
-
-        var projectionStreams = handles.Events.Select(StreamOf).ToHashSet(StringComparer.Ordinal);
-        var instanceStreams = instance.Events.Select(StreamOf).ToList();
-        return projectionStreams.Count == 0 ? instanceStreams.Count > 0 : instanceStreams.Any(projectionStreams.Contains);
+        return handles.BuiltIns.Count > 0 && instance.Events.Count > 0;
     }
 
     public static string Describe(IEnumerable<InstanceRow> instances) =>
@@ -90,12 +96,19 @@ internal static class Instances
 
     public static IReadOnlyList<string> ReadList(string json) => JsonSerializer.Deserialize(json, InstanceJson.Default.StringArray) ?? [];
 
+    public static string? HandledJson(IReadOnlyDictionary<string, Handles>? handled) =>
+        handled is null ? null : JsonSerializer.Serialize(new Dictionary<string, Handles>(handled, StringComparer.Ordinal), InstanceJson.Default.DictionaryStringHandles);
+
+    public static IReadOnlyDictionary<string, Handles>? ReadHandled(string? json) =>
+        json is null ? null : JsonSerializer.Deserialize(json, InstanceJson.Default.DictionaryStringHandles);
+
     public static string StreamOf(string pair) => pair[..pair.IndexOf('/', StringComparison.Ordinal)];
 }
 
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
 [JsonSerializable(typeof(Handles))]
 [JsonSerializable(typeof(string[]))]
+[JsonSerializable(typeof(Dictionary<string, Handles>))]
 internal sealed partial class InstanceJson : JsonSerializerContext;
 
 /// <summary>An append found no heartbeat row for this instance: a cut-over evicted it, or it never joined.</summary>
@@ -114,6 +127,7 @@ internal sealed class InstanceEvicted(bool replayable) : Exception("This instanc
 internal sealed partial class Membership(DeedboxRuntime runtime, IServiceProvider services)
 {
     private const int JoinAttempts = 3;
+    private const int ContendedRounds = 10;
     private readonly ILogger _logger = services.GetService<ILoggerFactory>()?.CreateLogger<Membership>() ?? NullLogger<Membership>.Instance;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private volatile bool _joined;
@@ -211,15 +225,15 @@ internal sealed partial class Membership(DeedboxRuntime runtime, IServiceProvide
         await using var connection = provider.CreateConnection();
         await connection.OpenAsync(ct);
 
-        // A projection that this instance registers in another run mode is not moved: start-up stalls it as mode_changed.
         bool Skipped(CheckpointRow row) => row.Mode == CheckpointMode.Inline && row.Status != CheckpointStatus.Retired
-            && !self.Consumers.Contains(row.Name, StringComparer.Ordinal)
             && Handles.FromJson(row.Handles) is { } handles && Instances.Skips(self, row.Name, handles);
 
         // The gates come before the counter, as in an append, so the projections to gate are chosen before any lock.
         // An inline checkpoint is only created, and only made running, under the counter. So the choice is checked
         // again under the counter, and when a projection appeared meanwhile the join starts over with its gate too.
+        var registered = AsyncRunner.Consumers(runtime, services.GetRequiredService<ProjectionSet>()).ToDictionary(c => c.Name, c => c.Mode, StringComparer.Ordinal);
         var gated = (await provider.ReadCheckpoints(connection, ct)).Where(Skipped).Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
+        var contended = 0;
         for (var round = 0; ; round++)
         {
             await using var transaction = await connection.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
@@ -229,7 +243,22 @@ internal sealed partial class Membership(DeedboxRuntime runtime, IServiceProvide
 
             // The rows are read, not locked: a catch-up batch holds its row while it waits for the gate. Under the
             // gates and the counter, no rebuild, cut-over or other join changes what is read here.
-            var skipped = (await provider.ReadCheckpoints(connection, transaction, ct)).Where(Skipped).ToList();
+            // The counter is never held for the length of a rebuild's reset, which holds its checkpoint row. When the
+            // read would wait for a row, the join gives its locks back, waits for the row with no lock of its own,
+            // and starts over. After several such rounds it waits under the counter, so a busy store cannot starve it.
+            var rows = contended < ContendedRounds
+                ? await provider.TryReadCheckpoints(connection, transaction, ct)
+                : await provider.ReadCheckpoints(connection, transaction, ct);
+            if (rows is null)
+            {
+                contended++;
+                round--;
+                await transaction.RollbackAsync(CancellationToken.None);
+                await provider.ReadCheckpoints(connection, ct);
+                continue;
+            }
+
+            var skipped = rows.Where(Skipped).ToList();
             if (skipped.Any(r => !gated.Contains(r.Name)) && round < 5)
             {
                 gated.UnionWith(skipped.Select(r => r.Name));
@@ -239,8 +268,20 @@ internal sealed partial class Membership(DeedboxRuntime runtime, IServiceProvide
 
             await provider.WriteInstance(connection, transaction, self, ct);
             var moved = new List<string>();
+            var stalled = new List<(string Name, string To)>();
             foreach (var row in skipped.Where(r => r.Status == CheckpointStatus.Running && gated.Contains(r.Name)))
             {
+                // A projection that this instance registers in another run mode stalls, as at any start-up, but here
+                // in the transaction that writes the heartbeat row: an instance that was evicted while the projection
+                // went inline must not append past it.
+                if (registered.GetValueOrDefault(row.Name) is { } mode)
+                {
+                    var error = new System.Text.Json.Nodes.JsonObject { ["reason"] = "mode_changed", ["from"] = row.Mode, ["to"] = mode }.ToJsonString();
+                    await provider.UpdateCheckpoint(connection, transaction, row with { Status = CheckpointStatus.Stalled, Error = error }, ct);
+                    stalled.Add((row.Name, mode));
+                    continue;
+                }
+
                 await provider.UpdateCheckpoint(connection, transaction, row with { Position = head, Status = CheckpointStatus.Rebuilding, Error = null }, ct);
                 moved.Add(row.Name);
             }
@@ -251,6 +292,8 @@ internal sealed partial class Membership(DeedboxRuntime runtime, IServiceProvide
             await transaction.CommitAsync(CancellationToken.None);
             foreach (var name in moved)
                 LogCatchingUp(name, head);
+            foreach (var (name, to) in stalled)
+                LogModeChanged(name, CheckpointMode.Inline, to);
             break;
         }
 
@@ -331,6 +374,9 @@ internal sealed partial class Membership(DeedboxRuntime runtime, IServiceProvide
 
     [LoggerMessage(EventId = 4, Level = LogLevel.Warning, Message = "Deedbox projection '{Name}' runs inline elsewhere, but this instance appends its events without running it. It catches up from position {Head} until no such instance is live.")]
     private partial void LogCatchingUp(string name, long head);
+
+    [LoggerMessage(EventId = 2, Level = LogLevel.Error, Message = "Deedbox projection '{Name}' changed from {From} to {To}; it is stalled until you rebuild it.")]
+    private partial void LogModeChanged(string name, string from, string to);
 
     [LoggerMessage(EventId = 42, Level = LogLevel.Warning, Message = "Deedbox did not count this instance as live, because its heartbeat was late, and refused an append that would have skipped an inline projection. The instance joins again.")]
     private partial void LogEvicted();

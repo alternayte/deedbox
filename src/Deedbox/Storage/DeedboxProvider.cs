@@ -148,6 +148,9 @@ internal abstract class DeedboxProvider : IAsyncDisposable
 
     public Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, CancellationToken ct) => ReadCheckpoints(connection, null, ct);
 
+    /// <summary>Every checkpoint row, or null when the read would wait for a row that another transaction holds.</summary>
+    public abstract Task<List<CheckpointRow>?> TryReadCheckpoints(DbConnection connection, DbTransaction transaction, CancellationToken ct);
+
     /// <summary>
     /// Locks one checkpoint row for the rest of the transaction. <see cref="CheckpointLock.Batch"/> skips a row another
     /// runner holds and returns null; it does not block appends that read the row's status.

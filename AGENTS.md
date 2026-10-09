@@ -36,3 +36,5 @@ It is a library; nothing runs on its own. The CLI runs with `dotnet run --projec
 - snapshot: a stream's state stored with its state version and the stream version it reflects.
 - torture suite: randomized concurrent tests that assert the store's guarantees on both providers.
 - gate: a step in the build prompt where work stops for human review.
+- guarantee defect: a defect that loses an event, applies one twice in a projection, moves a checkpoint past an unapplied event, or leaves erased data readable. Avoid: blocker, critical bug.
+- edge defect: a confirmed defect that breaks no README guarantee. Avoid: minor bug, nit.

@@ -50,6 +50,9 @@ An instance that does not run an inline projection cannot apply it to its own ap
 - **A new inline projection** starts in catch-up. The runner applies events by position, whichever instance appended them. The projection switches to inline only when no live instance can append its events without running it, so it waits until the old instances stop.
 - **An instance that starts without a running inline projection**, but can append its events, first moves that projection back to catch-up from the current head. The instances that run the projection then apply the old instance's appends by position, and switch it back to inline when the old instances stop.
 
+- **A projection that handles `StreamDeleted` or `SubjectErased`** counts every instance that registers a stream type, because each such instance can append those events. In a store that several apps share, register the projection inline in each app, or run it async.
+- **An instance that registers the projection in another run mode** stalls it as `mode_changed`, as [a mode change](#change-a-projections-mode) does. Rebuild it when the deploy is complete.
+
 While a projection waits, `deedbox status` shows it as `rebuilding` with a small lag, and the log names the instances it waits for. An instance that stops cleanly leaves at once. One that crashes counts as live for 30 seconds after its last heartbeat, so the switch to inline waits that long.
 
 ### An instance whose heartbeat is late

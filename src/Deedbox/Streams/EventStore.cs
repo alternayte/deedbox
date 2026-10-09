@@ -42,6 +42,49 @@ internal sealed class EventStore(
         return new LoadResult<TState> { State = (TState)loaded.State, Version = loaded.Version };
     }
 
+    public async Task<IReadOnlyList<EventEnvelope>> ReadStream(string streamId, long afterVersion = 0, int limit = 500, CancellationToken ct = default)
+    {
+        ValidateStreamId(streamId);
+        ArgumentOutOfRangeException.ThrowIfNegative(afterVersion);
+        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+
+        var tenantId = TenantId;
+        using var activity = StartActivity("deedbox.read_stream", null, streamId);
+        await using var lease = await transactions.BeginRead(Provider, ct);
+
+        // The row gives the range and the events are a second read. A deletion between the two removes the events of
+        // the range, so an empty page that the row said holds events is read once more: it then finds the tombstone.
+        for (var attempt = 0; ; attempt++)
+        {
+            var row = await Provider.ReadStream(lease.Connection, lease.Transaction, tenantId, streamId, forUpdate: false, withState: false, ct);
+            if (row is null)
+                return [];
+
+            if (runtime.Registry.FindStream(row.StreamType) is null)
+            {
+                throw new DeedboxException(Errors.UnregisteredState,
+                    $"Stream '{streamId}' is a '{row.StreamType}' stream, and this app does not register that stream type, so it cannot read the stream's events. Register the stream type.");
+            }
+
+            activity?.SetTag("deedbox.stream_type", row.StreamType);
+
+            // Versions have no gaps, except in a deleted stream: it holds only its tombstone, at the stream's version.
+            var after = row.DeletedAt is null ? afterVersion : Math.Max(afterVersion, row.Version - 1);
+            if (after >= row.Version)
+                return [];
+
+            // Buffered first: the reader must close before personal-data keys are read on the same connection.
+            var stored = new List<StoredEvent>();
+            await foreach (var e in Provider.ReadStreamEvents(lease.Connection, lease.Transaction, tenantId, streamId, after, Math.Min(row.Version, after + limit), ct))
+                stored.Add(e);
+            if (stored.Count == 0 && attempt == 0)
+                continue;
+
+            var decoded = await EventDecoding.Decode(runtime, lease.Connection, lease.Transaction, stored, ct);
+            return decoded.Select(d => EventDecoding.Envelope(runtime, d.Stored, d.Event, d.ErasedSubjects)).ToList();
+        }
+    }
+
     public async Task<AppendResult> Append(string streamId, ExpectedVersion expected, IEnumerable<object> events, CancellationToken ct = default)
     {
         ValidateStreamId(streamId);
@@ -398,6 +441,8 @@ internal sealed class EventStore(
             await work.RunBeforeCounter();
         }
 
+        RequireTransaction(transaction);
+
         if (beforeCounter is not null)
             await beforeCounter();
 
@@ -471,6 +516,7 @@ internal sealed class EventStore(
                     Metadata = eventMetadata,
                     OccurredAt = occurredAt,
                 });
+                RequireTransaction(work.Transaction);
             }
         }
     }
@@ -486,7 +532,25 @@ internal sealed class EventStore(
         var pending = rows.Select((r, i) => new PendingEvent(streamId, r.EventId, r.Version, r.EventType, r.EventVersion, events[i], eventMetadata, occurredAt)).ToList();
         var appending = new AppendingContext(tenantId, streamId, stream.Name, pending, work);
         foreach (var hook in hooks)
+        {
             await hook.OnAppending(appending, ct);
+            RequireTransaction(work.Transaction);
+        }
+    }
+
+    /// <summary>
+    /// Fails the append when an inline projection or a hook returned but the transaction is over. User code can catch an
+    /// error with which the database rolled the transaction back. On SQL Server everything after it, the events too,
+    /// would then commit on its own, without the stream row and without the caller's work. The check runs after each
+    /// call, so nothing else of the append is written.
+    /// </summary>
+    private static void RequireTransaction(DbTransaction transaction)
+    {
+        if (transaction.Connection is null)
+        {
+            throw new InvalidOperationException(
+                "An inline projection or an appending hook returned, but the database had rolled the append's transaction back. A handler must not catch an error that ends the transaction.");
+        }
     }
 
     /// <summary>The scope's metadata, this store's override, and the current trace context.</summary>

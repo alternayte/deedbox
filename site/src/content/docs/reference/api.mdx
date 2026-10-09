@@ -16,7 +16,7 @@ This page lists every public type. Each member has XML docs, so your editor show
 | `StreamBuilder<TState>` | `Event<T>`, `Events<T1..T6>`, `EventsNestedIn`, `StateVersion`, `Snapshots`. |
 | `EventBuilder<TEvent>` | `Name`, `Alias`, `From` (JSON upcaster), `Upcast<TOld, TNew>`. |
 | `IState<TSelf>` | `Initial` and `Evolve`: what a state type implements. |
-| `IEventStore` | `Load`, `Append`, `Execute`, `DeleteStream`, `UseTransaction`, `WithMetadata`. Scoped. Its members have no `Async` suffix. |
+| `IEventStore` | `Load`, `ReadStream`, `Append`, `Execute`, `DeleteStream`, `UseTransaction`, `WithMetadata`. Scoped. Its members have no `Async` suffix. Apps call it; they do not implement it. |
 | `ExpectedVersion` | `Any`, `NoStream`, `Exact(n)`. |
 | `LoadResult<T>`, `AppendResult`, `ExecuteResult<T>` | What the store returns, as properties. `var (state, version) = await store.Load<T>(id)` works. |
 | `EventEnvelope` | A stored event with its IDs, positions, metadata and erased subjects. |

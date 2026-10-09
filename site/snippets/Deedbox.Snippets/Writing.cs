@@ -49,6 +49,20 @@ public static class Writing
         _ = (fromGuid, forPair);
     }
 
+    public static async Task Read(IEventStore store, string cartId)
+    {
+        // begin-snippet: read-stream
+        // One page at a time; the last version of a page is the cursor for the next one.
+        long after = 0;
+        while (await store.ReadStream(cartId, afterVersion: after, limit: 100) is { Count: > 0 } page)
+        {
+            foreach (var e in page)
+                Console.WriteLine($"{e.Version} {e.EventType} at {e.OccurredAt:O} by {e.Metadata.Actor}");
+            after = page[^1].Version;
+        }
+        // end-snippet
+    }
+
     public static async Task Delete(IEventStore store)
     {
         // begin-snippet: delete-stream

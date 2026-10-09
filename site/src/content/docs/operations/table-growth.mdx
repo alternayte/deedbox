@@ -1,0 +1,28 @@
+---
+title: Table growth
+description: What a growing events table costs, and how to remove data.
+sidebar:
+  order: 7
+---
+
+This page helps you plan storage for a store whose events table keeps growing.
+
+Deedbox keeps every event in one table, `deedbox.events`. It has no archive and no partitions.
+
+## What does not slow down
+
+- **Loads.** With the default snapshot policy, a load reads the stream's row and no events. With `SnapshotPolicy.Every(n)`, it reads at most the events since the last stored state. With `SnapshotPolicy.Never`, a load reads every event of that one stream.
+- **Appends.** An append writes its rows and the indexes of the table. The cost does not depend on the number of streams.
+- **The runner.** Each batch reads a range of global positions through the primary key, after the checkpoint.
+
+## What grows with the table
+
+- **Rebuilds.** A rebuild reads every event from the first global position. Its time grows with the number of events in the store, not with the number that the projection handles.
+- **Disk and backups.** Each event is one row with its payload and metadata, and the table has three indexes.
+
+## Remove data
+
+- `DeleteStream` deletes the events and the stored state of one stream, and leaves one `StreamDeleted` event. The stream ID is not reused. Projections that handle `StreamDeleted` remove what they stored for the stream.
+- Erasing a subject or shredding a tenant removes keys, not rows. The table keeps its size.
+
+To keep rebuild time low, measure a rebuild on a copy of production before you need one. To serve reads during a long rebuild, see [replace a read model without downtime](/how-to/replace-a-read-model/).

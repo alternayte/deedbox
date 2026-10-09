@@ -1,11 +1,11 @@
 ---
 title: Known limits
-description: What Deedbox does not do in 0.5, stated plainly.
+description: What Deedbox does not do in 0.6, stated plainly.
 sidebar:
   order: 8
 ---
 
-This page lists the limits of Deedbox 0.5, so you can plan around them.
+This page lists the limits of Deedbox 0.6, so you can plan around them.
 
 - **Appends take turns.** One counter orders all appends. See [the benchmarks](/operations/benchmarks/) for the ceiling.
 - **One append per transaction you own.** A second append in the same transaction can deadlock with a concurrent append or with a cut-over; the database aborts one. Nothing is lost. Make one append per transaction, or run the transaction again; see [use Dapper or plain ADO.NET](/how-to/use-dapper/).
@@ -15,6 +15,8 @@ This page lists the limits of Deedbox 0.5, so you can plan around them.
 - **Rebuilds are in place.** The read model is empty or partial during a rebuild. To keep serving reads, build the new read model under a new name; see [replace a read model without downtime](/how-to/replace-a-read-model/).
 - **A crashed instance holds back inline switches for 30 seconds.** Deedbox counts an instance as live until its heartbeat is 30 seconds old, and a new inline projection stays in catch-up while a live instance can skip it; see [inline or async projections](/concepts/inline-or-async/#deploy-inline-projections-safely).
 - **Projections run one event at a time, in order.**
+- **`ReadStream` reads one stream, forward.** There is no backward read, no read of all streams and no filter by event type. A subscription handles the events of every stream.
+- **There is no archive.** Every event stays in one table until you delete its stream; see [table growth](/operations/table-growth/).
 - **Only top-level properties hold personal data.** `[PersonalData]` on a type nested in an event fails start-up ([DBX026](/reference/errors/dbx026/)).
 - **Erasure covers what Deedbox stores.** Deedbox does not erase outbox rows, your read models or your other tables. Scrub them when you handle `SubjectErased`.
 - **A polymorphic member needs .NET 9 on Postgres.** An event or state with a `[JsonDerivedType]` member works on .NET 9 and later. On .NET 8 with Postgres, start-up fails with [DBX039](/reference/errors/dbx039/).
@@ -22,5 +24,8 @@ This page lists the limits of Deedbox 0.5, so you can plan around them.
 - **Start-up needs the database.** Deedbox checks the schema when the host starts. Build-time OpenAPI generation starts the host too; skip hosted services when `Assembly.GetEntryAssembly()?.GetName().Name` is `GetDocument.Insider`.
 - **Metadata is set through `DeedboxContext`.** There is no ASP.NET Core helper; use the [middleware](/how-to/use-tenants/) shown in the tenants guide.
 - **Isolation levels.** An append in your own transaction needs READ COMMITTED. REPEATABLE READ, SERIALIZABLE and SNAPSHOT fail with [DBX040](/reference/errors/dbx040/).
-- **Two versions of one projection.** During a rolling deploy, the runner of either version can apply a batch. When you change which events a projection handles, finish the deploy, then rebuild the projection.
+- **Two versions of one inline projection.** During a rolling deploy, each instance applies its own version of an inline projection to its own appends. When you change which events an inline projection handles, finish the deploy, then rebuild the projection. For an async projection or a subscription, an instance of the version that handles fewer events leaves the checkpoint to an instance that handles more. That rule covers instances on 0.6.0 and later.
+- **Rebuild a projection while one version of it runs.** A rebuild runs the reset of the instance that takes the job. During a rolling deploy that changes a projection, an instance of the older version leaves the job to a live instance of the newer one. An instance that joins after the job ran still replays over what the older reset left. Finish the deploy, then rebuild.
+- **An inline projection that handles `StreamDeleted` or `SubjectErased` needs every app to run it.** Every app that registers a stream type can append these events. While an instance that does not run the projection inline is live, the projection stays in catch-up; see [inline or async projections](/concepts/inline-or-async/#deploy-inline-projections-safely).
+- **A handler must not catch an error that ends the transaction.** Some database errors roll the whole transaction back. When a handler catches one and returns, Deedbox fails the event or the append.
 - **A projection handler that ignores its cancellation token.** After `HandlerTimeout` the runner cancels the token and waits. It cannot stop a handler that writes in the batch's transaction.

@@ -8,6 +8,7 @@ sidebar:
 import CartState from '../../../snippets/cart-state.md';
 import RegisterNames from '../../../snippets/register-names.md';
 import RegisterSnapshots from '../../../snippets/register-snapshots.md';
+import ReadStream from '../../../snippets/read-stream.md';
 import StreamIds from '../../../snippets/stream-ids.md';
 
 This page explains what a stream is, what Deedbox stores for it, and how names stay stable.
@@ -44,3 +45,17 @@ By default, every append also stores the new state, so a load reads one row. The
 <RegisterSnapshots />
 
 For a stream type with personal data, the stored state is encrypted with the tenant's key.
+
+## Read a stream's events
+
+`Load` gives you the state. `ReadStream` gives you the events behind it, one page at a time, for a history view or an audit.
+
+<ReadStream />
+
+Each item is the envelope that a subscription gets. The event has its current shape, and personal data is decrypted. A field of an erased subject holds the placeholder, and `ErasedSubjects` names that subject.
+
+- A stream that does not exist gives an empty list.
+- A deleted stream gives one event, its `StreamDeleted` tombstone. `Load` fails with [DBX028](/reference/errors/dbx028/) for that stream.
+- A store from `UseTransaction` or `UseDbContext` reads in that transaction.
+
+`ReadStream` reads one stream, forward. To handle the events of every stream, register a [subscription](/concepts/projections-and-subscriptions/).

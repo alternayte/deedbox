@@ -103,7 +103,7 @@ internal abstract class Consumer(string name, string mode, IReadOnlyList<string>
     }
 
     /// <summary>The failure of one handler call: transient when the database says so, or when the batch's connection broke.</summary>
-    protected static Exception Failure(Exception ex, DbConnection connection, EventEnvelope envelope, long retryUntil)
+    internal static Exception Failure(Exception ex, DbConnection connection, EventEnvelope envelope, long retryUntil)
     {
         for (var e = ex; e is not null; e = e.InnerException)
         {
@@ -112,6 +112,20 @@ internal abstract class Consumer(string name, string mode, IReadOnlyList<string>
         }
 
         return connection.State != System.Data.ConnectionState.Open ? new TransientFailure(envelope, retryUntil, ex) : new HandlerFailure(envelope, retryUntil, ex);
+    }
+
+    /// <summary>
+    /// Fails the event when its handler returned but the batch's transaction is over. A handler can catch an error with
+    /// which the database rolled the whole transaction back. The writes of the events before it are gone then, and on
+    /// SQL Server every later statement, the checkpoint update too, would commit on its own.
+    /// </summary>
+    protected static void RequireTransaction(DbTransaction transaction, EventEnvelope envelope, long retryUntil)
+    {
+        if (transaction.Connection is null)
+        {
+            throw new HandlerFailure(envelope, retryUntil, new InvalidOperationException(
+                "The handler returned, but the database had rolled the batch's transaction back. A handler must not catch an error that ends the transaction."));
+        }
     }
 
     protected static Activity? StartActivity(string consumer, EventEnvelope envelope)
@@ -157,6 +171,7 @@ internal sealed class ProjectionConsumer(RegisteredProjection projection, IReadO
                 throw Failure(ex, connection, events[0], events[^1].GlobalPosition);
             }
 
+            RequireTransaction(transaction, events[0], events[^1].GlobalPosition);
             return;
         }
 
@@ -177,6 +192,8 @@ internal sealed class ProjectionConsumer(RegisteredProjection projection, IReadO
                 activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
                 throw Failure(ex, connection, envelope, envelope.GlobalPosition);
             }
+
+            RequireTransaction(transaction, envelope, envelope.GlobalPosition);
         }
 
         try

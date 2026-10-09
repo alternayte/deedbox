@@ -40,6 +40,7 @@ public abstract class UpgradeTests(Databases databases, Db db) : RunnerTest(data
     [InlineData("0.2.1")]
     [InlineData("0.3.1")]
     [InlineData("0.4.1")]
+    [InlineData("0.5.0")]
     public async Task A_store_that_a_release_wrote_upgrades_and_the_release_still_runs_on_it(string version)
     {
         await OldVersion.Run(version, "write", Db, ConnectionString, Schema);

@@ -28,6 +28,7 @@ public sealed class FirstStreamTests : IAsyncLifetime
         var store = scope.ServiceProvider.GetRequiredService<IEventStore>();
         await Writing.Execute(store, "cart-1", "apple", 2);
         await Writing.Explicit(store, "cart-1", DateTimeOffset.UnixEpoch);
+        await Writing.Read(store, "cart-1");
         var (cart, version) = await store.Load<Cart>("cart-1");
 
         Assert.Equal((2, true, 2L), (cart.Items["apple"], cart.IsCheckedOut, version));

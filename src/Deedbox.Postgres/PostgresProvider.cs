@@ -227,6 +227,7 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         command.Parameters.Add(new NpgsqlParameter("inline", NpgsqlDbType.Jsonb) { Value = Instances.ListJson(instance.Inline) });
         command.Parameters.Add(new NpgsqlParameter("events", NpgsqlDbType.Jsonb) { Value = Instances.ListJson(instance.Events) });
         Add(command, "formats", instance.Formats);
+        command.Parameters.Add(new NpgsqlParameter("handles", NpgsqlDbType.Jsonb) { Value = (object?)Instances.HandledJson(instance.Handled) ?? DBNull.Value });
         await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -253,11 +254,16 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         while (await reader.ReadAsync(ct))
         {
             rows.Add(new InstanceRow(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Instances.ReadList(reader.GetString(3)),
-                Instances.ReadList(reader.GetString(4)), Instances.ReadList(reader.GetString(5)), reader.GetFieldValue<DateTimeOffset>(6), reader.GetBoolean(7), reader.GetInt32(8)));
+                Instances.ReadList(reader.GetString(4)), Instances.ReadList(reader.GetString(5)), reader.GetFieldValue<DateTimeOffset>(6), reader.GetBoolean(7), reader.GetInt32(8),
+                Instances.ReadHandled(reader.IsDBNull(9) ? null : reader.GetString(9))));
         }
 
         return rows;
     }
+
+    // A read never waits for a row lock here.
+    public override async Task<List<CheckpointRow>?> TryReadCheckpoints(DbConnection connection, DbTransaction transaction, CancellationToken ct) =>
+        await ReadCheckpoints(connection, transaction, ct);
 
     public override async Task<List<CheckpointRow>> ReadCheckpoints(DbConnection connection, DbTransaction? transaction, CancellationToken ct)
     {
@@ -752,11 +758,11 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             """;
 
         public readonly string WriteInstance = $"""
-            INSERT INTO {s}.instances (instance_id, host, app, consumers, inline_projections, event_types, seen_at, formats)
-            VALUES (@id, @host, @app, @consumers, @inline, @events, clock_timestamp(), @formats)
+            INSERT INTO {s}.instances (instance_id, host, app, consumers, inline_projections, event_types, seen_at, formats, handles)
+            VALUES (@id, @host, @app, @consumers, @inline, @events, clock_timestamp(), @formats, @handles)
             ON CONFLICT (instance_id) DO UPDATE SET
                 consumers = EXCLUDED.consumers, inline_projections = EXCLUDED.inline_projections,
-                event_types = EXCLUDED.event_types, seen_at = clock_timestamp(), formats = EXCLUDED.formats
+                event_types = EXCLUDED.event_types, seen_at = clock_timestamp(), formats = EXCLUDED.formats, handles = EXCLUDED.handles
             """;
 
         public readonly string Leave = $"DELETE FROM {s}.instances WHERE instance_id = @id";
@@ -765,7 +771,7 @@ internal sealed partial class PostgresProvider : DeedboxProvider
 
         public readonly string ReadInstances = $"""
             SELECT instance_id, host, app, consumers::text, inline_projections::text, event_types::text, seen_at,
-                seen_at > clock_timestamp() - @live, formats
+                seen_at > clock_timestamp() - @live, formats, handles::text
             FROM {s}.instances ORDER BY started_at
             """;
 
@@ -807,10 +813,11 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
             """;
 
+        // Only a queued job changes: an instance that rejected a job must not overwrite the result of one that ran it since.
         public readonly string UpdateJob = $"""
             UPDATE {s}.jobs SET status = @status, args = @args, progress = @progress, started_at = @started_at, finished_at = @finished_at,
                 updated_at = now(), kind = @kind
-            WHERE id = @id
+            WHERE id = @id AND status = 'queued'
             """;
 
         public readonly string ReadJob = $"SELECT {JobColumns} FROM {s}.jobs WHERE id = @id";

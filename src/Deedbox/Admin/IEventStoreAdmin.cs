@@ -56,9 +56,7 @@ public interface IEventStoreAdmin
     /// <param name="projection">The stored projection or subscription name.</param>
     /// <param name="ct">Cancels the call.</param>
     /// <exception cref="DeedboxException">DBX033 when no checkpoint has this name; DBX035 while a live instance registers it.</exception>
-    /// <remarks>The default body exists so that test doubles written against 0.2 still compile; Deedbox's own admin overrides it.</remarks>
-    Task RetireAsync(string projection, CancellationToken ct = default) =>
-        throw new NotSupportedException("This IEventStoreAdmin does not support RetireAsync. Use the one that AddDeedbox registers.");
+    Task RetireAsync(string projection, CancellationToken ct = default);
 
     /// <summary>Queues a job that rebuilds the stored state of every stream of a type from its events.</summary>
     /// <param name="streamType">The stored stream type name.</param>
@@ -95,9 +93,7 @@ public interface IEventStoreAdmin
     /// <param name="tenantId">The tenant; pass an empty string when the app has no tenants.</param>
     /// <param name="ct">Cancels the call.</param>
     /// <returns>The erasure jobs, one per period, in period order, and how many keys the call deleted.</returns>
-    /// <remarks>The default body exists so that test doubles written against 0.3 still compile; Deedbox's own admin overrides it.</remarks>
-    Task<ErasureResult> EraseIdentityAsync(string identity, string tenantId, CancellationToken ct = default) =>
-        throw new NotSupportedException("This IEventStoreAdmin does not support EraseIdentityAsync. Use the one that AddDeedbox registers.");
+    Task<ErasureResult> EraseIdentityAsync(string identity, string tenantId, CancellationToken ct = default);
 
     /// <summary>
     /// Destroys the pseudonym secret of one period in a tenant, so its subject IDs can never be linked to an identity
@@ -109,9 +105,7 @@ public interface IEventStoreAdmin
     /// <param name="tenantId">The tenant; pass an empty string when the app has no tenants.</param>
     /// <param name="ct">Cancels the call.</param>
     /// <returns>True when the period had a secret; false when it had none or was already destroyed.</returns>
-    /// <remarks>The default body exists so that test doubles written against 0.3 still compile; Deedbox's own admin overrides it.</remarks>
-    Task<bool> DestroyPseudonymPeriodAsync(string periodId, string tenantId, CancellationToken ct = default) =>
-        throw new NotSupportedException("This IEventStoreAdmin does not support DestroyPseudonymPeriodAsync. Use the one that AddDeedbox registers.");
+    Task<bool> DestroyPseudonymPeriodAsync(string periodId, string tenantId, CancellationToken ct = default);
 }
 
 /// <summary>What an erasure call did before it returned.</summary>

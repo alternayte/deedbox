@@ -47,4 +47,12 @@ internal static class EventDecoding
 
         return decoded;
     }
+
+    /// <summary>The envelope of a stored event: its current name and version, after upcasting, not the stored alias.</summary>
+    public static EventEnvelope Envelope(DeedboxRuntime runtime, StoredEvent e, object decoded, IReadOnlyList<string> erasedSubjects)
+    {
+        var registration = runtime.Registry.FindStoredName(e.EventType);
+        return new EventEnvelope(e.EventId, e.TenantId, e.StreamId, e.StreamType, e.Version, e.GlobalPosition,
+            registration?.Name ?? e.EventType, registration?.Version ?? e.EventVersion, decoded, EventMetadata.FromJson(e.Metadata ?? "{}"), e.OccurredAt, erasedSubjects);
+    }
 }

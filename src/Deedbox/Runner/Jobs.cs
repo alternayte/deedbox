@@ -168,8 +168,9 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
     }
 
     /// <summary>
-    /// True when this instance cannot run the job, a rebuild of a projection or of a stream type's snapshots that it
-    /// does not register, but a live instance can. With no such instance, the job runs here and fails with the reason.
+    /// True when this instance leaves the job to a live instance: a rebuild of a projection or of a stream type's
+    /// snapshots that it does not register, or a rebuild of a projection of which a live instance has a version that
+    /// handles more. With no such instance, the job runs here, and fails with the reason when it cannot.
     /// </summary>
     private async Task<bool> LeaveForAnother(JobRow job, DbConnection connection, DbTransaction transaction, CancellationToken ct)
     {
@@ -177,7 +178,14 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         Func<InstanceRow, bool>? canRun = job.Kind switch
         {
             Jobs.Rebuild when args["projection"]?.GetValue<string>() is { } name
-                && !services.GetRequiredService<ProjectionSet>().All.Any(p => p.Name == name) => i => i.Consumers.Contains(name, StringComparer.Ordinal),
+                && !services.GetRequiredService<ProjectionSet>().All.Any(p => p.Name == name)
+                // A subscription that this instance registers is not left to another: no instance can rebuild it.
+                && !services.GetRequiredService<ProjectionSet>().Subscriptions.Any(s => s.Name == name) => i => i.Consumers.Contains(name, StringComparer.Ordinal),
+            // An older version of the projection leaves the rebuild to a live instance of a version that handles more:
+            // its reset does not clear what the newer version wrote, and the replay would apply those events again.
+            Jobs.Rebuild when args["projection"]?.GetValue<string>() is { } name
+                && AsyncRunner.Consumers(runtime, services.GetRequiredService<ProjectionSet>()).FirstOrDefault(c => c.Name == name && c.Mode != CheckpointMode.Subscription) is { } consumer
+                => i => i.HandlesMoreThan(name, consumer.Handles),
             Jobs.Snapshots when args["streamType"]?.GetValue<string>() is { } streamType
                 && runtime.Registry.FindStream(streamType) is null => i => i.Events.Any(e => Instances.StreamOf(e) == streamType),
             _ => null,
@@ -259,12 +267,28 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
             await work.RunBeforeCounter();
         }
 
+        // A reset can catch an error with which the database rolled the transaction back. Its deletes are undone then,
+        // and on SQL Server the checkpoint would move to the start on its own, so every event would be applied again.
+        if (transaction.Connection is null)
+            throw new JobRejected($"The reset of projection '{name}' returned, but the database had rolled the job's transaction back. A reset must not catch an error that ends the transaction.");
+
         var mode = projection.Run == Deedbox.Run.Inline ? CheckpointMode.Inline : CheckpointMode.Async;
         await Provider.UpdateCheckpoint(connection, transaction, row with { Position = 0, Status = CheckpointStatus.Rebuilding, Mode = mode, Error = null }, ct);
 
-        // A rebuild starts the record of what the projection handles again, from this version.
+        // A rebuild starts the record of what the projection handles again: this version, and the version of every
+        // instance with a heartbeat row. An instance of an older version can run the job; the record must not then
+        // lose what a newer version handles, or the older one would move the checkpoint past those events.
         var consumer = AsyncRunner.Consumers(runtime, services.GetRequiredService<ProjectionSet>()).First(c => c.Name == name);
-        await Provider.UpdateHandles(connection, transaction, name, consumer.Handles.ToJson(), ct);
+        var handles = consumer.Handles;
+        var instances = await Provider.ReadInstances(connection, transaction, runtime.Options.Runner.HeartbeatInterval * Instances.LiveIntervals, ct);
+
+        // A newer version may have joined while the reset ran. This version's reset does not clear what that version
+        // wrote, so the job is given back with the reset undone, and the newer version runs it.
+        if (instances.Any(i => i.Live && i.Id != runtime.InstanceId && i.HandlesMoreThan(name, consumer.Handles)))
+            throw new JobLeft();
+        foreach (var instance in instances)
+            handles = handles.With(instance.Handled?.GetValueOrDefault(name));
+        await Provider.UpdateHandles(connection, transaction, name, handles.ToJson(), ct);
         return new JsonObject { ["projection"] = name, ["previousPosition"] = row.Position, ["previousStatus"] = row.Status };
     }
 
