@@ -38,3 +38,5 @@ It is a library; nothing runs on its own. The CLI runs with `dotnet run --projec
 - gate: a step in the build prompt where work stops for human review.
 - guarantee defect: a defect that loses an event, applies one twice in a projection, moves a checkpoint past an unapplied event, or leaves erased data readable. Avoid: blocker, critical bug.
 - edge defect: a confirmed defect that breaks no README guarantee. Avoid: minor bug, nit.
+- archived stream: a stream whose events up to archived_to are in deedbox.events_archive; it stays loadable, readable and appendable. Avoid: cold stream, closed stream.
+- archive line: the lowest checkpoint of every consumer that is not retired; an archive moves no event above it. Avoid: watermark, low-water mark.

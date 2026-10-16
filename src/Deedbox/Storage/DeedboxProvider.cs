@@ -74,7 +74,10 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// <returns>The position of the last event, or -1 when the instance has no heartbeat row; nothing is written then.</returns>
     public abstract Task<long> InsertEvents(DbConnection connection, DbTransaction transaction, Guid instanceId, string tenantId, string streamId, string streamType, DateTimeOffset occurredAt, IReadOnlyList<NewEvent> events, CancellationToken ct);
 
-    /// <summary>The stream's events with <paramref name="afterVersion"/> &lt; version &lt;= <paramref name="toVersion"/>, in version order.</summary>
+    /// <summary>
+    /// The stream's events with <paramref name="afterVersion"/> &lt; version &lt;= <paramref name="toVersion"/>, in version
+    /// order, from the events table and the archive together.
+    /// </summary>
     public abstract IAsyncEnumerable<StoredEvent> ReadStreamEvents(DbConnection connection, DbTransaction? transaction, string tenantId, string streamId, long afterVersion, long toVersion, CancellationToken ct);
 
     /// <summary>Stores a snapshot, but only while the stream is still at <see cref="Snapshot.At"/>.</summary>
@@ -183,8 +186,9 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     /// The read stops at the committed value of the position counter, read first in the same batch. Every position at or
     /// below it is committed, so the scan never meets an append in flight. A locking read that waits on such an append
     /// can otherwise resume past positions that the next append reuses after a rollback, and return a later one first.
+    /// With <paramref name="withArchive"/>, the archive is merged in by position.
     /// </summary>
-    public abstract Task<List<StoredEvent>> ReadEventsAfter(DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, CancellationToken ct);
+    public abstract Task<List<StoredEvent>> ReadEventsAfter(DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, bool withArchive, CancellationToken ct);
 
     /// <summary>The highest committed position.</summary>
     public abstract Task<long> ReadHead(DbConnection connection, DbTransaction? transaction, CancellationToken ct);
@@ -250,10 +254,17 @@ internal abstract class DeedboxProvider : IAsyncDisposable
     public abstract Task<int> DeleteSubjectStream(DbConnection connection, DbTransaction transaction, string tenantId, string subjectId, string streamId, CancellationToken ct);
 
     /// <summary>
-    /// Deletes a stream's events below <paramref name="keepFromVersion"/>, its subject pairs and its stored state, and
-    /// marks the stream row deleted.
+    /// Deletes a stream's events below <paramref name="keepFromVersion"/>, its archived events, its subject pairs and its
+    /// stored state, and marks the stream row deleted.
     /// </summary>
     public abstract Task DeleteStreamData(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, long keepFromVersion, CancellationToken ct);
+
+    /// <summary>
+    /// Moves a stream's events at or below global position <paramref name="line"/> from the events table to the archive,
+    /// and records the highest archived version on the stream row. The caller holds the stream's lock.
+    /// </summary>
+    /// <returns>How many events moved, and how many of the stream's events stay in the events table.</returns>
+    public abstract Task<(int Moved, int Left)> ArchiveStream(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, long line, CancellationToken ct);
 
     // ---- Pseudonyms ----
 
@@ -357,7 +368,14 @@ internal static class CheckpointMode
     public const string Subscription = "subscription";
 }
 
-internal sealed record CheckpointRow(string Name, long Position, string Mode, string Status, string? Error, DateTimeOffset UpdatedAt, string? Handles = null);
+/// <summary>
+/// One checkpoint. <paramref name="ArchiveUntil"/> is set by a rebuild that includes archived events: while the position
+/// is below it, the consumer reads the archive too.
+/// </summary>
+internal sealed record CheckpointRow(string Name, long Position, string Mode, string Status, string? Error, DateTimeOffset UpdatedAt, string? Handles = null, long? ArchiveUntil = null)
+{
+    public bool ReadsArchive(long position) => ArchiveUntil > position;
+}
 
 /// <summary>
 /// A checkpoint to create if it is missing. <paramref name="Rebuild"/> starts a new inline one in catch-up.

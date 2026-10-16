@@ -1,13 +1,15 @@
 ---
 title: Table growth
-description: What a growing events table costs, and how to remove data.
+description: What a growing events table costs, how to archive finished streams, and how to remove data.
 sidebar:
   order: 7
 ---
 
+import ArchiveStreams from '../../../snippets/archive-streams.md';
+
 This page helps you plan storage for a store whose events table keeps growing.
 
-Deedbox keeps every event in one table, `deedbox.events`. It has no archive and no partitions.
+Deedbox keeps the events of active streams in `deedbox.events`. You can move the events of finished streams to `deedbox.events_archive`. Neither table has partitions.
 
 ## What does not slow down
 
@@ -17,12 +19,53 @@ Deedbox keeps every event in one table, `deedbox.events`. It has no archive and 
 
 ## What grows with the table
 
-- **Rebuilds.** A rebuild reads every event from the first global position. Its time grows with the number of events in the store, not with the number that the projection handles.
+- **Rebuilds.** A rebuild reads every event in `deedbox.events` from the first global position. Its time grows with the number of events in that table, not with the number that the projection handles.
 - **Disk and backups.** Each event is one row with its payload and metadata, and the table has three indexes.
+
+## Archive finished streams
+
+When a stream is finished, for example a manuscript that is published or rejected, archive it. The archive moves the stream's events from `deedbox.events` to `deedbox.events_archive`. Global positions do not change, so checkpoints stay valid.
+
+<ArchiveStreams />
+
+From the CLI:
+
+```sh
+deedbox archive --file finished.txt --provider postgres --connection "$DEEDBOX_CONNECTION" --wait
+```
+
+The archive is a job in `deedbox.jobs`, so it has an audit trail. Its progress counts the streams it archived, the streams it archived in part, the streams it skipped because they are missing or deleted, and the events it moved.
+
+An archived stream behaves as before:
+
+- `Load` returns the same state and version.
+- `ReadStream` returns the same events.
+- An append succeeds. Its events go to `deedbox.events`. Archive the stream again to move them.
+- Erasure and `DeleteStream` work. `DeleteStream` deletes the archived events too.
+
+### What the archive does not move
+
+The archive moves only events that every projection and subscription has applied. It uses the lowest checkpoint of every consumer that is not retired. A running inline projection does not hold the archive back. A stalled consumer, a consumer in catch-up and a rebuild do. When a stream has events above that line, the job archives the stream up to the line and counts the stream as partial. A later archive moves the rest.
+
+### Rebuilds and the archive
+
+A rebuild skips archived events. A new projection or subscription also starts without them. To replay them, rebuild with `RebuildWithArchiveAsync`, or with `deedbox rebuild <projection> --include-archived`. That replay reads both tables in global position order.
+
+### Before the first archive
+
+- Every app instance must run Deedbox 0.8 or later. An instance of 0.7 or earlier does not read the archive. While such an instance has a heartbeat row, an archive fails with [DBX041](/reference/errors/dbx041/).
+- After the first archive, you cannot roll back to 0.7 or earlier.
+
+### What you can do with the archive table
+
+- Move it to cheaper storage: a tablespace on Postgres, or a filegroup or page compression on SQL Server.
+- Back it up apart from the rest of the store.
+
+Do not delete or truncate its rows. `ReadStream`, loads that replay events, erasure and rebuilds with the archive read them.
 
 ## Remove data
 
-- `DeleteStream` deletes the events and the stored state of one stream, and leaves one `StreamDeleted` event. The stream ID is not reused. Projections that handle `StreamDeleted` remove what they stored for the stream.
-- Erasing a subject or shredding a tenant removes keys, not rows. The table keeps its size.
+- `DeleteStream` deletes the events and the stored state of one stream, archived events included, and leaves one `StreamDeleted` event. The stream ID is not reused. Projections that handle `StreamDeleted` remove what they stored for the stream.
+- Erasing a subject or shredding a tenant removes keys, not rows. The tables keep their size.
 
 To keep rebuild time low, measure a rebuild on a copy of production before you need one. To serve reads during a long rebuild, see [replace a read model without downtime](/how-to/replace-a-read-model/).

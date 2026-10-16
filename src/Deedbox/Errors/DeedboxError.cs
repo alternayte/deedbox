@@ -125,4 +125,7 @@ public static class DeedboxError
 
     /// <summary>DBX040: The transaction's isolation level is not READ COMMITTED.</summary>
     public const string IsolationLevel = Errors.IsolationLevel;
+
+    /// <summary>DBX041: An instance of the store cannot read archived events.</summary>
+    public const string ArchiveUnreadable = Errors.ArchiveUnreadable;
 }

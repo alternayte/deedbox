@@ -38,7 +38,8 @@ This page lists every public type. Each member has XML docs, so your editor show
 | `IPseudonyms` | Compute a pseudonymous subject ID from an identity, and erase by identity, in the scope's tenant. Scoped. |
 | `PseudonymPeriod` | `Quarter(at)` and `Month(at)`: calendar period IDs in UTC. |
 | `SubjectErased`, `StreamDeleted` | Built-in events every handler can handle. |
-| `IEventStoreAdmin` | Status, jobs, rebuild, retire, skip, erase, erase by identity, pseudonym period destroy, snapshots, key re-wrap, tenant shred. Apps call it; they do not implement it. |
+| `IEventStoreAdmin` | Status, jobs, rebuild, rebuild with the archive, retire, skip, erase, erase by identity, pseudonym period destroy, snapshots, archive, key re-wrap, tenant shred. Apps call it; they do not implement it. |
+| `StreamKey` | A tenant and a stream ID: what `ArchiveStreamsAsync` takes. |
 | `StoreStatus`, `ConsumerStatus`, `JobInfo` | What the admin API returns, as properties. `JobInfo` has `CreatedAt`, `StartedAt` and `FinishedAt`. |
 | `ConsumerMode`, `ConsumerState`, `JobKind`, `JobState` | The enums of `ConsumerStatus.Mode`, `ConsumerStatus.Status`, `JobInfo.Kind` and `JobInfo.Status`. |
 | `ErasureResult` | `JobIds` and `KeysDeleted`: what `EraseSubjectAsync` and `EraseIdentityAsync` of the admin API return. |

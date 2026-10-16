@@ -43,6 +43,7 @@ internal static class Errors
     public const string InstanceEvicted = "DBX038";
     public const string JsonKeyOrder = "DBX039";
     public const string IsolationLevel = "DBX040";
+    public const string ArchiveUnreadable = "DBX041";
 
     /// <summary>The error catalogue: each code's page title. The docs build one page per entry; a test checks every code has one.</summary>
     public static readonly IReadOnlyDictionary<string, string> Titles = new Dictionary<string, string>
@@ -87,5 +88,6 @@ internal static class Errors
         [InstanceEvicted] = "This instance was not counted as live",
         [JsonKeyOrder] = "Polymorphic JSON cannot be read back on this database",
         [IsolationLevel] = "The transaction's isolation level is not READ COMMITTED",
+        [ArchiveUnreadable] = "An instance of the store cannot read archived events",
     };
 }

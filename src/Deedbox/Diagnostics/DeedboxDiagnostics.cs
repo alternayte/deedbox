@@ -37,6 +37,8 @@ internal static class DeedboxDiagnostics
 
     public static readonly Counter<long> ErasedStreams = Meter.CreateCounter<long>("deedbox.erasure.streams", "{stream}", "Streams an erasure job has handled.");
 
+    public static readonly Counter<long> ArchivedEvents = Meter.CreateCounter<long>("deedbox.archive.events", "{event}", "Events an archive job has moved to the archive table.");
+
     public static readonly Counter<long> Decrypts = Meter.CreateCounter<long>("deedbox.personal_data.decrypts", "{field}", "Personal-data fields decrypted.");
 
     public static readonly Counter<long> Redactions = Meter.CreateCounter<long>("deedbox.personal_data.redactions", "{field}", "Personal-data fields read as erased.");

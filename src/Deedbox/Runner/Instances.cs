@@ -14,7 +14,7 @@ namespace Deedbox;
 /// </summary>
 internal sealed record InstanceRow(
     Guid Id, string Host, string App, IReadOnlyList<string> Consumers, IReadOnlyList<string> Inline, IReadOnlyList<string> Events, DateTimeOffset SeenAt,
-    bool Live = true, int Formats = Crypto.Formats, IReadOnlyDictionary<string, Handles>? Handled = null)
+    bool Live = true, int Formats = Instances.Formats, IReadOnlyDictionary<string, Handles>? Handled = null)
 {
     /// <summary>
     /// True when this instance's version of <paramref name="consumer"/> handles an event that <paramref name="other"/>
@@ -59,6 +59,16 @@ internal static class Instances
 {
     /// <summary>An instance counts as live while its heartbeat is younger than this many intervals.</summary>
     public const int LiveIntervals = 3;
+
+    /// <summary>
+    /// The newest storage format this build reads, as its heartbeat row records it. Formats 1 and 2 are the crypto
+    /// formats (<see cref="Crypto.Formats"/>). Format 3 adds archived events: a version that does not read the archive
+    /// rebuilds stored state from part of a stream, so nothing is archived while such a version has a row.
+    /// </summary>
+    public const int Formats = 3;
+
+    /// <summary>The first format whose instances read events_archive.</summary>
+    public const int ArchiveFormat = 3;
 
     /// <summary>The liveness window the CLI uses; apps derive theirs from <see cref="RunnerOptions.HeartbeatInterval"/>.</summary>
     public static readonly TimeSpan DefaultLiveFor = TimeSpan.FromSeconds(30);

@@ -1,6 +1,7 @@
 using Deedbox.Tests.Infrastructure;
 using Deedbox.Tests.Projections;
 using Deedbox.Tests.Runner;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace Deedbox.Tests.Torture;
@@ -11,13 +12,22 @@ public sealed class SqlServerRunnerTortureTests(Databases databases) : RunnerTor
 
 public sealed class Dense : Projection
 {
-    public Dense(Probe probe) => On<ItemAdded>(async (_, ctx) =>
+    private readonly Probe _probe;
+
+    public Dense(Probe probe)
     {
-        probe.MaybeFail(ctx.EventId);
-        await TestTables.Insert(ctx.Connection, ctx.Transaction,
-            $"INSERT INTO {probe.Table("applied")} (event_id, projection, position) VALUES (@id, 'dense', @position)",
-            ("id", ctx.EventId.ToString()), ("position", ctx.GlobalPosition!.Value));
-    });
+        _probe = probe;
+        On<ItemAdded>(async (_, ctx) =>
+        {
+            probe.MaybeFail(ctx.EventId);
+            await TestTables.Insert(ctx.Connection, ctx.Transaction,
+                $"INSERT INTO {probe.Table("applied")} (event_id, projection, position) VALUES (@id, 'dense', @position)",
+                ("id", ctx.EventId.ToString()), ("position", ctx.GlobalPosition!.Value));
+        });
+    }
+
+    protected override Task ResetAsync(WriteContext context) =>
+        TestTables.Insert(context.Connection, context.Transaction, $"DELETE FROM {_probe.Table("applied")} WHERE projection = 'dense'");
 }
 
 public sealed class Sparse : Projection
@@ -43,8 +53,10 @@ public sealed class Deliveries : Subscription
 
 /// <summary>
 /// Runners are stopped, restarted and have their database sessions killed mid-batch while three instances compete
-/// for the same projections and handlers fail at random. Every event must still be applied exactly once by each
-/// projection and delivered at least once by the subscription. An idle store must stay under its query budget.
+/// for the same projections and handlers fail at random, while archive jobs move streams out of the events table and
+/// one projection is rebuilt with the archive. Every event must still be applied exactly once by each projection and
+/// delivered at least once by the subscription, and no event may be lost between the two tables. An idle store must
+/// stay under its query budget.
 /// </summary>
 [Trait("Category", "Torture")]
 public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTest(databases, db)
@@ -94,6 +106,32 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
             }
         });
 
+        var admin = writer.Services.GetRequiredService<IEventStoreAdmin>();
+        var streams = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>();
+        var archives = 0;
+        using var archiving = new CancellationTokenSource();
+        var archiveTask = Task.Run(async () =>
+        {
+            var random = new Random();
+            var rebuilt = false;
+            while (!archiving.IsCancellationRequested)
+            {
+                await Task.Delay(random.Next(150, 400), CancellationToken.None);
+                var picked = streams.Keys.Where(_ => random.Next(3) == 0).Select(id => new StreamKey("", id)).ToList();
+                if (picked.Count > 0)
+                {
+                    await admin.ArchiveStreamsAsync(picked, CancellationToken.None);
+                    archives++;
+                }
+
+                if (!rebuilt && archives >= 3)
+                {
+                    await admin.RebuildWithArchiveAsync("dense", CancellationToken.None);
+                    rebuilt = true;
+                }
+            }
+        });
+
         var items = 0;
         var orders = 0;
         await Task.WhenAll(Enumerable.Range(0, 6).Select(async w =>
@@ -104,12 +142,14 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
                 if (random.Next(100) < 3)
                 {
                     await StoreOf(writer).Append($"order-{w}-{i}", ExpectedVersion.NoStream, [new OrderPlaced("x")]);
+                    streams[$"order-{w}-{i}"] = true;
                     Interlocked.Increment(ref orders);
                 }
                 else
                 {
                     var count = random.Next(1, 4);
                     await StoreOf(writer).Append($"cart-{w}", ExpectedVersion.Any, Enumerable.Range(0, count).Select(_ => (object)new ItemAdded("a", 1)));
+                    streams[$"cart-{w}"] = true;
                     Interlocked.Add(ref items, count);
                 }
 
@@ -117,15 +157,30 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
             }
         }));
 
+        await archiving.CancelAsync();
+        await archiveTask;
         await chaos.CancelAsync();
         await chaosTask;
         var head = await Head(writer);
         foreach (var name in new[] { "dense", "sparse", "deliveries" })
             await WaitForCheckpoint(writer, name, r => r.Position >= head && r.Status == "running");
 
+        // Every archive job finishes, and one more moves every stream; positions stay gapless across both tables.
+        var last = await admin.ArchiveStreamsAsync([.. streams.Keys.Select(id => new StreamKey("", id))], Ct);
+        await WaitFor(async () => (await admin.GetStatusAsync(Ct)).Jobs.All(j => j.Status is JobState.Done or JobState.Failed)
+            && (await admin.GetJobAsync(last, Ct))?.Status == JobState.Done, "the archive jobs");
+        Assert.All((await admin.GetStatusAsync(Ct)).Jobs, j => Assert.Equal(JobState.Done, j.Status));
+        Assert.Equal(0, await Scalar<int>($"SELECT COUNT(*) FROM {Table("events")}"));
+        Assert.Equal(head, await Scalar<long>($"SELECT COUNT(*) FROM {Table("events_archive")}"));
+        foreach (var w in Enumerable.Range(0, 6))
+        {
+            var cart = await StoreOf(writer).Load<Cart>($"cart-{w}");
+            Assert.Equal(cart.Version, (await StoreOf(writer).ReadStream($"cart-{w}", limit: 10_000)).Count);
+        }
+
         TestContext.Current.TestOutputHelper?.WriteLine(
             $"{Db}: {items} items, {orders} orders, {restarts} runner restarts, {kills} session kills, {probe.Faulted.Count} injected faults");
-        Assert.True(orders > 0 && restarts + kills > 0);
+        Assert.True(orders > 0 && restarts + kills > 0 && archives > 0);
         Assert.Equal(items, await AppliedCount("dense"));
         Assert.Equal(orders, await AppliedCount("sparse"));
         Assert.Equal(items, probe.Deliveries.Count);

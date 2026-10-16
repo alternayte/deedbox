@@ -716,7 +716,7 @@ internal sealed class EventStore(
         return stream!;
     }
 
-    private static void ValidateStreamId(string streamId)
+    internal static void ValidateStreamId(string streamId)
     {
         ArgumentNullException.ThrowIfNull(streamId);
         if (streamId.Length is 0 or > MaxStreamIdLength || char.IsWhiteSpace(streamId[0]) || char.IsWhiteSpace(streamId[^1]))

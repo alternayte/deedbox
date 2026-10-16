@@ -284,7 +284,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
             // A stalled consumer tries its one event first, so a retry touches nothing after it.
             var limit = _singleStepUntil is null && row.Status != CheckpointStatus.Stalled ? Options.BatchSize : 1;
             _stepped = limit == 1;
-            var stored = await Provider.ReadEventsAfter(connection, transaction, row.Position, limit, consumer.PayloadTypes, ct);
+            var stored = await Provider.ReadEventsAfter(connection, transaction, row.Position, limit, consumer.PayloadTypes, row.ReadsArchive(row.Position), ct);
             if (stored.Count == 0)
             {
                 (Lag, LagSeconds) = (0, 0);
@@ -599,7 +599,7 @@ internal sealed partial class ConsumerLoop(Consumer consumer, DeedboxRuntime run
                 return CutOverResult.OutOfTime;
             }
 
-            var stored = await Provider.ReadEventsAfter(connection, transaction, position, Options.BatchSize, consumer.PayloadTypes, ct);
+            var stored = await Provider.ReadEventsAfter(connection, transaction, position, Options.BatchSize, consumer.PayloadTypes, row.ReadsArchive(position), ct);
             if (stored.Count == 0)
                 break;
             // A handler here runs while every append in the store waits, so its limit is the hold, not the handler

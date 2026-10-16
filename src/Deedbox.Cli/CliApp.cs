@@ -128,8 +128,10 @@ internal static class CliApp
 
         // ---- jobs the app runs ----
         var projectionName = new Argument<string>("projection") { Description = "The stored projection name." };
-        var rebuild = new Command("rebuild", "Queue an in-place rebuild of a projection; the app's runner does it.") { projectionName, wait };
-        rebuild.SetAction((result, ct) => Queue(result, target, output, wait, Jobs.Rebuild, Admin.RebuildArgs(result.GetValue(projectionName)!), ct));
+        var includeArchived = new Option<bool>("--include-archived") { Description = "Replay the events of archived streams too." };
+        var rebuild = new Command("rebuild", "Queue an in-place rebuild of a projection; the app's runner does it.") { projectionName, includeArchived, wait };
+        rebuild.SetAction((result, ct) => Queue(result, target, output, wait, Jobs.Rebuild,
+            Admin.RebuildArgs(result.GetValue(projectionName)!, result.GetValue(includeArchived)), ct));
 
         var retiredName = new Argument<string>("projection") { Description = "The stored projection or subscription name." };
         var retire = new Command("retire", "Retire a projection that no live instance registers; nothing applies it until a rebuild.") { retiredName };
@@ -200,6 +202,25 @@ internal static class CliApp
             foreach (var id in jobs)
                 failed |= await Follow(result, target, output, wait, Jobs.Erase, id, ct) != 0;
             return failed ? 1 : 0;
+        });
+
+        var archiveTenant = new Option<string>("--tenant") { Description = "The tenant of every stream; empty by default.", DefaultValueFactory = _ => "" };
+        var archiveStream = new Option<string?>("--stream") { Description = "The stream to archive." };
+        var archiveFile = new Option<FileInfo?>("--file") { Description = "A file with one stream ID per line, all in --tenant." };
+        var archive = new Command("archive", "Queue an archive of finished streams: their events move to the archive table.") { archiveTenant, archiveStream, archiveFile, wait };
+        archive.SetAction(async (result, ct) =>
+        {
+            var (streamId, file) = (result.GetValue(archiveStream), result.GetValue(archiveFile));
+            if ((streamId is null) == (file is null))
+                throw new CliException("Pass --stream <id> for one stream, or --file <path> with one stream ID per line.");
+            var archiveTenantId = result.GetValue(archiveTenant)!;
+            IReadOnlyList<string> ids = streamId is not null
+                ? [streamId]
+                : [.. (await File.ReadAllLinesAsync(file!.FullName, ct)).Where(l => l.Length > 0)];
+            Guid id;
+            await using (var db = target.Open(result))
+                id = await Admin.Archive(db, TimeProvider.System, [.. ids.Select(i => new StreamKey(archiveTenantId, i))], ct);
+            return await Follow(result, target, output, wait, Jobs.Archive, id, ct);
         });
 
         var streamType = new Argument<string>("streamType") { Description = "The stored stream type name." };
@@ -284,6 +305,7 @@ internal static class CliApp
             retire,
             skip,
             erase,
+            archive,
             new Command("snapshots", "Rebuild stored state.") { snapshotsRebuild },
             new Command("keys", "Manage the master key.") { rewrap },
             new Command("tenant", "Manage tenants.") { shred },

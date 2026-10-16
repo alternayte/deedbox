@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Text.Json.Nodes;
 
 namespace Deedbox;
@@ -146,7 +147,69 @@ internal static class Admin
         await transaction.CommitAsync(ct);
     }
 
-    public static JsonObject RebuildArgs(string projection) => new() { ["projection"] = Required(projection, nameof(projection)) };
+    public static JsonObject RebuildArgs(string projection, bool includeArchived = false)
+    {
+        var args = new JsonObject { ["projection"] = Required(projection, nameof(projection)) };
+        if (includeArchived)
+            args["includeArchived"] = true;
+        return args;
+    }
+
+    /// <summary>
+    /// Queues an archive of the streams. It refuses while a heartbeat row comes from a version that does not read the
+    /// archive; the job checks this again for each stream.
+    /// </summary>
+    public static async Task<Guid> Archive(DeedboxProvider provider, TimeProvider clock, IReadOnlyList<StreamKey> streams, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(streams);
+        if (streams.Count == 0)
+            throw new ArgumentException("Archive needs at least one stream.", nameof(streams));
+        var list = new JsonArray();
+        foreach (var stream in streams)
+        {
+            ArgumentNullException.ThrowIfNull(stream, nameof(streams));
+            EventStore.ValidateStreamId(stream.StreamId);
+            list.Add((JsonNode)new JsonObject { ["tenantId"] = DeedboxContext.ValidTenant(stream.TenantId), ["streamId"] = stream.StreamId });
+        }
+
+        await using var connection = provider.CreateConnection();
+        await connection.OpenAsync(ct);
+        await RequireArchiveReaders(provider, connection, null, ct);
+        var job = new JobRow(Uuid7.New(), Jobs.Archive, new JsonObject { ["streams"] = list }.ToJsonString(), JobStatus.Queued, null, clock.GetUtcNow(), null, null);
+        await provider.InsertJob(connection, null, job, ct);
+        return job.Id;
+    }
+
+    /// <summary>
+    /// Fails with DBX041 while any heartbeat row, live or not, comes from a version that does not read the archive. Such
+    /// an instance would rebuild an archived stream's stored state from the events that are left in the events table.
+    /// </summary>
+    public static async Task RequireArchiveReaders(DeedboxProvider provider, DbConnection connection, DbTransaction? transaction, CancellationToken ct)
+    {
+        var old = (await provider.ReadInstances(connection, transaction, Instances.DefaultLiveFor, ct)).Where(i => i.Formats < Instances.ArchiveFormat).ToList();
+        if (old.Count > 0)
+        {
+            throw new DeedboxException(Errors.ArchiveUnreadable,
+                $"Deedbox archives nothing while an instance of Deedbox 0.7 or earlier has a heartbeat row: {Instances.Describe(old)}. " +
+                "Such an instance cannot read archived events. Finish the deploy, wait until those rows are gone, then archive again.");
+        }
+    }
+
+    /// <summary>
+    /// The archive line: the lowest position of every checkpoint that is not retired, and at most the head. A running
+    /// inline projection has applied every committed event in the appends' own transactions, so it holds nothing back.
+    /// Each position at or below the line is committed and applied by every consumer, so moving it hides nothing.
+    /// </summary>
+    public static async Task<long> ArchiveLine(DeedboxProvider provider, DbConnection connection, DbTransaction? transaction, CancellationToken ct)
+    {
+        var head = await provider.ReadHead(connection, transaction, ct);
+        var lowest = (await provider.ReadCheckpoints(connection, transaction, ct))
+            .Where(c => c.Status != CheckpointStatus.Retired && !(c.Mode == CheckpointMode.Inline && c.Status == CheckpointStatus.Running))
+            .Select(c => c.Position)
+            .DefaultIfEmpty(head)
+            .Min();
+        return Math.Min(head, lowest);
+    }
 
     public static JsonObject SkipArgs(string consumer, Guid eventId) => new() { ["projection"] = Required(consumer, nameof(consumer)), ["eventId"] = eventId.ToString("D") };
 
@@ -180,9 +243,13 @@ internal sealed class EventStoreAdmin(DeedboxRuntime runtime) : IEventStoreAdmin
 
     public Task<JobInfo?> GetJobAsync(Guid jobId, CancellationToken ct = default) => Admin.Job(runtime.Provider, jobId, ct);
 
-    public Task<Guid> RebuildAsync(string projection, CancellationToken ct = default)
+    public Task<Guid> RebuildAsync(string projection, CancellationToken ct = default) => Rebuild(projection, includeArchived: false, ct);
+
+    public Task<Guid> RebuildWithArchiveAsync(string projection, CancellationToken ct = default) => Rebuild(projection, includeArchived: true, ct);
+
+    private Task<Guid> Rebuild(string projection, bool includeArchived, CancellationToken ct)
     {
-        var args = Admin.RebuildArgs(projection);
+        var args = Admin.RebuildArgs(projection, includeArchived);
         if (!runtime.Options.Projections.Any(p => p.Name == projection))
             throw new DeedboxException(Errors.UnknownConsumer, $"'{projection}' is not a registered projection, so it cannot be rebuilt. Subscriptions cannot be rebuilt.");
         return Queue(Jobs.Rebuild, args, ct);
@@ -213,6 +280,12 @@ internal sealed class EventStoreAdmin(DeedboxRuntime runtime) : IEventStoreAdmin
             throw new DeedboxException(Errors.UnregisteredState, $"Stream type '{streamType}' is not registered, so its snapshots cannot be rebuilt.");
         return Queue(Jobs.Snapshots, args, ct);
     }
+
+    public Task<Guid> ArchiveStreamsAsync(IReadOnlyList<StreamKey> streams, CancellationToken ct = default) =>
+        Admin.Archive(runtime.Provider, runtime.Clock, streams, ct);
+
+    public Task<Guid> ArchiveStreamAsync(string tenantId, string streamId, CancellationToken ct = default) =>
+        Admin.Archive(runtime.Provider, runtime.Clock, [new StreamKey(tenantId, streamId)], ct);
 
     public Task<int> RewrapKeysAsync(IMasterKeyProvider target, CancellationToken ct = default)
     {

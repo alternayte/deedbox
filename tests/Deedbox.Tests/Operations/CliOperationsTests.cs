@@ -61,6 +61,29 @@ public abstract class CliOperationsTests(Databases databases, Db db) : RunnerTes
     }
 
     [Fact]
+    public async Task Archive_takes_one_stream_or_a_file_of_streams_and_rebuild_can_include_the_archive()
+    {
+        var host = await StartHost(NewProbe(), b => b.Projection<AsyncApplied>("applied", Run.Async));
+        foreach (var id in new[] { "cart-1", "cart-2", "cart-3" })
+            await StoreOf(host).Append(id, ExpectedVersion.NoStream, [new ItemAdded("a", 1)]);
+        await WaitForCaughtUp(host, "applied");
+        var file = Path.GetTempFileName();
+        await File.WriteAllLinesAsync(file, ["cart-2", "cart-3", ""], Ct);
+
+        var one = await Cli(["archive", "--stream", "cart-1", "--wait", .. Target]);
+        var listed = await Cli(["archive", "--file", file, "--wait", .. Target]);
+        var neither = await Cli(["archive", .. Target]);
+        var rebuild = await Cli(["rebuild", "applied", "--include-archived", "--wait", .. Target]);
+        await WaitForCaughtUp(host, "applied");
+        File.Delete(file);
+
+        Assert.Equal((0, 0, 1, 0), (one.Code, listed.Code, neither.Code, rebuild.Code));
+        Assert.Contains("\"archived\":2", listed.Output.Replace(" ", "", StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.Equal(3, await Scalar<int>($"SELECT COUNT(*) FROM {Table("events_archive")}"));
+        Assert.Equal(3, await AppliedCount("async"));
+    }
+
+    [Fact]
     public async Task Erase_deletes_the_key_at_once_and_snapshots_rebuild_queues_for_the_app()
     {
         var host = await StartHost(NewProbe(), b => { Keys.Streams(b); b.Keys(k => k.StoreInDatabase()); });

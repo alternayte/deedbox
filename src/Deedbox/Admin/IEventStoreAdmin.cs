@@ -26,6 +26,35 @@ public interface IEventStoreAdmin
     Task<Guid> RebuildAsync(string projection, CancellationToken ct = default);
 
     /// <summary>
+    /// Queues an in-place rebuild that replays the events of archived streams too, merged in global position order.
+    /// <see cref="RebuildAsync"/> applies no archived event.
+    /// </summary>
+    /// <param name="projection">The stored projection name.</param>
+    /// <param name="ct">Cancels the call.</param>
+    /// <exception cref="DeedboxException">DBX033 when no projection has this name.</exception>
+    Task<Guid> RebuildWithArchiveAsync(string projection, CancellationToken ct = default);
+
+    /// <summary>
+    /// Queues a job that archives streams the app considers finished: it moves their events from the events table to
+    /// the archive table. Each stream stays loadable, readable and appendable, and global positions do not change.
+    /// The job moves only events that every projection and subscription that is not retired has applied; a stream
+    /// with later events is archived up to them and counted as partial, and a later archive moves the rest.
+    /// </summary>
+    /// <param name="streams">The streams, each with its tenant.</param>
+    /// <param name="ct">Cancels the call.</param>
+    /// <returns>The archive job.</returns>
+    /// <exception cref="DeedboxException">DBX041 while an instance of Deedbox 0.7 or earlier has a heartbeat row.</exception>
+    Task<Guid> ArchiveStreamsAsync(IReadOnlyList<StreamKey> streams, CancellationToken ct = default);
+
+    /// <summary>Queues a job that archives one stream, as <see cref="ArchiveStreamsAsync"/> does.</summary>
+    /// <param name="tenantId">The tenant; pass an empty string when the app has no tenants.</param>
+    /// <param name="streamId">The stream ID.</param>
+    /// <param name="ct">Cancels the call.</param>
+    /// <returns>The archive job.</returns>
+    /// <exception cref="DeedboxException">DBX041 while an instance of Deedbox 0.7 or earlier has a heartbeat row.</exception>
+    Task<Guid> ArchiveStreamAsync(string tenantId, string streamId, CancellationToken ct = default);
+
+    /// <summary>
     /// Queues an audited skip of the one event a stalled projection or subscription is stuck on. The job row records
     /// the event and the stall.
     /// </summary>
@@ -107,6 +136,11 @@ public interface IEventStoreAdmin
     /// <returns>True when the period had a secret; false when it had none or was already destroyed.</returns>
     Task<bool> DestroyPseudonymPeriodAsync(string periodId, string tenantId, CancellationToken ct = default);
 }
+
+/// <summary>One stream of one tenant.</summary>
+/// <param name="TenantId">The tenant; an empty string when the app has no tenants.</param>
+/// <param name="StreamId">The stream ID.</param>
+public sealed record StreamKey(string TenantId, string StreamId);
 
 /// <summary>What an erasure call did before it returned.</summary>
 public sealed record ErasureResult
@@ -216,6 +250,9 @@ public enum JobKind
 
     /// <summary>The record of a destroyed pseudonym period; it is written as done and never runs.</summary>
     PseudonymsDestroyed,
+
+    /// <summary>An archive of streams: their events move to the archive table.</summary>
+    Archive,
 }
 
 /// <summary>Where a job is.</summary>
@@ -289,6 +326,7 @@ internal static class Wire
         Jobs.Erase => JobKind.Erase,
         Jobs.Snapshots => JobKind.Snapshots,
         Jobs.PseudonymsDestroyed => JobKind.PseudonymsDestroyed,
+        Jobs.Archive => JobKind.Archive,
         _ => JobKind.Unknown,
     };
 
@@ -324,6 +362,7 @@ internal static class Wire
         JobKind.Erase => Jobs.Erase,
         JobKind.Snapshots => Jobs.Snapshots,
         JobKind.PseudonymsDestroyed => Jobs.PseudonymsDestroyed,
+        JobKind.Archive => Jobs.Archive,
         _ => "unknown",
     };
 

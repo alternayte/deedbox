@@ -261,7 +261,7 @@ public abstract class AppendTortureTests(Databases databases, Db db) : StoreTest
     // A raw range scan under SQL Server's locking READ COMMITTED can skip positions that an append reuses after a rollback.
     private static async Task<List<(long Position, Guid EventId)>> ReadAfter(DeedboxProvider provider, DbConnection connection, long after)
     {
-        var events = await provider.ReadEventsAfter(connection, null, after, 500, [], CancellationToken.None);
+        var events = await provider.ReadEventsAfter(connection, null, after, 500, [], false, CancellationToken.None);
         return [.. events.Select(e => (e.GlobalPosition, e.EventId))];
     }
 

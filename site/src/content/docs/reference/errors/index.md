@@ -49,3 +49,4 @@ This page lists every Deedbox error. Each error message starts with its code and
 | [DBX038](/reference/errors/dbx038/) | This instance was not counted as live |
 | [DBX039](/reference/errors/dbx039/) | Polymorphic JSON cannot be read back on this database |
 | [DBX040](/reference/errors/dbx040/) | The transaction's isolation level is not READ COMMITTED |
+| [DBX041](/reference/errors/dbx041/) | An instance of the store cannot read archived events |

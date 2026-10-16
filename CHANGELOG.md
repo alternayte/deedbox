@@ -2,6 +2,25 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.8.0] - 2026-10-16
+
+This release archives finished streams ([#10](https://github.com/alternayte/deedbox/issues/10)). It breaks only an app that implements `IEventStoreAdmin` itself; apps call the interface and do not implement it. Migration 8 is a forward migration. After the first archive, do not roll back to 0.7 or earlier.
+
+### Added
+
+- `IEventStoreAdmin.ArchiveStreamsAsync(streams)` and `ArchiveStreamAsync(tenantId, streamId)` queue an archive job. The job moves the streams' events from `deedbox.events` to the new `deedbox.events_archive` table, one stream per transaction. It moves only events that every projection and subscription that is not retired has applied. A stream with later events is archived up to them and counted as partial; a later archive moves the rest. The job progress counts archived, partial and skipped streams, and the events moved.
+- An archived stream loads, reads, appends, erases and deletes as before. `Load`, `ReadStream` and every replay of stored state read both tables. An append writes to `deedbox.events`. `DeleteStream` deletes the archived events too.
+- `IEventStoreAdmin.RebuildWithArchiveAsync(projection)` and `deedbox rebuild <projection> --include-archived` replay archived events too, merged in global position order. A plain rebuild, a new projection and a new subscription read only `deedbox.events`.
+- `deedbox archive --stream <id>` or `--file <path>`, with `--tenant` and `--wait`.
+- `StreamKey`, `JobKind.Archive`, and the `deedbox.archive.events` counter.
+- DBX041: an archive fails while a heartbeat row comes from Deedbox 0.7 or earlier. Those versions do not read the archive table, so they would rebuild an archived stream's state from part of its events. This version records storage format 3 in its heartbeat row.
+- Migration 8 adds the `events_archive` table, and the `streams.archived_to` and `checkpoints.archive_until` columns.
+- Docs: the "Table growth" page describes the archive, and "Known limits" states its limits and the rollback limit.
+
+### Changed
+
+- **Breaking:** a class of your own that implements `IEventStoreAdmin` must implement `ArchiveStreamsAsync`, `ArchiveStreamAsync` and `RebuildWithArchiveAsync`.
+
 ## [0.7.0] - 2026-10-16
 
 ### Added
@@ -196,6 +215,8 @@ The first release. It targets .NET 8 and .NET 10.
 - `IEventStoreAdmin`, metrics, traces, and DBX error codes that link to their docs pages.
 - Native `json` columns on SQL Server 2025 and Azure SQL, with `UseSqlServer(connectionString, sql => sql.NativeJson = true)`. Applying the schema converts existing `nvarchar(max)` columns.
 
+[0.8.0]: https://github.com/alternayte/deedbox/releases/tag/v0.8.0
+[0.7.0]: https://github.com/alternayte/deedbox/releases/tag/v0.7.0
 [0.6.0]: https://github.com/alternayte/deedbox/releases/tag/v0.6.0
 [0.5.0]: https://github.com/alternayte/deedbox/releases/tag/v0.5.0
 [0.4.1]: https://github.com/alternayte/deedbox/releases/tag/v0.4.1

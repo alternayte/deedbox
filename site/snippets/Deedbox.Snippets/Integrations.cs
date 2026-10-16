@@ -163,4 +163,16 @@ public static class AdminSnippets
         // end-snippet
         _ = (skip, job);
     }
+
+    public static async Task Archive(IEventStoreAdmin admin, IReadOnlyList<string> finishedManuscripts)
+    {
+        // begin-snippet: archive-streams
+        // The app picks the finished streams from its own read model, in batches of the size it chooses.
+        var archive = await admin.ArchiveStreamsAsync([.. finishedManuscripts.Select(id => new StreamKey("", id))]);
+
+        // A rebuild skips archived events; this one replays them too.
+        var rebuild = await admin.RebuildWithArchiveAsync("manuscript_report");
+        // end-snippet
+        _ = (archive, rebuild);
+    }
 }

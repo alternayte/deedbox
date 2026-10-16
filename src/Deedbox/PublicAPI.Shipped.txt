@@ -443,3 +443,22 @@ virtual Deedbox.Projection.ResetAsync(Deedbox.WriteContext! context) -> System.T
 ~override Deedbox.ExpectedVersion.Equals(object obj) -> bool
 ~override Deedbox.LoadResult<TState>.Equals(object obj) -> bool
 ~override Deedbox.LoadResult<TState>.ToString() -> string
+const Deedbox.DeedboxError.ArchiveUnreadable = "DBX041" -> string!
+Deedbox.IEventStoreAdmin.ArchiveStreamAsync(string! tenantId, string! streamId, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
+Deedbox.IEventStoreAdmin.ArchiveStreamsAsync(System.Collections.Generic.IReadOnlyList<Deedbox.StreamKey!>! streams, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
+Deedbox.IEventStoreAdmin.RebuildWithArchiveAsync(string! projection, System.Threading.CancellationToken ct = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Guid>!
+Deedbox.JobKind.Archive = 6 -> Deedbox.JobKind
+Deedbox.StreamKey
+Deedbox.StreamKey.<Clone>$() -> Deedbox.StreamKey!
+Deedbox.StreamKey.Deconstruct(out string! TenantId, out string! StreamId) -> void
+Deedbox.StreamKey.Equals(Deedbox.StreamKey? other) -> bool
+Deedbox.StreamKey.StreamId.get -> string!
+Deedbox.StreamKey.StreamId.init -> void
+Deedbox.StreamKey.StreamKey(string! TenantId, string! StreamId) -> void
+Deedbox.StreamKey.TenantId.get -> string!
+Deedbox.StreamKey.TenantId.init -> void
+override Deedbox.StreamKey.Equals(object? obj) -> bool
+override Deedbox.StreamKey.GetHashCode() -> int
+override Deedbox.StreamKey.ToString() -> string!
+static Deedbox.StreamKey.operator !=(Deedbox.StreamKey? left, Deedbox.StreamKey? right) -> bool
+static Deedbox.StreamKey.operator ==(Deedbox.StreamKey? left, Deedbox.StreamKey? right) -> bool

@@ -287,6 +287,7 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         Add(command, "mode", row.Mode);
         Add(command, "status", row.Status);
         command.Parameters.Add(new NpgsqlParameter("error", NpgsqlDbType.Jsonb) { Value = (object?)row.Error ?? DBNull.Value });
+        command.Parameters.Add(new NpgsqlParameter("archive_until", NpgsqlDbType.Bigint) { Value = (object?)row.ArchiveUntil ?? DBNull.Value });
         await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -320,9 +321,16 @@ internal sealed partial class PostgresProvider : DeedboxProvider
     private static int GateKey(string name) => BitConverter.ToInt32(SHA256.HashData(Encoding.UTF8.GetBytes(name)), 0);
 
     public override async Task<List<StoredEvent>> ReadEventsAfter(
-        DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, CancellationToken ct)
+        DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, bool withArchive, CancellationToken ct)
     {
-        await using var command = Command(connection, transaction, payloadTypes is null ? Sql.ReadEventsAfter : Sql.ReadEventsAfterFiltered);
+        var sql = (payloadTypes is null, withArchive) switch
+        {
+            (true, false) => Sql.ReadEventsAfter,
+            (false, false) => Sql.ReadEventsAfterFiltered,
+            (true, true) => Sql.ReadEventsAfterWithArchive,
+            (false, true) => Sql.ReadEventsAfterFilteredWithArchive,
+        };
+        await using var command = Command(connection, transaction, sql);
         Add(command, "after", after);
         Add(command, "limit", limit);
         if (payloadTypes is not null)
@@ -580,6 +588,17 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public override async Task<(int Moved, int Left)> ArchiveStream(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, long line, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ArchiveStream);
+        Add(command, "tenant", tenantId);
+        Add(command, "stream", streamId);
+        Add(command, "line", line);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        return ((int)reader.GetInt64(0), (int)reader.GetInt64(1));
+    }
+
     public override async Task<List<JobRow>> ReadJobs(DbConnection connection, int limit, CancellationToken ct)
     {
         await using var command = Command(connection, null, Sql.ReadJobs);
@@ -635,7 +654,8 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         while (await reader.ReadAsync(ct))
         {
             rows.Add(new CheckpointRow(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5), reader.IsDBNull(6) ? null : reader.GetString(6)));
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5), reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetInt64(7)));
         }
 
         return rows;
@@ -719,7 +739,12 @@ internal sealed partial class PostgresProvider : DeedboxProvider
             SELECT value FROM counter
             """;
 
+        // Archived versions come before the versions still in events, so the union is the stream in order.
         public readonly string ReadStreamEvents = $"""
+            SELECT global_position, event_id, version, stream_type, event_type, event_version, payload::text, metadata::text, occurred_at
+            FROM {s}.events_archive
+            WHERE tenant_id = @tenant AND stream_id = @stream AND version > @after AND version <= @to
+            UNION ALL
             SELECT global_position, event_id, version, stream_type, event_type, event_version, payload::text, metadata::text, occurred_at
             FROM {s}.events
             WHERE tenant_id = @tenant AND stream_id = @stream AND version > @after AND version <= @to
@@ -735,7 +760,7 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         public readonly string ReadEventTypes =
             $"SELECT stream_type, event_type, event_version FROM {s}.event_types ORDER BY stream_type, event_type, event_version";
 
-        private const string CheckpointColumns = "name, position, mode, status, error::text, updated_at, handles::text";
+        private const string CheckpointColumns = "name, position, mode, status, error::text, updated_at, handles::text, archive_until";
 
         private const string JobColumns = "id, kind, args::text, status, progress::text, created_at, started_at, finished_at";
 
@@ -780,24 +805,33 @@ internal sealed partial class PostgresProvider : DeedboxProvider
         public readonly string ReadCheckpoint = $"SELECT {CheckpointColumns} FROM {s}.checkpoints WHERE name = @name";
 
         public readonly string UpdateCheckpoint = $"""
-            UPDATE {s}.checkpoints SET position = @position, mode = @mode, status = @status, error = @error, updated_at = now()
+            UPDATE {s}.checkpoints SET position = @position, mode = @mode, status = @status, error = @error, archive_until = @archive_until, updated_at = now()
             WHERE name = @name
             """;
 
         public readonly string ReadStatuses = $"SELECT name, status FROM {s}.checkpoints WHERE name = ANY(@names) AND mode = 'inline'";
 
-        public readonly string ReadEventsAfter = $"""
-            SELECT {EventColumns}, payload::text, metadata::text, occurred_at
-            FROM {s}.events WHERE global_position > @after AND global_position <= (SELECT value FROM {s}.position)
+        public string ReadEventsAfter => Scan("events", filtered: false);
+
+        public string ReadEventsAfterFiltered => Scan("events", filtered: true);
+
+        // Each table is read up to the limit, then the two are merged by position.
+        public string ReadEventsAfterWithArchive => $"""
+            SELECT * FROM (({Scan("events", filtered: false)}) UNION ALL ({Scan("events_archive", filtered: false)})) AS e
             ORDER BY global_position LIMIT @limit
             """;
 
-        public readonly string ReadEventsAfterFiltered = $"""
+        public string ReadEventsAfterFilteredWithArchive => $"""
+            SELECT * FROM (({Scan("events", filtered: true)}) UNION ALL ({Scan("events_archive", filtered: true)})) AS e
+            ORDER BY global_position LIMIT @limit
+            """;
+
+        private string Scan(string table, bool filtered) => $"""
             SELECT {EventColumns},
-                CASE WHEN event_type = ANY(@types) THEN payload::text END,
-                CASE WHEN event_type = ANY(@types) THEN metadata::text END,
+                {(filtered ? "CASE WHEN event_type = ANY(@types) THEN payload::text END" : "payload::text")} AS payload,
+                {(filtered ? "CASE WHEN event_type = ANY(@types) THEN metadata::text END" : "metadata::text")} AS metadata,
                 occurred_at
-            FROM {s}.events WHERE global_position > @after AND global_position <= (SELECT value FROM {s}.position)
+            FROM {s}.{table} WHERE global_position > @after AND global_position <= (SELECT value FROM {s}.position)
             ORDER BY global_position LIMIT @limit
             """;
 
@@ -912,9 +946,27 @@ internal sealed partial class PostgresProvider : DeedboxProvider
 
         public readonly string DeleteStreamData = $"""
             DELETE FROM {s}.events WHERE tenant_id = @tenant AND stream_id = @stream AND version < @keep;
+            DELETE FROM {s}.events_archive WHERE tenant_id = @tenant AND stream_id = @stream;
             DELETE FROM {s}.subject_streams WHERE tenant_id = @tenant AND stream_id = @stream;
             UPDATE {s}.streams SET state = NULL, state_version = 0, state_at = 0, deleted_at = now(), updated_at = now()
             WHERE tenant_id = @tenant AND stream_id = @stream;
+            """;
+
+        // Versions grow with positions in a stream, so the moved events are a prefix of what events holds. The count of
+        // what stays reads the snapshot from before the delete, and the moved rows are not in it.
+        public readonly string ArchiveStream = $"""
+            WITH moved AS (
+                DELETE FROM {s}.events WHERE tenant_id = @tenant AND stream_id = @stream AND global_position <= @line
+                RETURNING global_position, event_id, tenant_id, stream_id, version, stream_type, event_type, event_version, payload, metadata, occurred_at
+            ), archived AS (
+                INSERT INTO {s}.events_archive (global_position, event_id, tenant_id, stream_id, version, stream_type, event_type, event_version, payload, metadata, occurred_at)
+                SELECT * FROM moved RETURNING version
+            ), stream AS (
+                UPDATE {s}.streams SET archived_to = (SELECT max(version) FROM archived)
+                WHERE tenant_id = @tenant AND stream_id = @stream AND EXISTS (SELECT 1 FROM archived)
+            )
+            SELECT (SELECT count(*) FROM archived),
+                (SELECT count(*) FROM {s}.events WHERE tenant_id = @tenant AND stream_id = @stream AND global_position > @line)
             """;
 
         public readonly string SaveSnapshot = $"""

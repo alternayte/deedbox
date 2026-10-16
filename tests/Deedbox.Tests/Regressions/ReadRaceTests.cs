@@ -37,7 +37,7 @@ public abstract class ReadRaceTests(Databases databases, Db db) : StoreTest(data
             var reads = Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
             {
                 await using var reader = await OpenConnection();
-                return await provider.ReadEventsAfter(reader, null, after, 100, null, Ct);
+                return await provider.ReadEventsAfter(reader, null, after, 100, null, false, Ct);
             })).ToList();
             var reuse = Task.Run(() => store.Append($"b-{round}", ExpectedVersion.NoStream, Items(60), Ct));
             await Task.Delay(30, Ct);

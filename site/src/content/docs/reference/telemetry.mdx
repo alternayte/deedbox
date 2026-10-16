@@ -37,6 +37,7 @@ This page lists every span and instrument. Both the ActivitySource and the Meter
 | `deedbox.consumer.failures`, `deedbox.consumer.stalls` | count | `deedbox.consumer` |
 | `deedbox.jobs` | jobs | `deedbox.job.kind`, `deedbox.job.status` |
 | `deedbox.erasure.streams` | streams | none |
+| `deedbox.archive.events` | events | none |
 | `deedbox.personal_data.decrypts`, `deedbox.personal_data.redactions` | fields | none |
 
 Each instance reports the consumer gauges for the consumers it runs. An instance updates `deedbox.consumer.lag` only after it commits a batch, so the gauge does not grow for a stalled consumer. Alert on the health check and on `deedbox status` instead; see [stalled projection](/operations/stalled-projection/).

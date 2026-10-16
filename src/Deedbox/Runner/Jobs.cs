@@ -13,6 +13,7 @@ internal static class Jobs
     public const string Skip = "skip";
     public const string Erase = "erase";
     public const string Snapshots = "snapshots";
+    public const string Archive = "archive";
 
     /// <summary>Recorded as done when a pseudonym period's secret is destroyed; never queued.</summary>
     public const string PseudonymsDestroyed = "pseudonyms_destroyed";
@@ -234,10 +235,11 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         var args = JsonNode.Parse(job.Args)!.AsObject();
         return job.Kind switch
         {
-            Jobs.Rebuild => Rebuild(args["projection"]!.GetValue<string>(), connection, transaction, ct),
+            Jobs.Rebuild => Rebuild(args["projection"]!.GetValue<string>(), args["includeArchived"]?.GetValue<bool>() == true, connection, transaction, ct),
             Jobs.Skip => Skip(args["projection"]!.GetValue<string>(), Guid.Parse(args["eventId"]!.GetValue<string>()), connection, transaction, ct),
             Jobs.Erase => Erase(args["tenantId"]!.GetValue<string>(), args["subjectId"]!.GetValue<string>(), connection, transaction, ct),
             Jobs.Snapshots => RebuildSnapshots(args["streamType"]!.GetValue<string>(), ct),
+            Jobs.Archive => Archive(args["streams"]!.AsArray(), ct),
             _ => throw new JobRejected($"Unknown job kind '{job.Kind}'."),
         };
     }
@@ -247,7 +249,7 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
     /// gate lock waits for open appends that applied it inline, so the reset removes their writes too, and holds back
     /// new ones until the rebuilding status commits.
     /// </summary>
-    private async Task<JsonObject> Rebuild(string name, DbConnection connection, DbTransaction transaction, CancellationToken ct)
+    private async Task<JsonObject> Rebuild(string name, bool includeArchived, DbConnection connection, DbTransaction transaction, CancellationToken ct)
     {
         var projection = services.GetRequiredService<ProjectionSet>().All.FirstOrDefault(p => p.Name == name)
             ?? throw new JobRejected($"'{name}' is not a registered projection. Subscriptions cannot be rebuilt.");
@@ -272,8 +274,12 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         if (transaction.Connection is null)
             throw new JobRejected($"The reset of projection '{name}' returned, but the database had rolled the job's transaction back. A reset must not catch an error that ends the transaction.");
 
+        // A replay that includes the archive reads it up to the head of now. An archive job that read its line before
+        // this reset moves only events at or below that line, so below this head, and the replay finds them either way.
         var mode = projection.Run == Deedbox.Run.Inline ? CheckpointMode.Inline : CheckpointMode.Async;
-        await Provider.UpdateCheckpoint(connection, transaction, row with { Position = 0, Status = CheckpointStatus.Rebuilding, Mode = mode, Error = null }, ct);
+        var archiveUntil = includeArchived ? await Provider.ReadHead(connection, transaction, ct) : (long?)null;
+        await Provider.UpdateCheckpoint(connection, transaction,
+            row with { Position = 0, Status = CheckpointStatus.Rebuilding, Mode = mode, Error = null, ArchiveUntil = archiveUntil }, ct);
 
         // A rebuild starts the record of what the projection handles again: this version, and the version of every
         // instance with a heartbeat row. An instance of an older version can run the job; the record must not then
@@ -289,7 +295,7 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         foreach (var instance in instances)
             handles = handles.With(instance.Handled?.GetValueOrDefault(name));
         await Provider.UpdateHandles(connection, transaction, name, handles.ToJson(), ct);
-        return new JsonObject { ["projection"] = name, ["previousPosition"] = row.Position, ["previousStatus"] = row.Status };
+        return new JsonObject { ["projection"] = name, ["previousPosition"] = row.Position, ["previousStatus"] = row.Status, ["includeArchived"] = includeArchived };
     }
 
     /// <summary>
@@ -370,6 +376,43 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         }
     }
 
+    /// <summary>
+    /// Archives each stream in its own transaction. The line is read first, then the stream's lock is taken, so an
+    /// append to the stream waits only for the move. A line read earlier is lower or equal, and checkpoints only move
+    /// back in a rebuild, which reads the archive or skips it by choice. A rerun after a crash moves nothing for the
+    /// streams already done.
+    /// </summary>
+    private async Task<JsonObject> Archive(JsonArray streams, CancellationToken ct)
+    {
+        var (archived, partial, skipped, events) = (0, 0, 0, 0L);
+        foreach (var stream in streams)
+        {
+            var (tenantId, streamId) = (stream!["tenantId"]!.GetValue<string>(), stream["streamId"]!.GetValue<string>());
+            await using var connection = Provider.CreateConnection();
+            await connection.OpenAsync(ct);
+            await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            await Admin.RequireArchiveReaders(Provider, connection, transaction, ct);
+            var line = await Admin.ArchiveLine(Provider, connection, transaction, ct);
+            var row = await Provider.ReadStream(connection, transaction, tenantId, streamId, forUpdate: true, withState: false, ct);
+            if (row is null || row.DeletedAt is not null)
+            {
+                skipped++;
+                continue;
+            }
+
+            var (moved, left) = await Provider.ArchiveStream(connection, transaction, tenantId, streamId, line, ct);
+            await transaction.CommitAsync(ct);
+            events += moved;
+            DeedboxDiagnostics.ArchivedEvents.Add(moved);
+            if (left > 0)
+                partial++;
+            else
+                archived++;
+        }
+
+        return new JsonObject { ["streams"] = streams.Count, ["archived"] = archived, ["partial"] = partial, ["skipped"] = skipped, ["events"] = events };
+    }
+
     /// <summary>Moves a stalled consumer past the one event it stalled on. The job row records what was skipped.</summary>
     private async Task<JsonObject> Skip(string name, Guid eventId, DbConnection connection, DbTransaction transaction, CancellationToken ct)
     {
@@ -378,7 +421,7 @@ internal sealed partial class JobLoop(DeedboxRuntime runtime, IServiceProvider s
         if (row.Status != CheckpointStatus.Stalled || ConsumerLoop.StallReason(row.Error) != "poison")
             throw new JobRejected($"'{name}' is not stalled on a poison event, so there is nothing to skip.");
 
-        var next = await Provider.ReadEventsAfter(connection, transaction, row.Position, 1, null, ct);
+        var next = await Provider.ReadEventsAfter(connection, transaction, row.Position, 1, null, row.ReadsArchive(row.Position), ct);
         if (next.Count == 0 || next[0].EventId != eventId)
             throw new JobRejected($"'{name}' is stalled on another event, not {eventId}. Check the stalled event with deedbox status.");
 

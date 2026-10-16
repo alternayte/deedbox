@@ -22,7 +22,7 @@ This guide shows you how to rebuild a projection after you change its logic.
 ## What happens
 
 1. A running app instance takes the job. It calls `ResetAsync` and sets the projection to `rebuilding`, in one transaction.
-2. The background runner replays every event from position 0.
+2. The background runner replays every event from position 0. It skips the events of [archived streams](/operations/table-growth/#archive-finished-streams), unless you queue the rebuild with `--include-archived` or `RebuildWithArchiveAsync`.
 3. For an inline projection, appends skip the projection while it rebuilds. When the replay is within one batch of the head, the runner locks the position counter, applies the last events, and sets the projection back to `running`. Appends apply it inline again from then on.
 4. For an async projection, the runner sets it back to `running` when it reads to the end.
 

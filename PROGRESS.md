@@ -407,3 +407,17 @@ A finding counts only with a failing test. The tests are in `tests/Deedbox.Tests
 - The guide states the order on QueueBox 0.4.0 and later, and its cost.
 - The NuGet advisories of 2026-10-13 for System.Security.Cryptography.Pkcs 9.0.4 (CVE-2026-84008, CVE-2026-70162) failed the build. EF Core SqlServer 10 brings it into the test, bench and snippets projects through Microsoft.Data.SqlClient 6.1.1. Those three projects now reference Pkcs 9.0.21. The shipped packages do not reference it: Deedbox.SqlServer depends on SqlClient 5.2.3.
 - Released on 2026-10-16: https://github.com/alternayte/deedbox/releases/tag/v0.7.0. All nine packages pushed through trusted publishing in one attempt. 0.7.0 is the package validation baseline now, and VersionPrefix is 0.7.1.
+
+## 0.8.0
+
+Spec: `docs/specs/stream-archive.md` (issue alternayte/deedbox#10, grill on 2026-10-16).
+
+- An archive job moves the events of finished streams from `events` to `events_archive`, one stream per transaction under the stream lock. Versions grow with positions in a stream, so the moved events are a version prefix, and `streams.archived_to` records the highest one.
+- The archive line is the lowest checkpoint of every consumer that is not retired, at most the head. A running inline projection is left out: it applied every committed event in the appends' transactions, and its checkpoint does not move. The job reads the line before it locks the stream and takes no counter lock; a line read earlier is lower, and checkpoints move back only in a rebuild.
+- An append to an archived stream writes to `events`. The grill rejected a failing append (erasure and `DeleteStream` append to archived streams) and a restore (one late event undoes the archive).
+- Every stream read (`ReadStreamEvents`) is a union of both tables. `DeleteStreamData` deletes from both.
+- A rebuild with the archive stores `checkpoints.archive_until`, the head at the reset. The consumer, the cut-over and the skip read both tables while the position is below it. An archive that read its line before the reset moves only events below that head, so the replay finds them in one table or the other.
+- The spec named `RebuildAsync(projection, includeArchived = false)`. The Roslyn public API analyzer refuses a second `RebuildAsync` overload with optional parameters (RS0026, RS0027), and replacing the method breaks compiled callers. The API is `RebuildWithArchiveAsync(projection)`.
+- Storage format 3: this version writes `instances.formats = 3`. `Crypto.Formats` stays 2; the crypto write format is clamped to it. An archive refuses with DBX041 while any heartbeat row has a lower format, and the job checks again for each stream. A 0.7 instance can still join after an archive; the known-limits page states that a rollback is not supported.
+- Package validation against 0.7.0 has CP0006 suppressions for the three new `IEventStoreAdmin` members.
+- The runner torture suite queues archives of random streams and one rebuild with the archive under the chaos, then archives everything and checks that the archive holds every position.

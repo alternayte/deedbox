@@ -27,6 +27,8 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         ("instances", "inline_projections", false),
         ("instances", "event_types", false),
         ("instances", "handles", true),
+        ("events_archive", "payload", false),
+        ("events_archive", "metadata", false),
     ];
 
     private readonly string _connectionString;
@@ -368,6 +370,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         AddText(command, "mode", row.Mode, 20);
         AddText(command, "status", row.Status, 20);
         ((SqlCommand)command).Parameters.Add(new SqlParameter("error", SqlDbType.NVarChar, -1) { Value = (object?)row.Error ?? DBNull.Value });
+        ((SqlCommand)command).Parameters.Add(new SqlParameter("archive_until", SqlDbType.BigInt) { Value = (object?)row.ArchiveUntil ?? DBNull.Value });
         await command.ExecuteNonQueryAsync(ct);
     }
 
@@ -404,9 +407,16 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
     private string GateResource(string name) => $"deedbox:{Schema}:inline:{name}";
 
     public override async Task<List<StoredEvent>> ReadEventsAfter(
-        DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, CancellationToken ct)
+        DbConnection connection, DbTransaction? transaction, long after, int limit, IReadOnlyList<string>? payloadTypes, bool withArchive, CancellationToken ct)
     {
-        await using var command = Command(connection, transaction, payloadTypes is null ? Sql.ReadEventsAfter : Sql.ReadEventsAfterFiltered);
+        var sql = (payloadTypes is null, withArchive) switch
+        {
+            (true, false) => Sql.ReadEventsAfter,
+            (false, false) => Sql.ReadEventsAfterFiltered,
+            (true, true) => Sql.ReadEventsAfterWithArchive,
+            (false, true) => Sql.ReadEventsAfterFilteredWithArchive,
+        };
+        await using var command = Command(connection, transaction, sql);
         Add(command, "after", after);
         Add(command, "limit", limit);
         if (payloadTypes is not null)
@@ -656,6 +666,16 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         return await command.ExecuteNonQueryAsync(ct);
     }
 
+    public override async Task<(int Moved, int Left)> ArchiveStream(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, long line, CancellationToken ct)
+    {
+        await using var command = Command(connection, transaction, Sql.ArchiveStream);
+        AddKey(command, tenantId, streamId);
+        Add(command, "line", line);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        return (reader.GetInt32(0), reader.GetInt32(1));
+    }
+
     public override async Task DeleteStreamData(DbConnection connection, DbTransaction transaction, string tenantId, string streamId, long keepFromVersion, CancellationToken ct)
     {
         await using var command = Command(connection, transaction, Sql.DeleteStreamData);
@@ -722,7 +742,8 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         while (await reader.ReadAsync(ct))
         {
             rows.Add(new CheckpointRow(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5), reader.IsDBNull(6) ? null : reader.GetString(6)));
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5), reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetInt64(7)));
         }
 
         return rows;
@@ -850,7 +871,12 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             SELECT @end;
             """;
 
+        // Archived versions come before the versions still in events, so the union is the stream in order.
         public readonly string ReadStreamEvents = $"""
+            SELECT global_position, event_id, version, stream_type, event_type, event_version, payload, metadata, occurred_at
+            FROM [{s}].[events_archive]
+            WHERE {Key} AND version > @after AND version <= @to
+            UNION ALL
             SELECT global_position, event_id, version, stream_type, event_type, event_version, payload, metadata, occurred_at
             FROM [{s}].[events]
             WHERE {Key} AND version > @after AND version <= @to
@@ -867,7 +893,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
         public readonly string ReadEventTypes =
             $"SELECT stream_type, event_type, event_version FROM [{s}].[event_types] ORDER BY stream_type, event_type, event_version";
 
-        private const string CheckpointColumns = "name, position, mode, status, error, updated_at, handles";
+        private const string CheckpointColumns = "name, position, mode, status, error, updated_at, handles, archive_until";
 
         private const string JobColumns = "id, kind, args, status, progress, created_at, started_at, finished_at";
 
@@ -921,7 +947,7 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
             $"SELECT {CheckpointColumns} FROM [{s}].[checkpoints] WITH (XLOCK, ROWLOCK) WHERE name = @name";
 
         public readonly string UpdateCheckpoint = $"""
-            UPDATE [{s}].[checkpoints] SET position = @position, mode = @mode, status = @status, error = @error, updated_at = {Now}
+            UPDATE [{s}].[checkpoints] SET position = @position, mode = @mode, status = @status, error = @error, archive_until = @archive_until, updated_at = {Now}
             WHERE name = @name
             """;
 
@@ -939,20 +965,47 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
 
         public string ReadEventsAfter => $"""
             {Head}
-            SELECT TOP (@limit) {EventColumns}, payload, metadata, occurred_at
-            FROM [{s}].[events] WHERE global_position > @after AND global_position <= @head ORDER BY global_position
+            {Scan("events", filtered: false)}
             """;
 
         public string ReadEventsAfterFiltered => $"""
             {Head}
-            SELECT TOP (@limit) {EventColumns},
-                CASE WHEN t.n IS NOT NULL THEN payload END,
-                CASE WHEN t.n IS NOT NULL THEN metadata END,
-                occurred_at
-            FROM [{s}].[events] e
-            LEFT JOIN (SELECT DISTINCT n FROM OPENJSON(@types) WITH (n nvarchar(200) '$[0]')) t ON t.n = e.event_type COLLATE Latin1_General_100_BIN2
-            WHERE global_position > @after AND global_position <= @head ORDER BY global_position
+            {Scan("events", filtered: true)}
             """;
+
+        // Each table is read up to the limit, then the two are merged by position.
+        public string ReadEventsAfterWithArchive => $"""
+            {Head}
+            SELECT TOP (@limit) * FROM (
+                SELECT * FROM ({Scan("events", filtered: false)}) AS a
+                UNION ALL
+                SELECT * FROM ({Scan("events_archive", filtered: false)}) AS b
+            ) AS e ORDER BY global_position
+            """;
+
+        public string ReadEventsAfterFilteredWithArchive => $"""
+            {Head}
+            SELECT TOP (@limit) * FROM (
+                SELECT * FROM ({Scan("events", filtered: true)}) AS a
+                UNION ALL
+                SELECT * FROM ({Scan("events_archive", filtered: true)}) AS b
+            ) AS e ORDER BY global_position
+            """;
+
+        private string Scan(string table, bool filtered) => filtered
+            ? $"""
+                SELECT TOP (@limit) {EventColumns},
+                    CASE WHEN t.n IS NOT NULL THEN payload END AS payload,
+                    CASE WHEN t.n IS NOT NULL THEN metadata END AS metadata,
+                    occurred_at
+                FROM [{s}].[{table}] e
+                LEFT JOIN (SELECT DISTINCT n FROM OPENJSON(@types) WITH (n nvarchar(200) '$[0]')) t ON t.n = e.event_type COLLATE Latin1_General_100_BIN2
+                WHERE global_position > @after AND global_position <= @head ORDER BY global_position
+                """
+            : $"""
+                SELECT TOP (@limit) {EventColumns}, payload, metadata, occurred_at
+                FROM [{s}].[{table}] WHERE global_position > @after AND global_position <= @head ORDER BY global_position
+                """;
 
         public readonly string ReadHead = $"SELECT value FROM [{s}].[position]";
 
@@ -1074,8 +1127,24 @@ internal sealed partial class SqlServerProvider : DeedboxProvider
 
         public readonly string DeleteStreamData = $"""
             DELETE FROM [{s}].[events] WHERE {Key} AND version < @keep;
+            DELETE FROM [{s}].[events_archive] WHERE {Key};
             DELETE FROM [{s}].[subject_streams] WHERE {Key};
             UPDATE [{s}].[streams] SET state = NULL, state_version = 0, state_at = 0, deleted_at = {Now}, updated_at = {Now} WHERE {Key};
+            """;
+
+        // Versions grow with positions in a stream, so the moved events are a prefix of what events holds.
+        public readonly string ArchiveStream = $"""
+            SET NOCOUNT ON;
+            DECLARE @moved int;
+            DELETE FROM [{s}].[events]
+            OUTPUT DELETED.global_position, DELETED.event_id, DELETED.tenant_id, DELETED.stream_id, DELETED.version, DELETED.stream_type,
+                DELETED.event_type, DELETED.event_version, DELETED.payload, DELETED.metadata, DELETED.occurred_at
+            INTO [{s}].[events_archive] (global_position, event_id, tenant_id, stream_id, version, stream_type, event_type, event_version, payload, metadata, occurred_at)
+            WHERE {Key} AND global_position <= @line;
+            SET @moved = @@ROWCOUNT;
+            IF @moved > 0
+                UPDATE [{s}].[streams] SET archived_to = (SELECT MAX(version) FROM [{s}].[events_archive] WHERE {Key}) WHERE {Key};
+            SELECT @moved, (SELECT COUNT(*) FROM [{s}].[events] WHERE {Key});
             """;
 
         public readonly string SaveSnapshot = $"""
