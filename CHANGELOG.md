@@ -2,6 +2,20 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.7.0] - 2026-10-16
+
+### Added
+
+- `Deedbox.QueueBox`: `QueueBoxMessage.AggregateType` sets the `aggregate_type` of one event's outbox row. A destination that routes on it, such as with `exchangeFrom: aggregate_type`, can send the events of one stream to different exchanges. Null writes the stream type, as before. An empty value, or a value over 255 characters, fails the append with DBX032 ([#9](https://github.com/alternayte/deedbox/issues/9)).
+
+### Changed
+
+- `Deedbox.QueueBox` writes one `INSERT` statement per outbox row, in stream version order, in one command. Before, the rows of one append shared one multi-row `VALUES` list, and neither database documents the order in which it fills the QueueBox `sequence` column across such a list ([#8](https://github.com/alternayte/deedbox/issues/8)).
+
+### Fixed
+
+- The "Wire QueueBox" guide says that one stream's messages reach a destination in stream order on QueueBox 0.4.0 and later, with migration V11 applied. It states the cost: one message of a stream is in flight at a time, and a message that waits for a retry holds back the later messages of its stream. The `x-deedbox-stream-version` advice stays for older QueueBox versions and for other relays ([#8](https://github.com/alternayte/deedbox/issues/8)).
+
 ## [0.6.0] - 2026-10-09
 
 This release gives the public interfaces their 1.0 shape. It breaks only an app that implements `IEventStore` or `IEventStoreAdmin` itself; apps call these interfaces and do not implement them.

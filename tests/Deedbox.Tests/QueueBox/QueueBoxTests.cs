@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Deedbox.Tests.Infrastructure;
 using Deedbox.Tests.PersonalData;
@@ -79,11 +80,13 @@ public abstract class QueueBoxTests(Databases databases, Db db) : RunnerTest(dat
             "empty" => new QueueBoxMessage(" ", e),
             "long" => new QueueBoxMessage(new string('t', 256), e),
             "no-value" => new QueueBoxMessage("cart.item_added", e) { Headers = new Dictionary<string, string> { ["h"] = null! } },
+            "empty-aggregate" => new QueueBoxMessage("cart.item_added", e) { AggregateType = "" },
+            "long-aggregate" => new QueueBoxMessage("cart.item_added", e) { AggregateType = new string('a', 256) },
             _ => throw new InvalidOperationException("boom"),
         })));
         await CreateOutbox("outbox", QueueBoxDdl);
 
-        foreach (var sku in new[] { "empty", "long", "no-value", "throws" })
+        foreach (var sku in new[] { "empty", "long", "no-value", "empty-aggregate", "long-aggregate", "throws" })
         {
             var error = await Assert.ThrowsAsync<DeedboxException>(() => StoreOf(host).Append($"cart-{sku}", ExpectedVersion.NoStream, [new ItemAdded(sku, 1)]));
             Assert.Equal((sku, "DBX032"), (sku, error.Code));
@@ -123,6 +126,44 @@ public abstract class QueueBoxTests(Databases databases, Db db) : RunnerTest(dat
     }
 
     [Fact]
+    public async Task A_message_callback_sets_the_aggregate_type_per_event_and_null_keeps_the_stream_type()
+    {
+        var host = await StartHost(NewProbe(), b => b.UseQueueBox(q => q.UseTable("outbox", Schema)
+            .Publish<ItemAdded>((e, _) => new QueueBoxMessage("cart.item_added", e) { AggregateType = e.Sku == "task" ? "task" : null })
+            .Publish<CheckedOut>((e, _) => new QueueBoxMessage("cart.checked_out", e) { AggregateType = "manuscript" })));
+        await CreateOutbox("outbox", QueueBoxDdl);
+
+        await StoreOf(host).Append("cart-1", ExpectedVersion.NoStream, [new ItemAdded("task", 1), new ItemAdded("a", 1), new CheckedOut(DateTimeOffset.UnixEpoch)]);
+
+        var rows = await Rows("outbox", "topic", "key", "aggregate_type", "headers");
+        var types = rows.OrderBy(r => long.Parse(JsonDocument.Parse(r["headers"]).RootElement.GetProperty("x-deedbox-stream-version").GetString()!, CultureInfo.InvariantCulture))
+            .Select(r => (r["key"], r["aggregate_type"]));
+        Assert.Equal([("cart-1", "task"), ("cart-1", "cart"), ("cart-1", "manuscript")], types);
+    }
+
+    [Fact]
+    public async Task Concurrent_appends_to_one_stream_get_outbox_sequence_in_stream_version_order()
+    {
+        var host = await StartHost(NewProbe(), b => b.UseQueueBox(q => q.UseTable("outbox", Schema).Publish<ItemAdded>("cart.item_added")));
+        await CreateOutbox("outbox", QueueBoxDdl);
+
+        // Each append writes several events, so the rows of one append are ordered too, not only the appends.
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(w => Task.Run(async () =>
+        {
+            var store = StoreOf(host);
+            for (var i = 0; i < 5; i++)
+                await store.Append("cart-1", ExpectedVersion.Any, Enumerable.Range(0, 1 + (i % 4)).Select(n => new ItemAdded($"{w}-{i}-{n}", 1)).ToArray());
+        })));
+
+        var rows = await Rows("outbox", "sequence", "headers");
+        var versions = rows.OrderBy(r => long.Parse(r["sequence"], CultureInfo.InvariantCulture))
+            .Select(r => long.Parse(JsonDocument.Parse(r["headers"]).RootElement.GetProperty("x-deedbox-stream-version").GetString()!, CultureInfo.InvariantCulture))
+            .ToList();
+        Assert.Equal(8 * (1 + 2 + 3 + 4 + 1), versions.Count);
+        Assert.Equal(Enumerable.Range(1, versions.Count).Select(v => (long)v), versions);
+    }
+
+    [Fact]
     public async Task A_renamed_outbox_table_and_columns_are_written()
     {
         var host = await StartHost(NewProbe(), b => b.UseQueueBox(q => q
@@ -159,9 +200,10 @@ public abstract class QueueBoxTests(Databases databases, Db db) : RunnerTest(dat
         return b.Keys(k => k.StoreInDatabase());
     }
 
-    /// <summary>QueueBox's shipped outbox table: migration V1 plus V9 (aggregate_type), in the test schema.</summary>
+    /// <summary>QueueBox's shipped outbox table: migration V1 plus V9 (aggregate_type) and V11 (sequence), in the test schema.</summary>
     private string QueueBoxDdl => Db == Db.Postgres
         ? """
+          CREATE SEQUENCE {sequence} AS BIGINT;
           CREATE TABLE {table} (
               id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
               topic VARCHAR(255) NOT NULL,
@@ -174,10 +216,12 @@ public abstract class QueueBoxTests(Databases databases, Db db) : RunnerTest(dat
               scheduled_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
               created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
               updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-              aggregate_type VARCHAR(255)
+              aggregate_type VARCHAR(255),
+              sequence BIGINT NOT NULL DEFAULT nextval('{sequence}')
           )
           """
         : """
+          CREATE SEQUENCE {sequence} AS BIGINT START WITH 1 INCREMENT BY 1;
           CREATE TABLE {table} (
               id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
               topic NVARCHAR(255) NOT NULL,
@@ -190,7 +234,8 @@ public abstract class QueueBoxTests(Databases databases, Db db) : RunnerTest(dat
               scheduled_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
               created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
               updated_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
-              aggregate_type NVARCHAR(255)
+              aggregate_type NVARCHAR(255),
+              sequence BIGINT NOT NULL DEFAULT (NEXT VALUE FOR {sequence})
           )
           """;
 
@@ -198,7 +243,8 @@ public abstract class QueueBoxTests(Databases databases, Db db) : RunnerTest(dat
     {
         await using var connection = await OpenConnection();
         await using var command = connection.CreateCommand();
-        command.CommandText = ddl.Replace("{table}", Table(name), StringComparison.Ordinal);
+        command.CommandText = ddl.Replace("{table}", Table(name), StringComparison.Ordinal)
+            .Replace("{sequence}", Table(name + "_sequence_seq"), StringComparison.Ordinal);
         await command.ExecuteNonQueryAsync(Ct);
     }
 

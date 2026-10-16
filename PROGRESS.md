@@ -399,3 +399,10 @@ A finding counts only with a failing test. The tests are in `tests/Deedbox.Tests
 - Released on 2026-10-09: https://github.com/alternayte/deedbox/releases/tag/v0.6.0. All nine packages pushed through trusted publishing in one attempt. The docs site was deployed with wrangler from a local build, because CI has no CLOUDFLARE_API_TOKEN. The suppression for `ReadStream` is gone: 0.6.0 is the baseline now, and VersionPrefix is 0.6.1.
 - The nightly of 2026-10-09 failed its benchmark job on the 0.5.0 commit: five SQL Server cells were more than 30% below the baseline. The median append was faster than usual and the 99th percentile was about 80 ms, so the container stalled at intervals; Postgres and the torture job passed.
 
+## 0.7.0
+
+- Issues alternayte/deedbox#8 and #9, from a plan to move a workflow engine to Deedbox and QueueBox 0.8.1. No grill: each issue states its change.
+- #9: `QueueBoxMessage.AggregateType` is an optional init property; null writes the stream type. It is validated as the topic is, with DBX032. The row ID and the key stay fixed: the event ID is the idempotency key, and the stream ID gives stream order. A minor release, because it adds public API.
+- #8: the outbox insert is one statement per row. The order test passes with the old multi-row `VALUES` form too, so it cannot prove that order; the issue asks for a form that fixes it. The test DDL now has the QueueBox V11 `sequence` column, filled by a sequence default as QueueBox does.
+- The guide states the order on QueueBox 0.4.0 and later, and its cost.
+- The NuGet advisories of 2026-10-13 for System.Security.Cryptography.Pkcs 9.0.4 (CVE-2026-84008, CVE-2026-70162) failed the build. EF Core SqlServer 10 brings it into the test, bench and snippets projects through Microsoft.Data.SqlClient 6.1.1. Those three projects now reference Pkcs 9.0.21. The shipped packages do not reference it: Deedbox.SqlServer depends on SqlClient 5.2.3.

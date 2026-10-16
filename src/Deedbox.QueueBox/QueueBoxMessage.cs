@@ -2,7 +2,7 @@ namespace Deedbox;
 
 /// <summary>
 /// One QueueBox message, as a <c>Publish&lt;TEvent&gt;((e, pending) =&gt; ...)</c> callback builds it for one event.
-/// Deedbox still writes the event ID as the row ID, the stream ID as the key and the stream type as the aggregate type.
+/// Deedbox still writes the event ID as the row ID and the stream ID as the key.
 /// </summary>
 public sealed class QueueBoxMessage
 {
@@ -26,4 +26,11 @@ public sealed class QueueBoxMessage
     /// cannot be removed. Deedbox does not forward <see cref="EventMetadata.Headers"/>; copy them here to send them.
     /// </summary>
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
+
+    /// <summary>
+    /// The aggregate type, at most 255 characters, when it is not the stream type. A destination can route on it, such as
+    /// with <c>exchangeFrom: aggregate_type</c>, so the events of one stream can go to different exchanges. Null writes the
+    /// stream type.
+    /// </summary>
+    public string? AggregateType { get; init; }
 }

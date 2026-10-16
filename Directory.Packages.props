@@ -37,6 +37,8 @@
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <!-- EF Core SqlServer 10 brings Microsoft.Data.SqlClient 6.1.1 and its vulnerable Pkcs 9.0.4 (CVE-2026-84008, CVE-2026-70162). -->
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="9.0.21" />
   </ItemGroup>
 
   <!-- Docs samples only (site/snippets). -->

@@ -28,16 +28,22 @@ This guide shows you how to send events to other systems with [QueueBox](https:/
 | --- | --- |
 | `id` | The event ID. A destination deduplicates on `X-Message-Id`. |
 | `topic` | The topic you chose. |
-| `key` | The stream ID. It groups one stream's messages; it does not order them. |
+| `key` | The stream ID. On QueueBox 0.4.0 and later, it keeps one stream's messages in order. |
 | `payload` | The event's JSON, or the payload you shaped. |
 | `headers` | `X-Correlation-Id`, `traceparent`, and the event's type, stream and version, plus the headers you add. The stream version is in `x-deedbox-stream-version`. |
-| `aggregate_type` | The stream type. |
-
-One stream's messages can reach a destination out of order: the events of one append share an outbox time, and QueueBox publishes a batch concurrently. A receiver that needs order compares `x-deedbox-stream-version` and drops a message older than the one it holds.
+| `aggregate_type` | The stream type, or the aggregate type that a message callback sets. |
 
 An event with `[PersonalData]` needs a payload you shape; start-up fails otherwise ([DBX032](/reference/errors/dbx032/)).
 
 If QueueBox runs with a custom table or column mapping, match it with `UseTable` and `UseColumns`.
+
+## Message order
+
+On QueueBox 0.4.0 and later, with migration V11 applied, one stream's messages reach a destination in stream order. QueueBox delivers the rows of one key in insert order, one row at a time. An append holds its stream's lock until it commits, and it inserts its rows in version order. The next append of the stream inserts after that commit.
+
+The cost of this order: one message of a stream is in flight at a time. A message that waits for a retry holds back the later messages of its stream, until QueueBox sends it or marks it dead.
+
+On an older QueueBox, or with another relay, one stream's messages can arrive out of order. A receiver that needs order then compares `x-deedbox-stream-version` and drops a message older than the one it holds.
 
 ## Shape each message
 
@@ -46,10 +52,11 @@ If QueueBox runs with a custom table or column mapping, match it with `UseTable`
 - The topic can differ per event, such as one topic per stream.
 - Your headers join the default headers. A header with the name of a default replaces its value, in any letter case. You cannot remove a default.
 - Deedbox does not send `EventMetadata.Headers`. Copy `pending.Metadata.Headers` into `Headers` to send them.
+- `AggregateType` sets the `aggregate_type` column for that event. A destination that routes on it, such as with `exchangeFrom: aggregate_type`, can then send the events of one stream to different exchanges. Leave it null to write the stream type.
 - Return `null` to write no message for that event.
-- An empty topic, a topic over 255 characters, a header with an empty name or a null value, or an exception in the callback fails the append with [DBX032](/reference/errors/dbx032/). The events and their messages commit together or not at all.
+- An empty topic or aggregate type, a topic or aggregate type over 255 characters, a header with an empty name or a null value, or an exception in the callback fails the append with [DBX032](/reference/errors/dbx032/). The events and their messages commit together or not at all.
 
-The row ID, the key and `aggregate_type` stay the event ID, the stream ID and the stream type.
+The row ID and the key stay the event ID and the stream ID. The event ID makes delivery idempotent, and the stream ID keeps the stream's order.
 
 ## Send CloudEvents
 

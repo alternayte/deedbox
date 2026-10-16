@@ -85,6 +85,15 @@ public sealed partial class QueueBoxBuilder
         return topic;
     }
 
+    internal static string AggregateType(string aggregateType)
+    {
+        if (string.IsNullOrWhiteSpace(aggregateType))
+            throw new DeedboxException(Errors.QueueBoxMapping, "A QueueBox aggregate type is empty. Leave it null to write the stream type.");
+        if (aggregateType.Length > 255)
+            throw new DeedboxException(Errors.QueueBoxMapping, $"QueueBox aggregate type '{aggregateType}' is longer than 255 characters.");
+        return aggregateType;
+    }
+
     internal static string Identifier(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
@@ -113,7 +122,10 @@ public sealed class QueueBoxColumns
     /// <summary>The topic column.</summary>
     public string Topic { get => _topic; set => _topic = QueueBoxBuilder.Identifier(value); }
 
-    /// <summary>The key column; Deedbox writes the stream ID, so one stream's messages keep their order.</summary>
+    /// <summary>
+    /// The key column; Deedbox writes the stream ID. On QueueBox 0.4.0 and later, the outbox delivers one stream's
+    /// messages in stream order, one at a time.
+    /// </summary>
     public string Key { get => _key; set => _key = QueueBoxBuilder.Identifier(value); }
 
     /// <summary>The payload column.</summary>
@@ -122,7 +134,7 @@ public sealed class QueueBoxColumns
     /// <summary>The headers column.</summary>
     public string Headers { get => _headers; set => _headers = QueueBoxBuilder.Identifier(value); }
 
-    /// <summary>The aggregate type column; Deedbox writes the stream type.</summary>
+    /// <summary>The aggregate type column; Deedbox writes the stream type, or <see cref="QueueBoxMessage.AggregateType"/>.</summary>
     public string AggregateType { get => _aggregateType; set => _aggregateType = QueueBoxBuilder.Identifier(value); }
 }
 
@@ -132,7 +144,7 @@ public static class DeedboxQueueBoxExtensions
     /// <summary>
     /// Writes a QueueBox outbox row for each published event, in the append's transaction, so a message exists exactly
     /// when its event commits. The row ID is the event ID, the key is the stream ID, and the aggregate type is the stream
-    /// type. Headers carry X-Correlation-Id, traceparent and the event's identity. QueueBox then delivers at least once.
+    /// type unless a message callback sets it. Headers carry X-Correlation-Id, traceparent and the event's identity. QueueBox then delivers at least once.
     /// </summary>
     /// <param name="builder">The Deedbox builder.</param>
     /// <param name="configure">Chooses the events, topics and payloads.</param>

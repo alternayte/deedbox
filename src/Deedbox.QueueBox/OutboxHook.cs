@@ -20,7 +20,7 @@ internal sealed class OutboxHook(QueueBoxBuilder options, DeedboxRuntime runtime
 {
     public async Task OnAppending(AppendingContext context, CancellationToken ct)
     {
-        var rows = new List<(PendingEvent Event, string Topic, string Payload, string Headers)>();
+        var rows = new List<(PendingEvent Event, string Topic, string Payload, string Headers, string AggregateType)>();
         foreach (var e in context.Events)
         {
             if (options.Publications.TryGetValue(e.Event.GetType(), out var publication) && Row(context, e, publication) is { } row)
@@ -37,27 +37,27 @@ internal sealed class OutboxHook(QueueBoxBuilder options, DeedboxRuntime runtime
 #pragma warning restore CA2100
         for (var i = 0; i < rows.Count; i++)
         {
-            var (e, topic, payload, headers) = rows[i];
+            var (e, topic, payload, headers, aggregateType) = rows[i];
             Add(command, $"id{i}", e.EventId);
             Add(command, $"topic{i}", topic);
             Add(command, $"key{i}", context.StreamId);
             Add(command, $"payload{i}", payload);
             Add(command, $"headers{i}", headers);
-            Add(command, $"aggregate{i}", context.StreamType);
+            Add(command, $"aggregate{i}", aggregateType);
         }
 
         await command.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>The outbox row for one event, or null when a message callback skips it.</summary>
-    private (PendingEvent, string, string, string)? Row(AppendingContext context, PendingEvent e, Publication publication)
+    private (PendingEvent, string, string, string, string)? Row(AppendingContext context, PendingEvent e, Publication publication)
     {
         if (publication.Message is null)
         {
             var payload = publication.Payload is null
                 ? JsonSerializer.Serialize(e.Event, runtime.Registry.ForEvent(e.Event.GetType()).Json)
                 : Serialize(publication.Payload(e.Event, e));
-            return (e, publication.Topic!, payload, Headers(context, e, null));
+            return (e, publication.Topic!, payload, Headers(context, e, null), context.StreamType);
         }
 
         QueueBoxMessage? message;
@@ -75,7 +75,8 @@ internal sealed class OutboxHook(QueueBoxBuilder options, DeedboxRuntime runtime
             return null;
         if (message.Payload is null)
             throw new DeedboxException(Errors.QueueBoxMapping, $"The QueueBox message for {e.Event.GetType().Name} has no payload.");
-        return (e, QueueBoxBuilder.Topic(message.Topic), Serialize(message.Payload), Headers(context, e, message.Headers));
+        var aggregateType = message.AggregateType is null ? context.StreamType : QueueBoxBuilder.AggregateType(message.AggregateType);
+        return (e, QueueBoxBuilder.Topic(message.Topic), Serialize(message.Payload), Headers(context, e, message.Headers), aggregateType);
     }
 
     private string Serialize(object payload) => JsonSerializer.Serialize(payload, runtime.Json.TypeInfo(payload.GetType()));
@@ -148,18 +149,18 @@ internal static class Outbox
         var c = options.Columns;
         var json = postgres ? "CAST({0} AS jsonb)" : "{0}";
 
-        var sql = new StringBuilder()
-            .Append("INSERT INTO ").Append(table).Append(" (")
-            .AppendJoin(", ", new[] { c.Id, c.Topic, c.Key, c.Payload, c.Headers, c.AggregateType }.Select(Quote))
-            .Append(") VALUES ");
+        // One statement per row: the outbox fills its sequence column on insert, and the order in which a database
+        // fills it across the rows of one multi-row VALUES list is not documented. Statements run in order, so one
+        // stream's rows get their sequence in stream version order.
+        var sql = new StringBuilder();
         for (var i = 0; i < rows; i++)
         {
-            if (i > 0)
-                sql.Append(", ");
-            sql.Append(CultureInfo.InvariantCulture, $"(@id{i}, @topic{i}, @key{i}, ")
+            sql.Append("INSERT INTO ").Append(table).Append(" (")
+                .AppendJoin(", ", new[] { c.Id, c.Topic, c.Key, c.Payload, c.Headers, c.AggregateType }.Select(Quote))
+                .Append(CultureInfo.InvariantCulture, $") VALUES (@id{i}, @topic{i}, @key{i}, ")
                 .Append(string.Format(CultureInfo.InvariantCulture, json, $"@payload{i}")).Append(", ")
                 .Append(string.Format(CultureInfo.InvariantCulture, json, $"@headers{i}"))
-                .Append(CultureInfo.InvariantCulture, $", @aggregate{i})");
+                .Append(CultureInfo.InvariantCulture, $", @aggregate{i});");
         }
 
         return sql.ToString();

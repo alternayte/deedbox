@@ -21,6 +21,8 @@ Deedbox.QueueBoxColumns.QueueBoxColumns() -> void
 Deedbox.QueueBoxColumns.Topic.get -> string!
 Deedbox.QueueBoxColumns.Topic.set -> void
 Deedbox.QueueBoxMessage
+Deedbox.QueueBoxMessage.AggregateType.get -> string?
+Deedbox.QueueBoxMessage.AggregateType.init -> void
 Deedbox.QueueBoxMessage.Headers.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>?
 Deedbox.QueueBoxMessage.Headers.init -> void
 Deedbox.QueueBoxMessage.Payload.get -> object!
