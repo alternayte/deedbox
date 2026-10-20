@@ -56,8 +56,15 @@ Cloudflare Pages serves this site. Cloudflare processes the request, including
 the IP address it comes from, to deliver the page and to protect the service.
 See [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/).
 
-The site runs no analytics and no third-party script. It sets no cookie, and it
-stores nothing in your browser.
+The site measures page views with Cloudflare Web Analytics. Its beacon is the
+only third-party script on the site. The beacon stores nothing in the browser:
+no cookie, no `localStorage`, no `sessionStorage`. It does not identify you by
+IP address or by user-agent string, and Cloudflare discards the IP address at
+the data centre that receives the beacon.
+Sources: [RUM beacon for Web Analytics](https://developers.cloudflare.com/speed/observatory/rum-beacon/)
+and [Data origin and collection](https://developers.cloudflare.com/web-analytics/data-metrics/data-origin-and-collection/).
+
+The site sets no cookie of its own.
 
 ## Your rights
 
