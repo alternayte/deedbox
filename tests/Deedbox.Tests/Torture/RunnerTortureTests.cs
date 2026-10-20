@@ -166,7 +166,7 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
         // The jobs this test queued finish before the consumers are read. A killed runner rolls its claim back, so the
         // rebuild can still be queued here. A rebuild that ran after the waits below would move 'dense' to the start
         // and hold the archive line there, and the last archive would move nothing although it reported done.
-        await WaitForJobs(admin, queued);
+        await WaitForJobs(writer, admin, queued);
         var head = await Head(writer);
         foreach (var name in new[] { "dense", "sparse", "deliveries" })
             await WaitForCheckpoint(writer, name, r => r.Position >= head && r.Status == "running");
@@ -174,7 +174,7 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
         // Every archive job finishes, and one more moves every stream; positions stay gapless across both tables.
         var last = await admin.ArchiveStreamsAsync([.. streams.Keys.Select(id => new StreamKey("", id))], Ct);
         queued.Add(last);
-        await WaitForJobs(admin, queued);
+        await WaitForJobs(writer, admin, queued);
         foreach (var id in queued)
             Assert.Equal(JobState.Done, (await admin.GetJobAsync(id, Ct))!.Status);
         var leftOver = await Scalar<int>($"SELECT COUNT(*) FROM {Table("events")}");
@@ -222,10 +222,23 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
     /// Waits for each job by its ID. The store's status holds the 20 newest jobs, and this test queues more than that,
     /// so a wait on the status alone is blind to the oldest of them.
     /// </summary>
-    private static async Task WaitForJobs(IEventStoreAdmin admin, IEnumerable<Guid> ids)
+    private async Task WaitForJobs(IHost writer, IEventStoreAdmin admin, IEnumerable<Guid> ids)
     {
         foreach (var id in ids)
-            await WaitFor(async () => (await admin.GetJobAsync(id, Ct))?.Status is JobState.Done or JobState.Failed, $"job {id}");
+        {
+            JobInfo? job = null;
+            try
+            {
+                await WaitFor(async () => (job = await admin.GetJobAsync(id, Ct))?.Status is JobState.Done or JobState.Failed, $"job {id}");
+            }
+            catch (TimeoutException ex)
+            {
+                var queued = await Scalar<int>($"SELECT COUNT(*) FROM {Table("jobs")} WHERE status = 'queued'");
+                throw new TimeoutException(
+                    $"{ex.Message} Last: {job?.Kind} {job?.Status} created {job?.CreatedAt:O} progress={job?.Progress} args={job?.Args}. " +
+                    $"{queued} jobs queued. {await ArchiveState(writer, admin, await Head(writer))}", ex);
+            }
+        }
     }
 
     /// <summary>
