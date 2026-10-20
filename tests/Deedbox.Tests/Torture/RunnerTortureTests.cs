@@ -220,24 +220,37 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
 
     /// <summary>
     /// Waits for each job by its ID. The store's status holds the 20 newest jobs, and this test queues more than that,
-    /// so a wait on the status alone is blind to the oldest of them.
+    /// so a wait on the status alone is blind to the oldest of them. At torture scale 5 the chaos leaves a backlog of
+    /// archive jobs that takes longer than one wait to drain, so the wait fails only when no job finishes for 90 s.
     /// </summary>
     private async Task WaitForJobs(IHost writer, IEventStoreAdmin admin, IEnumerable<Guid> ids)
     {
-        foreach (var id in ids)
+        var left = ids.ToHashSet();
+        var deadline = DateTime.UtcNow.AddSeconds(90);
+        while (left.Count > 0)
         {
-            JobInfo? job = null;
-            try
+            foreach (var id in left.ToList())
             {
-                await WaitFor(async () => (job = await admin.GetJobAsync(id, Ct))?.Status is JobState.Done or JobState.Failed, $"job {id}");
+                if ((await admin.GetJobAsync(id, Ct))?.Status is JobState.Done or JobState.Failed)
+                {
+                    left.Remove(id);
+                    deadline = DateTime.UtcNow.AddSeconds(90);
+                }
             }
-            catch (TimeoutException ex)
+
+            if (left.Count == 0)
+                return;
+            if (DateTime.UtcNow > deadline)
             {
+                var job = await admin.GetJobAsync(left.OrderBy(id => id).First(), Ct);
                 var queued = await Scalar<int>($"SELECT COUNT(*) FROM {Table("jobs")} WHERE status = 'queued'");
                 throw new TimeoutException(
-                    $"{ex.Message} Last: {job?.Kind} {job?.Status} created {job?.CreatedAt:O} progress={job?.Progress} args={job?.Args}. " +
-                    $"{queued} jobs queued. {await ArchiveState(writer, admin, await Head(writer))}", ex);
+                    $"No job finished for 90 s; {left.Count} of this test's jobs are left. Oldest: {job?.Id} {job?.Kind} {job?.Status} " +
+                    $"created {job?.CreatedAt:O} progress={job?.Progress} args={job?.Args}. {queued} jobs queued. " +
+                    await ArchiveState(writer, admin, await Head(writer)));
             }
+
+            await Task.Delay(250, Ct);
         }
     }
 
