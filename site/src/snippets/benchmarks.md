@@ -62,4 +62,4 @@ The Postgres cell varies by 23% between the highest and the lowest run. The SQL 
 
 These numbers compare releases on the same runner type. They are not a production sizing guide.
 
-The nightly job fails when a cell's appends/s falls more than 30% below `bench/baseline.json`. The spread above is wider than that band, so the job fails on runner variance as well as on a real regression.
+The nightly job compares each cell with `bench/baseline.json` and prints a `REGRESSION` line when a cell's appends/s falls more than 30% below it. The job does not fail on that line: the spread above is wider than the band, so a line can come from runner variance as well as from a real regression. `just bench` on your own machine fails on a regression.

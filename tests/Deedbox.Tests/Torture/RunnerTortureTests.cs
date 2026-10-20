@@ -246,7 +246,7 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
             command.CommandText = $"SELECT stream_id, COUNT(*), MIN(global_position), MAX(global_position) FROM {Table("events")} GROUP BY stream_id ORDER BY stream_id";
             await using var reader = await command.ExecuteReaderAsync(Ct);
             while (await reader.ReadAsync(Ct))
-                left.Add($"{reader.GetString(0)}: {reader.GetInt64(1)} at {reader.GetInt64(2)}..{reader.GetInt64(3)}");
+                left.Add($"{reader.GetString(0)}: {Convert.ToInt64(reader.GetValue(1), System.Globalization.CultureInfo.InvariantCulture)} at {reader.GetInt64(2)}..{reader.GetInt64(3)}");
         }
 
         return $"Head {head}, archive line {line}. Checkpoints: {string.Join("; ", checkpoints)}. Left: {string.Join("; ", left)}. Jobs: {string.Join(" | ", jobs)}";
