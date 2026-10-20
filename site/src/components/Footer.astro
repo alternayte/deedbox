@@ -1,0 +1,16 @@
+---
+// The default footer, followed by the site-wide links. The sidebar is built from the section
+// directories, so a page at the root of src/content/docs needs the link here to be reachable.
+import Default from '@astrojs/starlight/components/Footer.astro';
+---
+
+<Default {...Astro.props} />
+<div class="site-links">
+  <a href="/privacy/">Privacy</a>
+</div>
+
+<style>
+  .site-links { margin-top: 1.5rem; font-size: var(--sl-text-xs); color: var(--sl-color-gray-3); }
+  .site-links a { color: inherit; }
+  .site-links a:hover { color: var(--sl-color-white); }
+</style>
