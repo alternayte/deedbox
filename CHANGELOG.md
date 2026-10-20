@@ -2,6 +2,24 @@
 
 This file records every notable change to the Deedbox packages. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the versions follow [Semantic Versioning](https://semver.org/). In 0.x, only a minor release can break the public API, and its entry says how. The storage schema never breaks: each change ships a forward migration.
 
+## [0.8.1] - 2026-10-20
+
+This release fixes the torture test that backs the archive, and replaces the published benchmark numbers with the numbers of a run on the 0.8.0 code. No shipped code changes, so no app behaviour changes.
+
+### Fixed
+
+- `PostgresRunnerTortureTests.Killed_restarted_and_competing_runners_apply_every_event_exactly_once` failed on about half of the nightly runs, and on the 0.8.0 release commit ([run](https://github.com/alternayte/deedbox/actions/runs/38918521283)). The failure was in the test, not in the store. The test queues a rebuild of a projection with the archive under the chaos, waits for every consumer to reach the head, then asks for one more archive of every stream and expects the events table to be empty. A session kill rolls a runner's job claim back, so the rebuild job could still be queued when that wait ran. The rebuild then moved the projection to the start of the stream, the archive line moved with it, and the last archive moved nothing and reported done. The test now waits for every job it queued, by job ID, before it reads the consumers. The store's guarantees are unchanged, and the README guarantees stand as written: the archive line held because an archive moves no event that a consumer has not applied.
+- The same test waited for "every job finished" through `GetStatusAsync().Jobs`, which holds the 20 newest jobs. The chaos queues more than 20 jobs at torture scale 5, so the oldest were outside that window and the wait passed over them. The wait and the assertion go by job ID now.
+
+### Added
+
+- A provider test: an archive job that runs while a projection rebuilds moves nothing and counts the stream partial; one more archive, after the replay reaches the head, moves every event of the stream.
+- The torture test reports the head, the archive line, every checkpoint and what each stream has left when the events table is not empty, so a failure names its cause.
+
+### Changed
+
+- Docs: the benchmarks page carries the numbers of the nightly run of 2026-10-19 on commit `0a704c0`, which holds the 0.8.0 code ([run](https://github.com/alternayte/deedbox/actions/runs/39224756475)). The numbers before this release came from commit `0d48a6d` of 2026-09-24, the day the repository was created, and no run on current code reproduces them. The page states the spread between three nightly runs of the same commit, and that the spread is wider than the 30% band of the nightly benchmark gate.
+
 ## [0.8.0] - 2026-10-16
 
 This release archives finished streams ([#10](https://github.com/alternayte/deedbox/issues/10)). It breaks only an app that implements `IEventStoreAdmin` itself; apps call the interface and do not implement it. Migration 8 is a forward migration. After the first archive, do not roll back to 0.7 or earlier.
