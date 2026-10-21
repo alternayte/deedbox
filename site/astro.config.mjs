@@ -16,7 +16,7 @@ export default defineConfig({
       description: 'Event-source part of your app. Postgres or SQL Server. EF Core, Dapper, or neither.',
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/alternayte/deedbox' }],
       editLink: { baseUrl: 'https://github.com/alternayte/deedbox/edit/main/site/' },
-      components: { SiteTitle: './src/components/SiteTitle.astro' },
+      components: { SiteTitle: './src/components/SiteTitle.astro', Footer: './src/components/Footer.astro' },
       head: [
         // Starlight sets twitter:card to summary_large_image, so a page with no og:image shares as a blank card.
         // public/og.png carries the product name and the one-line description on a flat background.

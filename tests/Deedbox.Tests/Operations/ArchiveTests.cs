@@ -104,6 +104,40 @@ public abstract class ArchiveTests(Databases databases, Db db) : RunnerTest(data
     }
 
     [Fact]
+    public async Task An_archive_that_runs_while_a_projection_rebuilds_moves_nothing_and_the_next_one_moves_every_event()
+    {
+        // The runner is off and the test runs the jobs itself, so the replay cannot slip in between them.
+        var host = await StartHost(NewProbe(), b => b.Projection<AsyncApplied>("applied", Run.Async), o => o.Enabled = false);
+        await StoreOf(host).Append("cart-1", ExpectedVersion.NoStream, [new ItemAdded("a", 1), new ItemAdded("b", 2), new ItemAdded("c", 3)]);
+        await Execute($"UPDATE {Table("checkpoints")} SET position = 3 WHERE name = 'applied'");
+        var jobs = new JobLoop(RuntimeOf(host), host.Services, host.Services.GetRequiredService<AsyncRunner>(), new WakeSignal(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+
+        // The rebuild moves the checkpoint to the start, so the archive line goes with it. An archive that runs after
+        // the rebuild must move nothing: the replay reads those events again.
+        var rebuild = await AdminOf(host).RebuildWithArchiveAsync("applied");
+        Assert.True(await jobs.RunOne(Ct));
+        Assert.Equal(JobState.Done, (await AdminOf(host).GetJobAsync(rebuild, Ct))!.Status);
+        Assert.Equal(("rebuilding", 0L), ((await Checkpoint(host, "applied")).Status, (await Checkpoint(host, "applied")).Position));
+
+        var queued = await AdminOf(host).ArchiveStreamAsync("", "cart-1");
+        Assert.True(await jobs.RunOne(Ct));
+        var during = JsonNode.Parse((await AdminOf(host).GetJobAsync(queued, Ct))!.Progress!)!.AsObject();
+
+        Assert.Equal((0, 1, 0L), (during["archived"]!.GetValue<int>(), during["partial"]!.GetValue<int>(), during["events"]!.GetValue<long>()));
+        Assert.Equal((3, 0), (await Rows("events", "cart-1"), await Rows("events_archive", "cart-1")));
+
+        // The replay finishes, and only then does one archive move the whole stream.
+        await Execute($"UPDATE {Table("checkpoints")} SET position = 3, status = 'running' WHERE name = 'applied'");
+        var rest = await AdminOf(host).ArchiveStreamAsync("", "cart-1");
+        Assert.True(await jobs.RunOne(Ct));
+        var after = JsonNode.Parse((await AdminOf(host).GetJobAsync(rest, Ct))!.Progress!)!.AsObject();
+
+        Assert.Equal((1, 0, 3L), (after["archived"]!.GetValue<int>(), after["partial"]!.GetValue<int>(), after["events"]!.GetValue<long>()));
+        Assert.Equal((0, 3), (await Rows("events", "cart-1"), await Rows("events_archive", "cart-1")));
+    }
+
+    [Fact]
     public async Task Nothing_is_archived_while_an_instance_that_cannot_read_the_archive_has_a_heartbeat_row()
     {
         var host = await StartHost(NewProbe(), _ => { });

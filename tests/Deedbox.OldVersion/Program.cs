@@ -50,8 +50,10 @@ else
 
 // In "write", the old release's projection must apply its events before it stops, so its checkpoint is part of what is
 // upgraded. In "append", a newer instance shares the projection and may apply the event first; the test counts the rows.
+// The wait reads the committed checkpoint: a handler runs before its batch commits, and the stop cancels a commit in
+// flight, which rolls back the seen table too.
 var deadline = DateTime.UtcNow.AddSeconds(60);
-while (phase == "write" && Seen.Cart2 < 5)
+while (phase == "write" && !await SeenCaughtUp())
 {
     if (DateTime.UtcNow > deadline)
         throw new TimeoutException("The old release's projection did not apply this run's events.");
@@ -60,6 +62,21 @@ while (phase == "write" && Seen.Cart2 < 5)
 
 await host.StopAsync();
 return 0;
+
+async Task<bool> SeenCaughtUp()
+{
+    var (checkpoints, events) = provider == "postgres"
+        ? ($"{schema}.checkpoints", $"{schema}.events")
+        : ($"[{schema}].[checkpoints]", $"[{schema}].[events]");
+    await using DbConnection connection = provider == "postgres"
+        ? new Npgsql.NpgsqlConnection(connectionString)
+        : new Microsoft.Data.SqlClient.SqlConnection(connectionString);
+    await connection.OpenAsync();
+    await using var command = connection.CreateCommand();
+    command.CommandText = $"SELECT CASE WHEN COALESCE((SELECT position FROM {checkpoints} WHERE name = 'seen'), 0) "
+        + $">= (SELECT MAX(global_position) FROM {events} WHERE stream_id = 'cart-2') THEN 1 ELSE 0 END";
+    return Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
+}
 
 public sealed record Target(string Provider, string Schema);
 
@@ -88,12 +105,10 @@ public record Person(string? Name) : IState<Person>
     public static Person Evolve(Person s, object e) => e is PersonNamed named ? new Person(named.Name) : s;
 }
 
-/// <summary>Counts cart-2's quantity in memory and writes one row per applied event, as the tests' own projection does.</summary>
+/// <summary>Writes one row per applied event, as the tests' own projection does.</summary>
 public sealed class Seen : Projection
 {
-    public static int Cart2;
-
-    public Seen(Target target) => On<ItemAdded>(async (e, ctx) =>
+    public Seen(Target target) => On<ItemAdded>(async (_, ctx) =>
     {
         await using var command = ctx.Connection.CreateCommand();
         command.Transaction = ctx.Transaction;
@@ -105,7 +120,5 @@ public sealed class Seen : Projection
         id.Value = ctx.EventId.ToString();
         command.Parameters.Add(id);
         await command.ExecuteNonQueryAsync();
-        if (ctx.StreamId == "cart-2")
-            Interlocked.Add(ref Cart2, e.Qty);
     });
 }
