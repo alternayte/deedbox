@@ -14,7 +14,7 @@ export default defineConfig({
       description: 'Event-source part of your app. Postgres or SQL Server. EF Core, Dapper, or neither.',
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/alternayte/deedbox' }],
       editLink: { baseUrl: 'https://github.com/alternayte/deedbox/edit/main/site/' },
-      components: { SiteTitle: './src/components/SiteTitle.astro' },
+      components: { SiteTitle: './src/components/SiteTitle.astro', Footer: './src/components/Footer.astro' },
       head: beacon
         ? [{ tag: 'script', attrs: { defer: true, src: 'https://static.cloudflareinsights.com/beacon.min.js', 'data-cf-beacon': JSON.stringify({ token: beacon }) } }]
         : [],
