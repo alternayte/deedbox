@@ -108,6 +108,7 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
 
         var admin = writer.Services.GetRequiredService<IEventStoreAdmin>();
         var streams = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>();
+        var queued = new System.Collections.Concurrent.ConcurrentBag<Guid>();
         var archives = 0;
         using var archiving = new CancellationTokenSource();
         var archiveTask = Task.Run(async () =>
@@ -120,13 +121,13 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
                 var picked = streams.Keys.Where(_ => random.Next(3) == 0).Select(id => new StreamKey("", id)).ToList();
                 if (picked.Count > 0)
                 {
-                    await admin.ArchiveStreamsAsync(picked, CancellationToken.None);
+                    queued.Add(await admin.ArchiveStreamsAsync(picked, CancellationToken.None));
                     archives++;
                 }
 
                 if (!rebuilt && archives >= 3)
                 {
-                    await admin.RebuildWithArchiveAsync("dense", CancellationToken.None);
+                    queued.Add(await admin.RebuildWithArchiveAsync("dense", CancellationToken.None));
                     rebuilt = true;
                 }
             }
@@ -161,16 +162,24 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
         await archiveTask;
         await chaos.CancelAsync();
         await chaosTask;
+
+        // The jobs this test queued finish before the consumers are read. A killed runner rolls its claim back, so the
+        // rebuild can still be queued here. A rebuild that ran after the waits below would move 'dense' to the start
+        // and hold the archive line there, and the last archive would move nothing although it reported done.
+        await WaitForJobs(writer, admin, queued);
         var head = await Head(writer);
         foreach (var name in new[] { "dense", "sparse", "deliveries" })
             await WaitForCheckpoint(writer, name, r => r.Position >= head && r.Status == "running");
 
         // Every archive job finishes, and one more moves every stream; positions stay gapless across both tables.
         var last = await admin.ArchiveStreamsAsync([.. streams.Keys.Select(id => new StreamKey("", id))], Ct);
-        await WaitFor(async () => (await admin.GetStatusAsync(Ct)).Jobs.All(j => j.Status is JobState.Done or JobState.Failed)
-            && (await admin.GetJobAsync(last, Ct))?.Status == JobState.Done, "the archive jobs");
-        Assert.All((await admin.GetStatusAsync(Ct)).Jobs, j => Assert.Equal(JobState.Done, j.Status));
-        Assert.Equal(0, await Scalar<int>($"SELECT COUNT(*) FROM {Table("events")}"));
+        queued.Add(last);
+        await WaitForJobs(writer, admin, queued);
+        foreach (var id in queued)
+            Assert.Equal(JobState.Done, (await admin.GetJobAsync(id, Ct))!.Status);
+        var leftOver = await Scalar<int>($"SELECT COUNT(*) FROM {Table("events")}");
+        if (leftOver != 0)
+            Assert.Fail($"{leftOver} events left in the events table after every archive job finished. {await ArchiveState(writer, admin, head)}");
         Assert.Equal(head, await Scalar<long>($"SELECT COUNT(*) FROM {Table("events_archive")}"));
         foreach (var w in Enumerable.Range(0, 6))
         {
@@ -207,6 +216,66 @@ public abstract class RunnerTortureTests(Databases databases, Db db) : RunnerTes
         var budget = (consumers + 1) * 30 / 2;
         TestContext.Current.TestOutputHelper?.WriteLine($"{Db}: {used} statements in 30 s while idle; budget {budget}.");
         Assert.InRange(used, 0, budget);
+    }
+
+    /// <summary>
+    /// Waits for each job by its ID. The store's status holds the 20 newest jobs, and this test queues more than that,
+    /// so a wait on the status alone is blind to the oldest of them. At torture scale 5 the chaos leaves a backlog of
+    /// archive jobs that takes longer than one wait to drain, so the wait fails only when no job finishes for 90 s.
+    /// </summary>
+    private async Task WaitForJobs(IHost writer, IEventStoreAdmin admin, IEnumerable<Guid> ids)
+    {
+        var left = ids.ToHashSet();
+        var deadline = DateTime.UtcNow.AddSeconds(90);
+        while (left.Count > 0)
+        {
+            foreach (var id in left.ToList())
+            {
+                if ((await admin.GetJobAsync(id, Ct))?.Status is JobState.Done or JobState.Failed)
+                {
+                    left.Remove(id);
+                    deadline = DateTime.UtcNow.AddSeconds(90);
+                }
+            }
+
+            if (left.Count == 0)
+                return;
+            if (DateTime.UtcNow > deadline)
+            {
+                var job = await admin.GetJobAsync(left.OrderBy(id => id).First(), Ct);
+                var queued = await Scalar<int>($"SELECT COUNT(*) FROM {Table("jobs")} WHERE status = 'queued'");
+                throw new TimeoutException(
+                    $"No job finished for 90 s; {left.Count} of this test's jobs are left. Oldest: {job?.Id} {job?.Kind} {job?.Status} " +
+                    $"created {job?.CreatedAt:O} progress={job?.Progress} args={job?.Args}. {queued} jobs queued. " +
+                    await ArchiveState(writer, admin, await Head(writer)));
+            }
+
+            await Task.Delay(250, Ct);
+        }
+    }
+
+    /// <summary>
+    /// What the store looks like when an archive assertion fails: the head, the archive line and every checkpoint that
+    /// sets it, the archive jobs with their results, and what is left in the events table per stream.
+    /// </summary>
+    private async Task<string> ArchiveState(IHost writer, IEventStoreAdmin admin, long head)
+    {
+        await using var connection = await OpenConnection();
+        var provider = RuntimeOf(writer).Provider;
+        var line = await Admin.ArchiveLine(provider, connection, null, Ct);
+        var checkpoints = (await provider.ReadCheckpoints(connection, Ct))
+            .Select(c => $"{c.Name} at {c.Position} {c.Status}/{c.Mode} archiveUntil={c.ArchiveUntil?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-"}");
+        var jobs = (await admin.GetStatusAsync(Ct)).Jobs.Select(j => $"{j.Kind} {j.Status} progress={j.Progress}");
+        var left = new List<string>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = $"SELECT stream_id, COUNT(*), MIN(global_position), MAX(global_position) FROM {Table("events")} GROUP BY stream_id ORDER BY stream_id";
+            await using var reader = await command.ExecuteReaderAsync(Ct);
+            while (await reader.ReadAsync(Ct))
+                left.Add($"{reader.GetString(0)}: {Convert.ToInt64(reader.GetValue(1), System.Globalization.CultureInfo.InvariantCulture)} at {reader.GetInt64(2)}..{reader.GetInt64(3)}");
+        }
+
+        return $"Head {head}, archive line {line}. Checkpoints: {string.Join("; ", checkpoints)}. Left: {string.Join("; ", left)}. Jobs: {string.Join(" | ", jobs)}";
     }
 
     /// <summary>Starts a runner; a session kill can hit its start-up, so it retries.</summary>
