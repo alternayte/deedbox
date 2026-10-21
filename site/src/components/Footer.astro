@@ -1,15 +1,83 @@
 ---
-// The default footer, followed by the site-wide links. The sidebar is built from the section
-// directories, so a page at the root of src/content/docs needs the link here to be reachable.
+// The default footer, followed by the subscribe form and the site-wide links. The sidebar is
+// built from the section directories, so a page at the root of src/content/docs needs the link
+// here to be reachable.
+//
+// The form posts to Buttondown as an ordinary form submission, and carries no JavaScript.
+// Buttondown answers with a CAPTCHA page or a validation page that the subscriber has to see,
+// so its documentation says to use a real form and not the fetch API.
+// https://docs.buttondown.com/building-your-subscriber-base
 import Default from '@astrojs/starlight/components/Footer.astro';
 ---
 
 <Default {...Astro.props} />
+
+<form
+  class="embeddable-buttondown-form subscribe"
+  action="https://buttondown.com/api/emails/embed-subscribe/nxtspec"
+  method="post"
+>
+  <p class="subscribe-pitch" id="bd-pitch">
+    Release notes for Deedbox and QueueBox, by email, when a release ships.
+  </p>
+  <label class="visually-hidden" for="bd-email">Email address</label>
+  <div class="subscribe-row">
+    <input
+      type="email"
+      name="email"
+      id="bd-email"
+      placeholder="you@example.com"
+      autocomplete="email"
+      aria-describedby="bd-pitch bd-note"
+      required
+    />
+    <input type="hidden" name="embed" value="1" />
+    <button type="submit">Subscribe</button>
+  </div>
+  <p class="subscribe-note" id="bd-note">
+    Confirm the subscription from the email we send. We store the address to send release notes
+    and nothing else. <a href="/privacy/">How we handle it</a>.
+  </p>
+</form>
+
 <div class="site-links">
   <a href="/privacy/">Privacy</a>
 </div>
 
 <style>
+  .subscribe { margin-top: 2.5rem; border-top: 1px solid var(--sl-color-gray-5); padding-top: 1.5rem; }
+  .subscribe-pitch { margin: 0 0 0.75rem; font-size: var(--sl-text-sm); }
+  .subscribe-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .subscribe-row input[type='email'] {
+    flex: 1 1 16rem;
+    min-width: 0;
+    padding: 0.4rem 0.6rem;
+    font: inherit;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-white);
+    background: var(--sl-color-black);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.25rem;
+  }
+  .subscribe-row button {
+    padding: 0.4rem 1rem;
+    font: inherit;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-black);
+    background: var(--sl-color-text-accent);
+    border: 1px solid var(--sl-color-text-accent);
+    border-radius: 0.25rem;
+    cursor: pointer;
+  }
+  .subscribe-note { margin: 0.75rem 0 0; font-size: var(--sl-text-xs); color: var(--sl-color-gray-3); }
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
   .site-links { margin-top: 1.5rem; font-size: var(--sl-text-xs); color: var(--sl-color-gray-3); }
   .site-links a { color: inherit; }
   .site-links a:hover { color: var(--sl-color-white); }
