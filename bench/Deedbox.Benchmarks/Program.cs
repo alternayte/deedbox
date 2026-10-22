@@ -46,8 +46,8 @@ if (options.Markdown is { } markdownFile)
 if (options.Baseline is not { } baselineFile)
     return 0;
 
-var baseline = JsonSerializer.Deserialize(await File.ReadAllTextAsync(baselineFile), BenchJson.Default.ListCellResult)!;
-var regressions = Report.Regressions(baseline, results, options.Threshold);
+var baseline = JsonSerializer.Deserialize(await File.ReadAllTextAsync(baselineFile), BenchJson.Default.Baseline)!;
+var regressions = Report.Regressions(baseline, results);
 foreach (var line in regressions)
     Console.Error.WriteLine("REGRESSION " + line);
 return regressions.Count == 0 ? 0 : 1;
@@ -56,7 +56,7 @@ namespace Deedbox.Benchmarks
 {
     internal sealed record BenchOptions(
         string[] Providers, string[] Modes, int[] Writers, int[] Events, TimeSpan Warmup, TimeSpan Duration,
-        string? Output, string? Markdown, string? Baseline, double Threshold)
+        string? Output, string? Markdown, string? Baseline)
     {
         public static BenchOptions Parse(string[] args)
         {
@@ -71,7 +71,7 @@ namespace Deedbox.Benchmarks
             return new BenchOptions(
                 List("providers", "postgres,sqlserver"), List("modes", "neither,efcore"), Numbers("writers", "1,8,32,128"), Numbers("events", "1,10"),
                 Seconds("warmup", "2"), Seconds("duration", "8"), map.GetValueOrDefault("out"), map.GetValueOrDefault("markdown"),
-                map.GetValueOrDefault("baseline"), double.Parse(map.GetValueOrDefault("threshold") ?? "0.3", CultureInfo.InvariantCulture));
+                map.GetValueOrDefault("baseline"));
         }
     }
 
@@ -84,6 +84,15 @@ namespace Deedbox.Benchmarks
         public string ToLine() => string.Create(CultureInfo.InvariantCulture,
             $"{Key,-28} {AppendsPerSecond,9:F0} appends/s  p50 {P50Ms,7:F2} ms  p99 {P99Ms,7:F2} ms  counter p50 {CounterP50Ms,6:F2} ms  p99 {CounterP99Ms,6:F2} ms");
     }
+
+    /// <summary>bench/baseline.json: the band per provider, the nightly runs it was sampled from, and one cell per matrix cell.</summary>
+    internal sealed record Baseline(Dictionary<string, double> Band, List<BaselineRun> Runs, List<BaselineCell> Cells);
+
+    /// <summary>A nightly run the baseline was sampled from.</summary>
+    internal sealed record BaselineRun(long Id, string Commit, string Started, string Url);
+
+    /// <summary>The median appends/s of one matrix cell over the baseline's runs, with the lowest and highest sample.</summary>
+    internal sealed record BaselineCell(string Key, string Provider, int Samples, double AppendsPerSecond, double Lowest, double Highest);
 
     internal sealed class Database(string provider, string connectionString, IAsyncDisposable? container) : IAsyncDisposable
     {
@@ -233,19 +242,28 @@ namespace Deedbox.Benchmarks
             return text.ToString();
         }
 
-        /// <summary>Cells whose throughput fell more than <paramref name="threshold"/> below the baseline.</summary>
-        public static List<string> Regressions(IEnumerable<CellResult> baseline, IEnumerable<CellResult> current, double threshold)
+        /// <summary>Cells whose throughput fell more than their provider's band below the baseline.</summary>
+        public static List<string> Regressions(Baseline baseline, IEnumerable<CellResult> current)
         {
             var now = current.ToDictionary(r => r.Key);
-            return baseline
-                .Where(b => now.TryGetValue(b.Key, out var c) && c.AppendsPerSecond < b.AppendsPerSecond * (1 - threshold))
-                .Select(b => string.Create(CultureInfo.InvariantCulture,
-                    $"{b.Key}: {now[b.Key].AppendsPerSecond:F0} appends/s against a baseline of {b.AppendsPerSecond:F0} (more than {threshold:P0} lower)"))
-                .ToList();
+            var lines = new List<string>();
+            foreach (var cell in baseline.Cells)
+            {
+                if (!baseline.Band.TryGetValue(cell.Provider, out var band))
+                    throw new InvalidOperationException($"the baseline holds no band for provider {cell.Provider}");
+                if (!now.TryGetValue(cell.Key, out var c) || c.AppendsPerSecond >= cell.AppendsPerSecond * (1 - band))
+                    continue;
+
+                lines.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{cell.Key}: {c.AppendsPerSecond:F0} appends/s against a baseline of {cell.AppendsPerSecond:F0}, the median of {cell.Samples} runs (more than {band:P0} lower)"));
+            }
+
+            return lines;
         }
     }
 
     [System.Text.Json.Serialization.JsonSourceGenerationOptions(JsonSerializerDefaults.Web, WriteIndented = true)]
     [System.Text.Json.Serialization.JsonSerializable(typeof(List<CellResult>))]
+    [System.Text.Json.Serialization.JsonSerializable(typeof(Baseline))]
     internal sealed partial class BenchJson : System.Text.Json.Serialization.JsonSerializerContext;
 }

@@ -50,16 +50,22 @@ Append throughput and latency across the matrix: writers × events per append ×
 
 ## The spread between runs
 
-A GitHub-hosted runner gives a different answer every night, for the same code. Three nightly runs of commit `0a704c0` measured the peak Postgres cell, 8 writers and 1 event per append, at these rates:
+A GitHub-hosted runner gives a different answer every night, for the same code. Seven nightly runs measure identical benchmarked code: `src` and `bench` do not change from commit `0a704c0` to commit `168d306`. These are their rates for the peak Postgres cell, 8 writers and 1 event per append, and for the SQL Server single-writer cell:
 
-| Run | Postgres 8×1 appends/s | SQL Server 1×1 appends/s |
-| --- | ---: | ---: |
-| [2026-10-18](https://github.com/alternayte/deedbox/actions/runs/39109528885) | 1345 | 670 |
-| [2026-10-19](https://github.com/alternayte/deedbox/actions/runs/39224756475) | 1142 | 471 |
-| [2026-10-20](https://github.com/alternayte/deedbox/actions/runs/39393101278) | 1097 | 250 |
+| Run | Commit | Postgres 8×1 appends/s | SQL Server 1×1 appends/s |
+| --- | --- | ---: | ---: |
+| [2026-10-17](https://github.com/alternayte/deedbox/actions/runs/39014541873) | `0a704c0` | 846 | 395 |
+| [2026-10-18](https://github.com/alternayte/deedbox/actions/runs/39109528885) | `0a704c0` | 1345 | 670 |
+| [2026-10-19](https://github.com/alternayte/deedbox/actions/runs/39224756475) | `0a704c0` | 1142 | 471 |
+| [2026-10-20](https://github.com/alternayte/deedbox/actions/runs/39393101278) | `0a704c0` | 1097 | 250 |
+| [2026-10-21](https://github.com/alternayte/deedbox/actions/runs/39521110453) | `7a006bd` | 853 | 418 |
+| [2026-10-21](https://github.com/alternayte/deedbox/actions/runs/39569378057) | `168d306` | 1038 | 412 |
+| [2026-10-21](https://github.com/alternayte/deedbox/actions/runs/39691059143) | `168d306` | 841 | 376 |
 
-The Postgres cell varies by 23% between the highest and the lowest run. The SQL Server cell varies by a factor of 2.7. Each run publishes its own table and JSON as the `benchmarks` artifact of the nightly workflow. Read that artifact for the numbers of one run.
+The spread belongs to the run, not to one code path: a run is fast or slow in every cell of a provider at once. Against the median of these seven runs, a Postgres run sits between 0.82 and 1.29, and a SQL Server run between 0.71 and 1.52. The worst single cell falls 21.8% below its median on Postgres, and 51.6% on SQL Server. Each run publishes its own table and JSON as the `benchmarks` artifact of the nightly workflow. Read that artifact for the numbers of one run.
 
 These numbers compare releases on the same runner type. They are not a production sizing guide.
 
-The nightly job compares each cell with `bench/baseline.json` and prints a `REGRESSION` line when a cell's appends/s falls more than 30% below it. The job does not fail on that line: the spread above is wider than the band, so a line can come from runner variance as well as from a real regression. `just bench` on your own machine fails on a regression.
+## The nightly gate
+
+`bench/baseline.json` holds the median appends/s of each cell over those seven runs, with the ID and the commit of every run it was sampled from. The nightly job prints a `REGRESSION` line and fails when a cell's appends/s falls more than the band of its provider below that median: 40% on Postgres, 65% on SQL Server. Each band is wider than the worst drop measured on unchanged code, so a red benchmark job reports a regression and not runner variance. `just bench` applies the same bands on your own machine, against numbers that a runner measured.
