@@ -48,11 +48,11 @@ jobs:
           docker pull postgres:17-alpine &
           docker pull mcr.microsoft.com/mssql/server:2022-latest &
           wait
-      # Reports only. The runner's spread between runs of one commit is wider than the 30% band against
-      # bench/baseline.json, so a REGRESSION line here is not a failure. Read the log and the artifact.
+      # Fails a cell more than its provider's band below the median in bench/baseline.json: 40% on
+      # Postgres, 65% on SQL Server. Both bands are wider than the runner's spread between runs of
+      # one commit, so a REGRESSION line here is a regression. bench/results.md holds the measurement.
       - name: Benchmarks
         run: just bench
-        continue-on-error: true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
